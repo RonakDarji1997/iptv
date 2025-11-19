@@ -1,10 +1,10 @@
 'use client';
 
 import { useSearchParams, useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, Suspense } from 'react';
 import { ArrowLeft, Play, Pause, Volume2, VolumeX, Maximize } from 'lucide-react';
 
-export default function WatchPage() {
+function WatchContent() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const [channelName, setChannelName] = useState<string>('');
@@ -202,5 +202,13 @@ export default function WatchPage() {
                 </div>
             )}
         </div>
+    );
+}
+
+export default function WatchPage() {
+    return (
+        <Suspense fallback={<div className="flex h-screen items-center justify-center">Loading...</div>}>
+            <WatchContent />
+        </Suspense>
     );
 }

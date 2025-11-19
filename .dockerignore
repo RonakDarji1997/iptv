@@ -1,0 +1,24 @@
+# Docker deployment - ignore everything except essentials
+node_modules
+npm-debug.log
+.next/cache
+.next/trace
+
+# Keep .env.local OUT for security
+.env*.local
+
+# Development files
+.git
+.gitignore
+README.md
+*.md
+test-*.js
+scripts/
+
+# IDE
+.vscode
+.idea
+
+# OS
+.DS_Store
+Thumbs.db

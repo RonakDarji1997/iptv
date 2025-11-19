@@ -1,7 +1,12 @@
 'use client';
 
 import { Play, Info } from 'lucide-react';
-import { MOCK_FEATURED } from '@/lib/mock-data';
+
+const FEATURED = {
+    title: 'Welcome to IPTV',
+    description: 'Stream thousands of live channels, movies, and series from around the world.',
+    backdrop: 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=1920&q=80'
+};
 
 export default function Hero() {
     return (
@@ -9,19 +14,19 @@ export default function Hero() {
             {/* Background Image */}
             <div
                 className="absolute inset-0 bg-cover bg-center"
-                style={{ backgroundImage: `url(${MOCK_FEATURED.backdrop})` }}
+                style={{ backgroundImage: `url(${FEATURED.backdrop})` }}
             >
-                <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent" />
-                <div className="absolute inset-0 bg-gradient-to-r from-black via-black/40 to-transparent" />
+                <div className="absolute inset-0 bg-linear-to-t from-black via-black/40 to-transparent" />
+                <div className="absolute inset-0 bg-linear-to-r from-black via-black/40 to-transparent" />
             </div>
 
             {/* Content */}
             <div className="absolute bottom-0 left-0 z-10 w-full max-w-2xl p-12 pb-24">
                 <h1 className="mb-4 text-6xl font-bold text-white drop-shadow-lg">
-                    {MOCK_FEATURED.title}
+                    {FEATURED.title}
                 </h1>
                 <p className="mb-8 text-lg text-zinc-200 drop-shadow-md line-clamp-3">
-                    {MOCK_FEATURED.description}
+                    {FEATURED.description}
                 </p>
 
                 <div className="flex gap-4">

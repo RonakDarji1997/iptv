@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  iptv:
+    build: .
+    container_name: iptv-app
+    restart: always
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - HOSTNAME=0.0.0.0
+      - NEXT_PUBLIC_STALKER_BEARER=${NEXT_PUBLIC_STALKER_BEARER}
+      - NEXT_PUBLIC_STALKER_ADID=${NEXT_PUBLIC_STALKER_ADID}
+      - NEXT_PUBLIC_APP_PASSWORD_HASH=${NEXT_PUBLIC_APP_PASSWORD_HASH}
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

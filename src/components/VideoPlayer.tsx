@@ -1,11 +1,7 @@
 'use client';
 
-import { MediaPlayer, MediaOutlet } from '@vidstack/react';
-import { defaultLayoutIcons, DefaultVideoLayout } from '@vidstack/react/player/layouts/default';
-import '@vidstack/react/player/styles/default/theme.css';
-import '@vidstack/react/player/styles/default/layouts/video.css';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 interface VideoPlayerProps {
     src: string;
@@ -18,6 +14,16 @@ interface VideoPlayerProps {
 
 export default function VideoPlayer({ src, title, poster, playlist, currentIndex = 0, onZap }: VideoPlayerProps) {
     const [showControls, setShowControls] = useState(false);
+    const videoRef = useRef<HTMLVideoElement>(null);
+
+    useEffect(() => {
+        if (videoRef.current) {
+            videoRef.current.load();
+            videoRef.current.play().catch(() => {
+                // Autoplay might be blocked
+            });
+        }
+    }, [src]);
 
     const handleZap = (direction: 'prev' | 'next') => {
         if (!playlist || !onZap) return;
@@ -37,17 +43,14 @@ export default function VideoPlayer({ src, title, poster, playlist, currentIndex
             onMouseEnter={() => setShowControls(true)}
             onMouseLeave={() => setShowControls(false)}
         >
-            <MediaPlayer
-                title={title}
-                src={src}
+            <video
+                ref={videoRef}
+                className="w-full h-full"
+                controls
+                autoPlay
                 poster={poster}
-                aspectRatio="16/9"
-                load="eager"
-                autoplay
-            >
-                <MediaOutlet />
-                <DefaultVideoLayout icons={defaultLayoutIcons} />
-            </MediaPlayer>
+                src={src}
+            />
 
             {/* Zapping Overlay */}
             {playlist && onZap && (

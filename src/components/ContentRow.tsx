@@ -136,7 +136,7 @@ export default function ContentRow({ title, categoryId, items, contentType = 'it
 
         const observer = new IntersectionObserver(
             async (entries) => {
-                if (entries[0].isIntersecting && hasMorePages && !isLoading) {
+                if (entries[0].isIntersecting && hasMorePages && !isLoading && macAddress && portalUrl) {
                     setIsLoading(true);
                     try {
                         const nextPage = currentPage + 1;
