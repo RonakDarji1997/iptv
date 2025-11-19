@@ -32,7 +32,7 @@ export default function WatchPage() {
         videoRef.current.load();
         
         videoRef.current.play().catch(() => {
-            console.log('⚠️ Autoplay blocked by browser');
+            // Autoplay blocked by browser
         });
 
         const handleError = () => {

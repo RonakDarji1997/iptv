@@ -27,7 +27,6 @@ export function SeriesModal({ series, isOpen, onClose, onEpisodeSelect }: Series
         try {
             const client = new StalkerClient({ mac: macAddress, url: portalUrl });
             const seasonsData = await client.getSeriesSeasons(series.id);
-            console.log('[SeriesModal] Loaded seasons:', seasonsData);
             setSeasons(seasonsData);
         } catch (error) {
             console.error('[SeriesModal] Failed to load seasons:', error);
@@ -51,7 +50,6 @@ export function SeriesModal({ series, isOpen, onClose, onEpisodeSelect }: Series
         try {
             const client = new StalkerClient({ mac: macAddress, url: portalUrl });
             const { data } = await client.getSeriesEpisodes(series.id, season.id, 1);
-            console.log('[SeriesModal] Loaded episodes:', data);
             setEpisodes(data);
         } catch (error) {
             console.error('[SeriesModal] Failed to load episodes:', error);
@@ -66,20 +64,16 @@ export function SeriesModal({ series, isOpen, onClose, onEpisodeSelect }: Series
         setLoading(true);
         try {
             const client = new StalkerClient({ mac: macAddress, url: portalUrl });
-            console.log('[SeriesModal] Getting file info for episode:', episode.id);
             
             // Get file info with movie_id, season_id, and episode_id
             const fileInfo = await client.getSeriesFileInfo(series.id, selectedSeason.id, episode.id);
-            console.log('[SeriesModal] File info:', fileInfo);
             
             if (fileInfo && fileInfo.id) {
                 // Construct the file path with file_ prefix
                 const filePath = `/media/file_${fileInfo.id}.mpg`;
-                console.log('[SeriesModal] Constructed file path:', filePath);
                 
                 // Get stream URL with series=1 parameter
                 const url = await client.getStreamUrl(filePath, 'series');
-                console.log('[SeriesModal] Stream URL:', url);
                 
                 const title = `${series.name} - ${selectedSeason.name || 'Season ' + selectedSeason.id} - ${episode.name}`;
                 

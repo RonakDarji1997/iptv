@@ -49,9 +49,6 @@ export async function GET(request: NextRequest) {
             'Authorization': `Bearer ${STALKER_CONFIG.bearer}`,
             'Cookie': `mac=${mac.toLowerCase()}; timezone=America/Toronto; adid=${STALKER_CONFIG.adid};${token ? ` st=${token};` : ''}`,
         };
-
-        console.log(`[Proxy] Fetching: ${finalUrl}`);
-        console.log(`[Proxy] Headers:`, headers);
         
         const response = await fetch(finalUrl, {
             method: 'GET',
@@ -81,7 +78,6 @@ export async function GET(request: NextRequest) {
             }
         }
         
-        console.log('[Proxy] Returning data:', JSON.stringify(data, null, 2));
         return NextResponse.json(data);
 
     } catch (error: unknown) {

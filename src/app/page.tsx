@@ -45,7 +45,7 @@ export default function Home() {
           videoRef.current!.play();
           videoRef.current!.muted = false;
         } catch (err) {
-          console.log('Play failed:', err);
+          // Autoplay failed
         }
       }, 200);
     }
@@ -71,12 +71,9 @@ export default function Home() {
     try {
       const client = new StalkerClient({ mac: macAddress, url: portalUrl });
       const { data } = await client.searchContent(query, 1);
-      console.log('[Search] Results:', data);
       
-      // Show all results, no filtering by tab
       setSearchResults(data);
     } catch (error) {
-      console.error('[Search] Failed:', error);
       setSearchResults([]);
     } finally {
       setIsSearching(false);
@@ -85,13 +82,10 @@ export default function Home() {
 
   const handleLogin = async (password: string) => {
     try {
-      console.log('Verifying password...');
       const isValid = await verifyPassword(password);
-      console.log('Password verification result:', isValid);
       
       if (isValid) {
         setIsLoggedIn(true);
-        // Store in sessionStorage to persist across page reloads
         if (typeof window !== 'undefined') {
           sessionStorage.setItem('iptv_logged_in', 'true');
         }
@@ -99,7 +93,6 @@ export default function Home() {
         alert('Incorrect password');
       }
     } catch (error) {
-      console.error('Password verification error:', error);
       alert('Authentication error occurred');
     }
   };
@@ -133,7 +126,7 @@ export default function Home() {
             Date.now() + 86400000
           );
         } catch (error) {
-          console.error("Auto-authentication failed", error);
+          // Auto-authentication failed
         }
       };
       autoAuth();
@@ -208,7 +201,7 @@ export default function Home() {
             }
           }
         } catch (error) {
-          console.error("Failed to fetch categories", error);
+          // Failed to fetch categories
         }
       };
       fetchAllCategories();
@@ -228,7 +221,7 @@ export default function Home() {
           // Then unmute after play starts
           videoRef.current!.muted = false;
         } catch (err) {
-          console.log('Play failed:', err);
+          // Play failed
         }
       };
       // Try to play after source is loaded

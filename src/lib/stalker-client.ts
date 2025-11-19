@@ -27,9 +27,6 @@ export class StalkerClient {
         proxyUrl.searchParams.append('mac', this.mac);
         if (this.token) {
             proxyUrl.searchParams.append('token', this.token);
-            console.log('[StalkerClient] Using token:', this.token);
-        } else {
-            console.log('[StalkerClient] No token available for this request');
         }
 
         // Stalker params - only add type=stb if params don't already have a type
@@ -44,8 +41,6 @@ export class StalkerClient {
         });
 
         const finalUrl = proxyUrl.toString();
-        console.log(`[StalkerClient] Proxy URL: ${finalUrl}`);
-        console.log(`[StalkerClient] Requesting: ${action}`, params);
 
         try {
             const response = await fetch(finalUrl);
@@ -55,17 +50,14 @@ export class StalkerClient {
             }
 
             const data = await response.json();
-            console.log(`[StalkerClient] Response data:`, JSON.stringify(data, null, 2));
             
             // Stalker API returns { js: { data?: [...] } } or { js: [...] } or { js: { ... } }
             if (data && data.js) {
                 const jsContent = data.js;
-                console.log(`[StalkerClient] Extracted js content:`, JSON.stringify(jsContent, null, 2));
                 // Handle both array responses and object responses
                 return jsContent as T;
             }
             
-            console.log(`[StalkerClient] No js field, returning data as-is`);
             return data as T;
         } catch (error) {
             console.error('[StalkerClient] Error:', error);
@@ -107,7 +99,6 @@ export class StalkerClient {
         try {
             const response = await this.request<{ token: string }>('handshake');
             this.token = response.token;
-            console.log('[StalkerClient] Handshake successful, token:', this.token);
         } catch (error) {
             console.error('Handshake failed', error);
             throw new StalkerError('Failed to connect to portal');
@@ -271,18 +262,14 @@ export class StalkerClient {
     }
 
     async getStreamUrl(cmd: string, type: string = 'itv'): Promise<string> {
-        console.log('[StalkerClient] getStreamUrl called with cmd:', cmd, 'type:', type);
-        
         // If cmd is already a URL, return it (common in some playlists)
         if (cmd && cmd.startsWith('http') && !cmd.includes('localhost')) {
-            console.log('[StalkerClient] cmd is already a URL, returning as-is');
             return cmd;
         }
 
         // Otherwise ask portal to create a link
         // type=vod&action=create_link&cmd=...&series={0|1}&force_ch_link_check=0
         // Response: { js: { cmd: "http://...", ... } }
-        console.log('[StalkerClient] Calling create_link with type:', type, 'cmd:', cmd);
         
         const params: Record<string, string> = {
             type: type === 'series' ? 'vod' : type, // Series uses type=vod
@@ -297,15 +284,12 @@ export class StalkerClient {
         
         const response = await this.request<{ cmd: string, id?: number }>('create_link', params);
         
-        console.log('[StalkerClient] create_link response:', response);
-        
         if (!response || !response.cmd) {
              console.error('[StalkerClient] Invalid response, no cmd field found');
              throw new Error('Failed to generate stream link - no cmd in response');
         }
         
         // Return the streaming URL from cmd field
-        console.log('[StalkerClient] Returning stream URL:', response.cmd);
         return response.cmd;
     }
 }

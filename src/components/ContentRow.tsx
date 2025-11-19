@@ -28,9 +28,6 @@ export default function ContentRow({ title, categoryId, items, contentType = 'it
     const { macAddress, portalUrl, setChannels } = useAuthStore();
 
     const handleThumbnailClick = async (item: any) => {
-        console.log('Playing item:', item);
-        console.log('Content type:', contentType);
-        
         // For search results or mixed content, determine type from genres_str
         const seriesGenres = [
             'ENGLISH | SERIES', 'ENGLISH | ANIME', 'ENGLISH | DOCUMENTARY', 'ENGLISH | KOREAN SERIES',
@@ -48,7 +45,6 @@ export default function ContentRow({ title, categoryId, items, contentType = 'it
         
         // For series, open the series modal instead of playing directly
         if (isSeries) {
-            console.log('Opening series modal for:', item.name);
             setSelectedSeries(item);
             setIsSeriesModalOpen(true);
             return;
@@ -60,9 +56,7 @@ export default function ContentRow({ title, categoryId, items, contentType = 'it
                 
                 // For VOD (movies), first get the file details to get the correct file ID
                 if (contentType === 'vod') {
-                    console.log('Getting file details for movie ID:', item.id);
                     const fileInfo = await client.getMovieInfo(item.id);
-                    console.log('File info received:', fileInfo);
                     
                     if (!fileInfo || !fileInfo.id) {
                         throw new Error('No file information found for this content');
@@ -70,18 +64,14 @@ export default function ContentRow({ title, categoryId, items, contentType = 'it
                     
                     // Use the file ID to construct the cmd
                     const cmd = `/media/file_${fileInfo.id}.mpg`;
-                    console.log('Getting stream URL with cmd:', cmd);
                     const url = await client.getStreamUrl(cmd, contentType);
-                    console.log('Stream URL received:', url);
                     
                     if (onChannelSelect) {
                         onChannelSelect(url, item.name, item);
                     }
                 } else {
                     // For channels, use the cmd directly
-                    console.log('Getting stream URL for channel cmd:', item.cmd);
                     const url = await client.getStreamUrl(item.cmd, contentType);
-                    console.log('Stream URL received:', url);
                     
                     if (onChannelSelect) {
                         onChannelSelect(url, item.name, item);
@@ -89,14 +79,12 @@ export default function ContentRow({ title, categoryId, items, contentType = 'it
                 }
                 
             } catch (e) {
-                console.error('Error getting stream URL:', e);
                 alert(`❌ Failed to get stream URL: ${e instanceof Error ? e.message : 'Unknown error'}`);
             }
         }
     };
 
     const handleSeriesEpisodeSelect = (url: string, title: string, item?: any) => {
-        console.log('Episode selected:', title, url);
         if (onChannelSelect) {
             onChannelSelect(url, title, item);
         }
@@ -107,27 +95,19 @@ export default function ContentRow({ title, categoryId, items, contentType = 'it
         if (localItems.length === 0 && categoryId && macAddress && portalUrl) {
             const loadItems = async () => {
                 setIsLoading(true);
-                console.log(`[ContentRow] Loading ${contentType} items for category ${categoryId}`);
                 try {
                     const client = new StalkerClient({ mac: macAddress, url: portalUrl });
                     let result;
                     
                     if (contentType === 'vod') {
-                        console.log(`[ContentRow] Calling getMovies for category ${categoryId}`);
                         result = await client.getMovies(categoryId, 1);
                     } else if (contentType === 'series') {
-                        console.log(`[ContentRow] Calling getSeries for category ${categoryId}`);
                         result = await client.getSeries(categoryId, 1);
                     } else {
-                        console.log(`[ContentRow] Calling getChannels for category ${categoryId}`);
                         result = await client.getChannels(categoryId, 1);
                     }
                     
-                    console.log(`[ContentRow] Result for ${contentType}:`, result);
-                    
                     if (result.data && Array.isArray(result.data) && result.data.length > 0) {
-                        // Log first item to see available fields
-                        console.log(`[ContentRow] First item sample:`, JSON.stringify(result.data[0], null, 2));
                         
                         setLocalItems(result.data);
                         setTotalChannels(result.total);
@@ -137,11 +117,9 @@ export default function ContentRow({ title, categoryId, items, contentType = 'it
                         const totalPages = Math.ceil(result.total / 14);
                         setHasMorePages(totalPages > 1);
                         setCurrentPage(1);
-                    } else {
-                        console.log(`[ContentRow] No items found for category ${categoryId}`);
                     }
                 } catch (e) {
-                    console.error(`Failed to fetch items for category ${categoryId}:`, e);
+                    // Failed to fetch items
                 } finally {
                     setIsLoading(false);
                 }

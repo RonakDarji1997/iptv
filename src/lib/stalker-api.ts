@@ -39,7 +39,6 @@ export async function authenticateStalker(credentials: StalkerCredentials): Prom
 
     // For development/demo purposes, we'll accept any "valid-looking" MAC
     // In production, this would hit the portal's handshake endpoint
-    console.log('Authenticating with:', credentials);
 
     return {
         token: 'mock_stalker_token_' + Math.random().toString(36).substring(7),
