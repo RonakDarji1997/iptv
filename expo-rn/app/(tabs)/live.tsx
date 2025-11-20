@@ -115,9 +115,17 @@ export default function LiveTVScreen() {
       
       if (page === 1) {
         setChannels(result.data);
-        setTotalPages(Math.ceil(result.total / result.data.length));
+        // Calculate total pages: API typically returns 14 items per page
+        const itemsPerPage = result.data.length > 0 ? result.data.length : 14;
+        const calculatedPages = Math.ceil(result.total / itemsPerPage);
+        setTotalPages(calculatedPages > 0 ? calculatedPages : 1);
       } else {
-        setChannels(prev => [...prev, ...result.data]);
+        // Deduplicate by ID to prevent duplicate keys
+        setChannels(prev => {
+          const existingIds = new Set(prev.map(c => c.id));
+          const newChannels = result.data.filter((c: any) => !existingIds.has(c.id));
+          return [...prev, ...newChannels];
+        });
       }
       
       return result;
@@ -205,8 +213,11 @@ export default function LiveTVScreen() {
       {/* Channels Grid */}
       <FlatList
         data={channels}
-        keyExtractor={(item) => item.id.toString()}
+        numColumns={numColumns}
+        key={numColumns}
+        keyExtractor={(item, index) => `channel-${item.id}-${index}`}
         contentContainerStyle={styles.gridContainer}
+        columnWrapperStyle={styles.columnWrapper}
         renderItem={({ item }) => (
           <ContentCard
             item={item}
@@ -218,7 +229,7 @@ export default function LiveTVScreen() {
           />
         )}
         onEndReached={handleLoadMore}
-        onEndReachedThreshold={2}
+        onEndReachedThreshold={0.5}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#ef4444" />
         }
@@ -277,10 +288,10 @@ const styles = StyleSheet.create({
   },
   gridContainer: {
     padding: 16,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    justifyContent: 'center',
+  },
+  columnWrapper: {
+    gap: 16,
+    paddingBottom: 16,
   },
   loadingText: {
     color: '#fff',

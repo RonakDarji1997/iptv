@@ -2,13 +2,113 @@
 
 ## Build Successful! ✅
 
-Your IPTV app has been built for production. Here's how to deploy it to your NAS server.
+Your IPTV app has been built for production. Here's how to deploy it to your NAS server using GitHub.
 
 ## What Was Built
 
 - **Output Type**: Standalone
 - **Location**: `.next/standalone/` folder
 - **Static Files**: `.next/static/` and `public/` folders
+
+## Quick Start: GitHub + NAS Deployment
+
+### Prerequisites
+1. Git installed on your NAS
+2. Node.js v18+ installed on NAS
+3. SSH access to your NAS
+4. GitHub repository set up
+
+### Step-by-Step Deployment
+
+#### 1. Push Your Code to GitHub
+
+```bash
+# On your local machine
+git add .
+git commit -m "Deploy IPTV app"
+git push origin main
+```
+
+#### 2. Clone on NAS
+
+```bash
+# SSH into your NAS
+ssh user@your-nas-ip
+
+# Clone the repository
+cd /volume1/docker  # or your preferred location
+git clone https://github.com/yourusername/your-repo.git iptv-app
+cd iptv-app
+```
+
+#### 3. Set Up Environment Variables
+
+```bash
+# Create .env.local file on NAS
+nano .env.local
+```
+
+Add these values:
+```env
+NEXT_PUBLIC_STALKER_BEARER=your_bearer_token
+NEXT_PUBLIC_STALKER_ADID=your_adid
+NEXT_PUBLIC_APP_PASSWORD_HASH=your_bcrypt_hash
+```
+
+#### 4. Install Dependencies & Build
+
+```bash
+npm install
+npm run build
+```
+
+#### 5. Start the App
+
+Choose one of these methods:
+
+**Option A: PM2 (Recommended)**
+```bash
+npm install -g pm2
+pm2 start npm --name "iptv-app" -- start
+pm2 save
+pm2 startup
+```
+
+**Option B: Docker**
+```bash
+docker compose up -d
+```
+
+**Option C: Direct Node**
+```bash
+npm start
+# Or for production:
+NODE_ENV=production node .next/standalone/server.js
+```
+
+#### 6. Access Your App
+
+Open browser: `http://your-nas-ip:3001`
+
+### Updating the App (Pull from GitHub)
+
+```bash
+# SSH into NAS
+ssh user@your-nas-ip
+cd /volume1/docker/iptv-app
+
+# Pull latest changes
+git pull origin main
+
+# Rebuild
+npm install
+npm run build
+
+# Restart
+pm2 restart iptv-app
+# Or if using docker:
+docker compose restart
+```
 
 ## Deployment Methods
 

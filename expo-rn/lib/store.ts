@@ -16,6 +16,7 @@ interface AuthState {
     setSession: (token: string, expiresAt: number) => void;
     setCategories: (categories: any[]) => void;
     setChannels: (categoryId: string, channels: any[]) => void;
+    checkSession: () => boolean;
     logout: () => void;
 }
 
@@ -36,6 +37,20 @@ export const useAuthStore = create<AuthState>()(
             setChannels: (categoryId, channels) => set((state) => ({
                 channels: { ...state.channels, [categoryId]: channels }
             })),
+            checkSession: () => {
+                const state = useAuthStore.getState() as AuthState;
+                if (!state.expiresAt) return false;
+                const isValid: boolean = Date.now() < state.expiresAt;
+                if (!isValid) {
+                    // Session expired, clear auth
+                    set({
+                        token: null,
+                        expiresAt: null,
+                        isAuthenticated: false,
+                    });
+                }
+                return isValid;
+            },
             logout: () => set({
                 macAddress: null,
                 portalUrl: null,

@@ -177,6 +177,7 @@ export default function Home() {
               'GUJARATI | TV SERIALS', 'GUJARATI | WEB SERIES',
               'TURKISH | URDU DUB SERIES',
               'ADULT | SERIES',
+              'ADULT | CELEBRITY',
               'SPORTS | EVENTS', 'SPORTS | CRICKET EVENTS'
             ];
             

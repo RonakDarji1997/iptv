@@ -27,7 +27,7 @@ export default function ContentRow({
         data={items}
         horizontal
         showsHorizontalScrollIndicator={false}
-        keyExtractor={(item) => item.id?.toString() || Math.random().toString()}
+        keyExtractor={(item, index) => `${contentType}-${item.id}-${index}`}
         renderItem={({ item }) => (
           <ContentCard
             item={item}

@@ -12,20 +12,24 @@ import {
 import { useState } from 'react';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
-import { StalkerClient } from '@/lib/stalker-client';
+import { verifyPassword } from '@/lib/auth';
 
 export default function LoginScreen() {
   const router = useRouter();
   const { setCredentials, setSession } = useAuthStore();
   
-  const [macAddress, setMacAddress] = useState('00:1A:79:17:F4:F5');
-  const [portalUrl, setPortalUrl] = useState('http://tv.stream4k.cc/stalker_portal/');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Get credentials from environment
+  const macAddress = process.env.EXPO_PUBLIC_STALKER_MAC || '';
+  const portalUrl = process.env.EXPO_PUBLIC_STALKER_URL || '';
+
   const handleLogin = async () => {
-    if (!macAddress || !portalUrl) {
-      setError('Please enter MAC address and Portal URL');
+    if (!password) {
+      setError('Please enter password');
       return;
     }
 
@@ -33,15 +37,22 @@ export default function LoginScreen() {
     setError('');
 
     try {
+      // Verify password
+      const isValid = await verifyPassword(password);
+      if (!isValid) {
+        setError('Incorrect password');
+        setLoading(false);
+        return;
+      }
+
       // Store credentials
       setCredentials(macAddress, portalUrl);
 
-      // Test connection
-      const client = new StalkerClient({ mac: macAddress, url: portalUrl });
       // No handshake needed - auth handled by bearer/adid
 
-      // Store session
-      setSession('token', Date.now() + 24 * 60 * 60 * 1000);
+      // Store session with 7-day expiry
+      const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
+      setSession('authenticated', Date.now() + sevenDaysInMs);
 
       // Navigate to home
       router.replace('/(tabs)');
@@ -62,34 +73,31 @@ export default function LoginScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.formContainer}>
-          <Text style={styles.title}>IPTV Player</Text>
-          <Text style={styles.subtitle}>Sign in to your portal</Text>
+          <Text style={styles.title}>Ronika&apos;s IPTV</Text>
+          <Text style={styles.subtitle}>Enter password to continue</Text>
 
           <View style={styles.inputContainer}>
-            <Text style={styles.label}>MAC Address</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="00:1A:79:XX:XX:XX"
-              placeholderTextColor="#6b7280"
-              value={macAddress}
-              onChangeText={setMacAddress}
-              autoCapitalize="characters"
-              autoCorrect={false}
-            />
-          </View>
-
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Portal URL</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="http://example.com/stalker_portal/"
-              placeholderTextColor="#6b7280"
-              value={portalUrl}
-              onChangeText={setPortalUrl}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-            />
+            <Text style={styles.label}>Password</Text>
+            <View style={styles.passwordContainer}>
+              <TextInput
+                style={[styles.input, styles.passwordInput]}
+                placeholder="Enter password"
+                placeholderTextColor="#6b7280"
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPassword}
+                autoCapitalize="none"
+                autoCorrect={false}
+                onSubmitEditing={handleLogin}
+                returnKeyType="go"
+              />
+              <Pressable
+                style={styles.eyeButton}
+                onPress={() => setShowPassword(!showPassword)}
+              >
+                <Text style={styles.eyeIcon}>{showPassword ? '👁️' : '👁️‍🗨️'}</Text>
+              </Pressable>
+            </View>
           </View>
 
           {error ? (
@@ -115,7 +123,7 @@ export default function LoginScreen() {
           </Pressable>
 
           <Text style={styles.helpText}>
-            Enter your IPTV provider's MAC address and portal URL
+            Welcome to Ronika&apos;s IPTV
           </Text>
         </View>
       </ScrollView>
@@ -168,6 +176,21 @@ const styles = StyleSheet.create({
     padding: 16,
     fontSize: 16,
     color: '#fff',
+  },
+  passwordContainer: {
+    position: 'relative',
+  },
+  passwordInput: {
+    paddingRight: 50,
+  },
+  eyeButton: {
+    position: 'absolute',
+    right: 12,
+    top: 12,
+    padding: 4,
+  },
+  eyeIcon: {
+    fontSize: 20,
   },
   button: {
     backgroundColor: '#ef4444',

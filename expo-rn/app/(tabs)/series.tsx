@@ -60,17 +60,15 @@ export default function SeriesScreen() {
   }, [selectedCategory]);
 
   const loadInitialPages = async () => {
-    // Load first 5 pages at once
+    // Load first 10 pages to ensure we get content even with filtering
     setLoading(true);
     try {
-      await Promise.all([
-        loadSeries(1),
-        loadSeries(2),
-        loadSeries(3),
-        loadSeries(4),
-        loadSeries(5),
-      ]);
-      setCurrentPage(5);
+      const pages = [];
+      for (let i = 1; i <= 10; i++) {
+        pages.push(loadSeries(i));
+      }
+      await Promise.all(pages);
+      setCurrentPage(10);
     } catch (err) {
       console.error('Error loading initial pages:', err);
     } finally {
@@ -114,11 +112,29 @@ export default function SeriesScreen() {
 
       const result = await client.getSeries(selectedCategory, page);
       
+      // Filter to only show series - items with is_series: "1" or is_series: 1
+      let actualSeries = result.data.filter((item: any) => {
+        return item.is_series === '1' || item.is_series === 1;
+      });
+      
+      // If filtering removes everything, show all items (for adult/celebrity categories)
+      if (actualSeries.length === 0 && result.data.length > 0) {
+        actualSeries = result.data;
+      }
+      
       if (page === 1) {
-        setSeries(result.data);
-        setTotalPages(Math.ceil(result.total / result.data.length));
+        setSeries(actualSeries);
+        // Calculate total pages: API typically returns 14 items per page
+        const itemsPerPage = result.data.length > 0 ? result.data.length : 14;
+        const calculatedPages = Math.ceil(result.total / itemsPerPage);
+        setTotalPages(calculatedPages > 0 ? calculatedPages : 1);
       } else {
-        setSeries(prev => [...prev, ...result.data]);
+        // Deduplicate by ID to prevent duplicate keys
+        setSeries(prev => {
+          const existingIds = new Set(prev.map(s => s.id));
+          const newSeries = actualSeries.filter((s: any) => !existingIds.has(s.id));
+          return [...prev, ...newSeries];
+        });
       }
       
       return result;
@@ -211,8 +227,11 @@ export default function SeriesScreen() {
       {/* Series Grid */}
       <FlatList
         data={series}
-        keyExtractor={(item) => item.id.toString()}
+        numColumns={numColumns}
+        key={numColumns}
+        keyExtractor={(item, index) => `series-${item.id}-${index}`}
         contentContainerStyle={styles.gridContainer}
+        columnWrapperStyle={styles.columnWrapper}
         renderItem={({ item }) => (
           <ContentCard
             item={item}
@@ -224,7 +243,7 @@ export default function SeriesScreen() {
           />
         )}
         onEndReached={handleLoadMore}
-        onEndReachedThreshold={2}
+        onEndReachedThreshold={0.5}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#ef4444" />
         }
@@ -283,10 +302,10 @@ const styles = StyleSheet.create({
   },
   gridContainer: {
     padding: 16,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+  },
+  columnWrapper: {
     gap: 16,
-    justifyContent: 'flex-start',
+    paddingBottom: 16,
   },
   loadingText: {
     color: '#fff',

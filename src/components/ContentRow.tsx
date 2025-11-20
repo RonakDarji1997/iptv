@@ -38,7 +38,7 @@ export default function ContentRow({ title, categoryId, items, contentType = 'it
             'URDU | TV SERIALS', 'URDU | POLITICAL SHOWS', 'URDU | MUSIC ALBUMS',
             'GUJARATI | TV SERIALS', 'GUJARATI | WEB SERIES',
             'TURKISH | URDU DUB SERIES',
-            'ADULT | SERIES',
+            'ADULT | SERIES', 'ADULT | CELEBRITY',
             'SPORTS | EVENTS', 'SPORTS | CRICKET EVENTS'
         ];
         const isSeries = contentType === 'series' || (item.genres_str && seriesGenres.includes(item.genres_str));

@@ -54,6 +54,20 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <TabBarIcon name="tv" color={color} />,
         }}
       />
+      <Tabs.Screen
+        name="search"
+        options={{
+          title: 'Search',
+          tabBarIcon: ({ color }) => <TabBarIcon name="search" color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="continue"
+        options={{
+          title: 'Continue',
+          tabBarIcon: ({ color }) => <TabBarIcon name="history" color={color} />,
+        }}
+      />
     </Tabs>
   );
 }

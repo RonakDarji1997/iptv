@@ -9,10 +9,12 @@ import {
   Image,
 } from 'react-native';
 import { useState, useEffect } from 'react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
 import { StalkerClient } from '@/lib/stalker-client';
 import { Picker } from '@react-native-picker/picker';
+import { WatchHistoryManager, WatchHistoryItem } from '@/lib/watch-history';
+import { useCallback } from 'react';
 
 export default function SeriesDetailScreen() {
   const router = useRouter();
@@ -45,10 +47,32 @@ export default function SeriesDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
   const [error, setError] = useState('');
+  const [episodeProgress, setEpisodeProgress] = useState<Map<string, WatchHistoryItem>>(new Map());
+
+  const loadWatchHistory = async () => {
+    const history = await WatchHistoryManager.getContinueWatching();
+    const progressMap = new Map<string, WatchHistoryItem>();
+    
+    // Filter history for this series and create a map by episodeId
+    history.forEach(item => {
+      if (item.type === 'series' && item.contentId === params.id && item.episodeId) {
+        progressMap.set(item.episodeId, item);
+      }
+    });
+    
+    setEpisodeProgress(progressMap);
+  };
 
   useEffect(() => {
     loadSeasons();
   }, []);
+
+  // Reload watch history when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      loadWatchHistory();
+    }, [params.id])
+  );
 
   useEffect(() => {
     if (selectedSeason) {
@@ -69,11 +93,18 @@ export default function SeriesDetailScreen() {
       const client = new StalkerClient({ url: portalUrl, mac: macAddress });
 
       const seasonsData = await client.getSeriesSeasons(params.id);
-      setSeasons(seasonsData);
+      
+      // Filter out ADULT and CELEBRITY seasons
+      const filteredSeasons = seasonsData.filter((season: any) => {
+        const name = (season.name || season.series_name || '').toUpperCase();
+        return !name.includes('ADULT') && !name.includes('CELEBRITY');
+      });
+      
+      setSeasons(filteredSeasons);
 
       // Select first season by default
-      if (seasonsData.length > 0) {
-        setSelectedSeason(seasonsData[0].id);
+      if (filteredSeasons.length > 0) {
+        setSelectedSeason(filteredSeasons[0].id);
       }
     } catch (err) {
       console.error('Load seasons error:', err);
@@ -91,8 +122,17 @@ export default function SeriesDetailScreen() {
       setError('');
       const client = new StalkerClient({ url: portalUrl, mac: macAddress });
 
-      const result = await client.getSeriesEpisodes(params.id, selectedSeason, 1);
-      setEpisodes(result.data);
+      // Fetch all episodes (method now handles pagination internally)
+      const result = await client.getSeriesEpisodes(params.id, selectedSeason);
+      
+      // Sort episodes by episode number in ascending order
+      const sortedEpisodes = result.data.sort((a: any, b: any) => {
+        const numA = parseInt(a.series_number) || 0;
+        const numB = parseInt(b.series_number) || 0;
+        return numA - numB;
+      });
+      
+      setEpisodes(sortedEpisodes);
     } catch (err) {
       console.error('Load episodes error:', err);
       setError(err instanceof Error ? err.message : 'Failed to load episodes');
@@ -105,9 +145,31 @@ export default function SeriesDetailScreen() {
     if (!portalUrl || !macAddress) return;
 
     try {
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
+      // Check if we have existing progress for this episode
+      const progress = episodeProgress.get(episode.id);
+      
+      // If we have progress and a stored cmd, use it directly
+      if (progress && progress.cmd) {
+        router.push({
+          pathname: '/watch/[id]',
+          params: {
+            id: params.id,
+            cmd: progress.cmd,
+            type: 'series',
+            title: `${params.title} - ${episode.name}`,
+            screenshot: params.screenshot || '',
+            seasonId: selectedSeason,
+            seasonNumber: seasons.find(s => s.id === selectedSeason)?.season_number || '',
+            episodeId: episode.id,
+            episodeNumber: episode.series_number || '',
+            resumeFrom: progress.currentTime.toString(),
+          },
+        });
+        return;
+      }
 
-      // Get file info for the episode
+      // Otherwise, fetch file info as usual
+      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
       const fileInfo = await client.getSeriesFileInfo(params.id, selectedSeason, episode.id);
       console.log('Episode file info:', fileInfo);
 
@@ -124,10 +186,15 @@ export default function SeriesDetailScreen() {
       router.push({
         pathname: '/watch/[id]',
         params: {
-          id: fileInfo.id || 'series',
+          id: params.id,
           cmd: cmd,
           type: 'series',
           title: `${params.title} - ${episode.name}`,
+          screenshot: params.screenshot || '',
+          seasonId: selectedSeason,
+          seasonNumber: seasons.find(s => s.id === selectedSeason)?.season_number || '',
+          episodeId: episode.id,
+          episodeNumber: episode.series_number || '',
         },
       });
     } catch (err) {
@@ -189,6 +256,19 @@ export default function SeriesDetailScreen() {
       {/* Series Info */}
       <View style={styles.infoContainer}>
         <Text style={styles.title}>{seriesInfo?.name || params.title || 'Series'}</Text>
+        
+        {/* Play Button */}
+        {episodes.length > 0 && (
+          <Pressable 
+            style={styles.playButton} 
+            onPress={() => handleEpisodePress(episodes[0])}
+          >
+            <Text style={styles.playButtonIcon}>▶</Text>
+            <Text style={styles.playButtonText}>
+              Play S{seasons.find(s => s.id === selectedSeason)?.season_number || '1'} E{episodes[0].series_number || '1'}
+            </Text>
+          </Pressable>
+        )}
         
         <View style={styles.metaRow}>
           {seriesInfo?.year && (
@@ -253,24 +333,45 @@ export default function SeriesDetailScreen() {
         ) : episodes.length === 0 ? (
           <Text style={styles.noEpisodes}>No episodes found</Text>
         ) : (
-          episodes.map((episode, index) => (
-            <Pressable
-              key={episode.id}
-              style={styles.episodeCard}
-              onPress={() => handleEpisodePress(episode)}
-            >
-              <View style={styles.episodeNumber}>
-                <Text style={styles.episodeNumberText}>{index + 1}</Text>
-              </View>
-              <View style={styles.episodeInfo}>
-                <Text style={styles.episodeName}>{episode.name}</Text>
-                {episode.time && (
-                  <Text style={styles.episodeTime}>{episode.time}</Text>
-                )}
-              </View>
-              <Text style={styles.playIcon}>▶</Text>
-            </Pressable>
-          ))
+          episodes.map((episode, index) => {
+            const progress = episodeProgress.get(episode.id);
+            const hasProgress = progress && progress.percentage > 0 && !progress.completed;
+            
+            return (
+              <Pressable
+                key={`episode-${episode.id}-${index}`}
+                style={styles.episodeCard}
+                onPress={() => handleEpisodePress(episode)}
+              >
+                <View style={styles.episodeNumber}>
+                  <Text style={styles.episodeNumberText}>
+                    {episode.series_number || episode.name.match(/\d+/)?.[0] || ''}
+                  </Text>
+                </View>
+                <View style={styles.episodeInfo}>
+                  <Text style={styles.episodeName}>{episode.name}</Text>
+                  {episode.time && (
+                    <Text style={styles.episodeTime}>{episode.time}</Text>
+                  )}
+                  {/* Progress Bar */}
+                  {hasProgress && (
+                    <View style={styles.progressContainer}>
+                      <View style={[styles.progressBar, { width: `${progress.percentage}%` }]} />
+                    </View>
+                  )}
+                </View>
+                <View style={styles.episodeActions}>
+                  {progress?.completed && (
+                    <Text style={styles.completedIcon}>✓</Text>
+                  )}
+                  {hasProgress && (
+                    <Text style={styles.resumeText}>{progress.percentage}%</Text>
+                  )}
+                  <Text style={styles.playIcon}>▶</Text>
+                </View>
+              </Pressable>
+            );
+          })
         )}
       </View>
     </ScrollView>
@@ -329,6 +430,28 @@ const styles = StyleSheet.create({
     color: '#fff',
     marginBottom: 8,
     textAlign: 'center',
+  },
+  playButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ef4444',
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    borderRadius: 8,
+    marginVertical: 16,
+    alignSelf: 'center',
+    gap: 8,
+  },
+  playButtonIcon: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  playButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   metaRow: {
     flexDirection: 'row',
@@ -437,6 +560,33 @@ const styles = StyleSheet.create({
   episodeTime: {
     color: '#71717a',
     fontSize: 14,
+    marginBottom: 4,
+  },
+  progressContainer: {
+    height: 3,
+    backgroundColor: '#27272a',
+    borderRadius: 2,
+    overflow: 'hidden',
+    marginTop: 8,
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#ef4444',
+  },
+  episodeActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  completedIcon: {
+    color: '#22c55e',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  resumeText: {
+    color: '#ef4444',
+    fontSize: 12,
+    fontWeight: '600',
   },
   playIcon: {
     color: '#ef4444',

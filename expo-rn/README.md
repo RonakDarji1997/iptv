@@ -48,13 +48,40 @@ npm install
 Create a `.env` file in the `expo-rn` directory:
 
 ```bash
+# Stalker Portal Configuration
 STALKER_MAC=00:1A:79:17:F4:F5
 STALKER_URL=http://tv.stream4k.cc/stalker_portal/
 STALKER_BEARER=1E75E91204660B7A876055CE8830130E
 STALKER_ADID=06c140f97c839eaaa4faef4cc08a5722
+
+EXPO_PUBLIC_STALKER_MAC=00:1A:79:17:F4:F5
+EXPO_PUBLIC_STALKER_URL=http://tv.stream4k.cc/stalker_portal/
+EXPO_PUBLIC_STALKER_BEARER=1E75E91204660B7A876055CE8830130E
+EXPO_PUBLIC_STALKER_ADID=06c140f97c839eaaa4faef4cc08a5722
+
+# Password Authentication (required for production)
+# Generate using: cd .. && node scripts/hash-password.js <your_password>
+EXPO_PUBLIC_APP_PASSWORD_HASH=
 ```
 
 These credentials are used for direct authentication with the Stalker Portal (no handshake required).
+
+**Password Protection:**
+
+For production deployments (e.g., on NAS), you need to set a password hash:
+
+1. Generate a bcrypt hash:
+   ```bash
+   cd /Users/ronika/Desktop/iptv
+   node scripts/hash-password.js your_password_here
+   ```
+
+2. Copy the hash and add it to your `.env` file:
+   ```bash
+   EXPO_PUBLIC_APP_PASSWORD_HASH=$2a$10$your_generated_hash_here
+   ```
+
+3. Users will need to enter this password on the login screen to access the app.
 
 ### Running the App
 

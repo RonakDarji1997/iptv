@@ -163,7 +163,12 @@ export class StalkerClient {
 
     async getSeriesCategories(): Promise<any[]> {
         const allCategories = await this.getMovieCategories();
-        const seriesKeywords = ['SERIES', 'SERIALS','WEB_SERIES', 'TV_SERIALS'];
+        const seriesKeywords = [
+            'SERIES', 'SERIALS', 'SERIAL', 'WEB_SERIES', 'TV_SERIALS',
+            'ANIME', 'DOCUMENTARY', 'KOREAN', 'KIDS', 'MUSIC ALBUMS',
+            'DUBB', 'DRAMA', 'SHOWS', 'EVENTS', 'CRICKET',
+            'ADULT', 'CELEBRITY'
+        ];
         
         return allCategories.filter((cat: any) => {
             const combinedText = `${cat.title} ${cat.alias}`.toUpperCase();
@@ -242,27 +247,90 @@ export class StalkerClient {
     }
 
     async getSeriesSeasons(seriesId: string): Promise<any[]> {
-        const response = await this.request<{ data: any[] }>('get_ordered_list', { 
+        // First request to get total count
+        const firstResponse = await this.request<{ data: any[], total_items?: string }>('get_ordered_list', { 
             type: 'vod',
-            movie_id: seriesId
+            movie_id: seriesId,
+            p: '1'
         });
         
-        return response.data || [];
+        const totalItems = firstResponse.total_items ? parseInt(firstResponse.total_items, 10) : (firstResponse.data?.length || 0);
+        const itemsPerPage = 14;
+        const totalPages = Math.ceil(totalItems / itemsPerPage);
+        
+        // If only one page, return immediately
+        if (totalPages <= 1) {
+            return firstResponse.data || [];
+        }
+        
+        // Fetch remaining pages in parallel
+        const pagePromises = [];
+        for (let page = 2; page <= totalPages; page++) {
+            pagePromises.push(
+                this.request<{ data: any[] }>('get_ordered_list', { 
+                    type: 'vod',
+                    movie_id: seriesId,
+                    p: page.toString()
+                })
+            );
+        }
+        
+        const remainingPages = await Promise.all(pagePromises);
+        
+        // Combine all results
+        const allSeasons = [
+            ...(firstResponse.data || []),
+            ...remainingPages.flatMap(response => response.data || [])
+        ];
+        
+        return allSeasons;
     }
 
     async getSeriesEpisodes(seriesId: string, seasonId: string, page: number = 1): Promise<{ data: any[], total: number }> {
-        const response = await this.request<{ data: any[], total?: number, total_items?: string }>('get_ordered_list', { 
+        // First request to get total count
+        const firstResponse = await this.request<{ data: any[], total?: number, total_items?: string }>('get_ordered_list', { 
             type: 'vod',
             movie_id: seriesId,
             season_id: seasonId,
-            p: page.toString()
+            p: '1'
         });
         
-        const total = response.total_items ? parseInt(response.total_items, 10) : (response.total || 0);
+        const totalItems = firstResponse.total_items ? parseInt(firstResponse.total_items, 10) : (firstResponse.data?.length || 0);
+        const itemsPerPage = 14;
+        const totalPages = Math.ceil(totalItems / itemsPerPage);
+        
+        // If only one page, return immediately
+        if (totalPages <= 1) {
+            return {
+                data: firstResponse.data || [],
+                total: totalItems
+            };
+        }
+        
+        // Fetch remaining pages in parallel
+        const pagePromises = [];
+        for (let page = 2; page <= totalPages; page++) {
+            pagePromises.push(
+                this.request<{ data: any[] }>('get_ordered_list', { 
+                    type: 'vod',
+                    movie_id: seriesId,
+                    season_id: seasonId,
+                    p: page.toString()
+                })
+            );
+        }
+        
+        const remainingPages = await Promise.all(pagePromises);
+        
+        // Combine all results
+        const allEpisodes = [
+            ...(firstResponse.data || []),
+            ...remainingPages.flatMap(response => response.data || [])
+        ];
         
         return {
-            data: response.data || [],
-            total: total
+            data: allEpisodes,
+            total: totalItems
         };
     }
 

@@ -9,9 +9,12 @@ interface VideoPlayerProps {
   autoPlay?: boolean;
   title?: string;
   onBack?: () => void;
+  startPosition?: number; // Resume from this position in seconds
+  onProgressUpdate?: (currentTime: number, duration: number) => void;
+  onVideoEnd?: () => void; // Callback when video finishes playing
 }
 
-export default function VideoPlayer({ uri, autoPlay = true, title, onBack }: VideoPlayerProps) {
+export default function VideoPlayer({ uri, autoPlay = true, title, onBack, startPosition = 0, onProgressUpdate, onVideoEnd }: VideoPlayerProps) {
   const videoRef = useRef<Video>(null);
   const [status, setStatus] = useState<AVPlaybackStatus | null>(null);
   const [controlsVisible, setControlsVisible] = useState(true);
@@ -48,9 +51,64 @@ export default function VideoPlayer({ uri, autoPlay = true, title, onBack }: Vid
   }, []);
 
   if (Platform.OS === 'web') {
+    const videoElRef = useRef<HTMLVideoElement>(null);
+    const progressTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    useEffect(() => {
+      const videoEl = videoElRef.current;
+      if (!videoEl) return;
+
+      // Set start position when video loads
+      const handleLoadedMetadata = () => {
+        if (startPosition > 0) {
+          videoEl.currentTime = startPosition;
+        }
+      };
+
+      // Track progress every 15 seconds
+      const handleTimeUpdate = () => {
+        if (progressTimerRef.current) {
+          clearTimeout(progressTimerRef.current);
+        }
+        
+        progressTimerRef.current = setTimeout(() => {
+          if (onProgressUpdate && videoEl.duration) {
+            onProgressUpdate(videoEl.currentTime, videoEl.duration);
+          }
+        }, 15000); // Save every 15 seconds
+      };
+
+      // Save progress when pausing or ending
+      const handlePauseOrEnd = () => {
+        if (onProgressUpdate && videoEl.duration) {
+          onProgressUpdate(videoEl.currentTime, videoEl.duration);
+        }
+      };
+
+      videoEl.addEventListener('loadedmetadata', handleLoadedMetadata);
+      videoEl.addEventListener('timeupdate', handleTimeUpdate);
+      videoEl.addEventListener('pause', handlePauseOrEnd);
+      videoEl.addEventListener('ended', handlePauseOrEnd);
+
+      return () => {
+        videoEl.removeEventListener('loadedmetadata', handleLoadedMetadata);
+        videoEl.removeEventListener('timeupdate', handleTimeUpdate);
+        videoEl.removeEventListener('pause', handlePauseOrEnd);
+        videoEl.removeEventListener('ended', handlePauseOrEnd);
+        if (progressTimerRef.current) {
+          clearTimeout(progressTimerRef.current);
+        }
+        // Save progress on unmount
+        if (onProgressUpdate && videoEl.duration) {
+          onProgressUpdate(videoEl.currentTime, videoEl.duration);
+        }
+      };
+    }, [startPosition, onProgressUpdate]);
+
     return (
       <View style={styles.webContainer}>
         <video
+          ref={videoElRef}
           src={uri}
           autoPlay={autoPlay}
           controls
@@ -79,6 +137,43 @@ export default function VideoPlayer({ uri, autoPlay = true, title, onBack }: Vid
     );
   }
 
+  // Track progress for native video
+  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  useEffect(() => {
+    if (!videoRef.current || !status || !('isLoaded' in status) || !status.isLoaded) return;
+    
+    // Set start position
+    if (startPosition > 0 && status.positionMillis === 0) {
+      videoRef.current.setPositionAsync(startPosition * 1000);
+    }
+    
+    // Track progress every 15 seconds
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+    }
+    
+    progressIntervalRef.current = setInterval(() => {
+      if (onProgressUpdate && status.isLoaded && status.durationMillis) {
+        const currentTime = status.positionMillis / 1000;
+        const duration = status.durationMillis / 1000;
+        onProgressUpdate(currentTime, duration);
+      }
+    }, 15000);
+    
+    return () => {
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+      }
+      // Save progress on unmount
+      if (onProgressUpdate && status.isLoaded && status.durationMillis) {
+        const currentTime = status.positionMillis / 1000;
+        const duration = status.durationMillis / 1000;
+        onProgressUpdate(currentTime, duration);
+      }
+    };
+  }, [status, startPosition, onProgressUpdate]);
+
   return (
     <View style={styles.nativeRoot}>
       <Pressable style={styles.fullscreenTouch} onPress={() => setControlsVisible(v => !v)} />
@@ -88,7 +183,13 @@ export default function VideoPlayer({ uri, autoPlay = true, title, onBack }: Vid
         style={[styles.nativeVideo, currentAspect ? { aspectRatio: currentAspect } : null]}
         resizeMode={ResizeMode.COVER}
         shouldPlay={autoPlay}
-        onPlaybackStatusUpdate={setStatus}
+        onPlaybackStatusUpdate={(status) => {
+          setStatus(status);
+          // Check if video ended
+          if (status.isLoaded && status.didJustFinish && onVideoEnd) {
+            onVideoEnd();
+          }
+        }}
       />
       {controlsVisible && (
         <View style={[styles.overlay, { paddingTop: insets.top }]}>

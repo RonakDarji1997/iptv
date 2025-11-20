@@ -16,7 +16,7 @@ export {
 
 export const unstable_settings = {
   // Ensure that reloading on `/modal` keeps a back button present.
-  initialRouteName: '(tabs)',
+  initialRouteName: '(auth)',
 };
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
@@ -48,21 +48,43 @@ export default function RootLayout() {
 
 function RootLayoutNav() {
   const colorScheme = useColorScheme();
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, checkSession } = useAuthStore();
   const segments = useSegments();
   const router = useRouter();
 
+  // Check authentication after navigator is mounted
   useEffect(() => {
-    const inAuthGroup = segments[0] === '(auth)';
+    // Add a small delay to ensure navigator is fully mounted
+    const timeout = setTimeout(() => {
+      const inAuthGroup = segments[0] === '(auth)';
+      const sessionValid = checkSession();
+      const isAuthed = isAuthenticated && sessionValid;
 
-    if (!isAuthenticated && !inAuthGroup) {
-      // Redirect to login if not authenticated
-      router.replace('/login');
-    } else if (isAuthenticated && inAuthGroup) {
-      // Redirect to live tab by default
-      router.replace('/live');
-    }
+      if (!isAuthed && !inAuthGroup) {
+        // Not authenticated - redirect to login
+        router.replace('/login');
+      } else if (isAuthed && inAuthGroup) {
+        // Already authenticated - redirect to app
+        router.replace('/live');
+      }
+    }, 0);
+
+    return () => clearTimeout(timeout);
   }, [isAuthenticated, segments]);
+
+  // Periodic session check every 5 minutes
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      const sessionValid = checkSession();
+      const inAuthGroup = segments[0] === '(auth)';
+      
+      if (!sessionValid && !inAuthGroup) {
+        router.replace('/login');
+      }
+    }, 5 * 60 * 1000); // Check every 5 minutes
+
+    return () => clearInterval(intervalId);
+  }, [segments]);
 
   return (
     <ThemeProvider value={DarkTheme}>
