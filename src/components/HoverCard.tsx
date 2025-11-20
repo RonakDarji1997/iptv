@@ -3,6 +3,7 @@
 import { useState, useRef } from 'react';
 import { Plus, ThumbsUp, ChevronDown } from 'lucide-react';
 import clsx from 'clsx';
+import { useAuthStore } from '@/lib/store';
 
 interface HoverCardProps {
     item: any;
@@ -11,6 +12,7 @@ interface HoverCardProps {
 }
 
 export default function HoverCard({ item, onInfo, contentType = 'itv' }: HoverCardProps) {
+    const { portalUrl } = useAuthStore();
     const [isHovered, setIsHovered] = useState(false);
     const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -27,7 +29,29 @@ export default function HoverCard({ item, onInfo, contentType = 'itv' }: HoverCa
 
     // Construct full logo/poster URL
     const getImageUrl = () => {
-        // Only VOD (movies) and Series have images
+        const baseUrl = portalUrl || 'http://tv.stream4k.cc/stalker_portal/';
+        const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+        
+        // For channels (ITV), check for logo field
+        if (contentType === 'itv') {
+            if (item.logo) {
+                // Logo can be a full URL or relative path
+                if (item.logo.startsWith('http')) {
+                    return item.logo;
+                }
+                // If relative path, construct full URL
+                // Logos are typically at: /stalker_portal/misc/logos/320/{id}.png
+                if (item.logo.startsWith('/')) {
+                    return `${cleanBaseUrl}${item.logo}`;
+                }
+                return `${cleanBaseUrl}/misc/logos/320/${item.logo}`;
+            }
+            // Fallback to placeholder for channels without logo
+            const displayText = `CH ${item.number || item.name}`;
+            return `https://placehold.co/300x450/1f2937/ffffff?text=${encodeURIComponent(displayText)}`;
+        }
+        
+        // For VOD (movies) and Series
         if (contentType === 'vod' || contentType === 'series') {
             // Try screenshot_uri, screenshot, poster, cover_big, etc.
             const imageUrl = item.screenshot_uri || item.screenshot || item.poster || item.cover_big || item.cover;
@@ -36,18 +60,16 @@ export default function HoverCard({ item, onInfo, contentType = 'itv' }: HoverCa
                 if (imageUrl.startsWith('http')) {
                     return imageUrl;
                 }
-                // If it's a relative path starting with /stalker_portal, prepend the portal base URL
-                if (imageUrl.startsWith('/stalker_portal')) {
-                    return `http://tv.stream4k.cc${imageUrl}`;
+                // If it's a relative path, prepend the portal base URL
+                if (imageUrl.startsWith('/')) {
+                    return `${cleanBaseUrl}${imageUrl}`;
                 }
-                // Otherwise return as-is
                 return imageUrl;
             }
         }
         
-        // For channels (ITV), use placeholder with channel name - no images available
-        // Fallback to placeholder for all other cases
-        const displayText = contentType === 'itv' ? `CH ${item.number || item.name}` : item.name || 'Content';
+        // Fallback to placeholder
+        const displayText = item.name || 'Content';
         return `https://placehold.co/300x450/1f2937/ffffff?text=${encodeURIComponent(displayText)}`;
     };
 
