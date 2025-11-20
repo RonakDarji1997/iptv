@@ -7,8 +7,10 @@ npm-debug.log
 # Keep .env.local OUT for security
 .env*.local
 
-# Exclude expo-rn directory from Next.js build
-expo-rn/
+# Exclude expo-rn dependencies and build artifacts
+expo-rn/node_modules
+expo-rn/.expo
+expo-rn/web-dist
 
 # Development files
 .git
