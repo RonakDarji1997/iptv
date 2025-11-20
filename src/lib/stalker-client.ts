@@ -4,6 +4,23 @@ interface StalkerResponse<T> {
     js: T;
 }
 
+export interface EpgProgram {
+    id: string;
+    ch_id: string;
+    time: string;
+    time_to: string;
+    duration: string;
+    name: string;
+    descr: string;
+    real_id: string;
+    category?: string;
+}
+
+export interface ShortEpg {
+    current_program: EpgProgram | null;
+    next_program: EpgProgram | null;
+}
+
 export class StalkerClient {
     private baseUrl: string;
     private mac: string;
@@ -291,5 +308,29 @@ export class StalkerClient {
         
         // Return the streaming URL from cmd field
         return response.cmd;
+    }
+
+    async getEpg(channelId: string, period: number = 7): Promise<EpgProgram[]> {
+        // type=itv&action=get_epg_info&ch_id={channelId}&period={period}
+        // period: days (default 7)
+        // Returns EPG data for the specified channel
+        const response = await this.request<EpgProgram[]>('get_epg_info', { 
+            type: 'itv',
+            ch_id: channelId,
+            period: period.toString()
+        });
+        
+        return response || [];
+    }
+
+    async getShortEpg(channelId: string): Promise<ShortEpg> {
+        // type=itv&action=get_short_epg&ch_id={channelId}
+        // Returns current and next program for the channel
+        const response = await this.request<ShortEpg>('get_short_epg', { 
+            type: 'itv',
+            ch_id: channelId
+        });
+        
+        return response || { current_program: null, next_program: null };
     }
 }

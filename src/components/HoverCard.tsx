@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Plus, ThumbsUp, ChevronDown } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuthStore } from '@/lib/store';
+import { StalkerClient, type ShortEpg } from '@/lib/stalker-client';
 
 interface HoverCardProps {
     item: any;
@@ -12,8 +13,10 @@ interface HoverCardProps {
 }
 
 export default function HoverCard({ item, onInfo, contentType = 'itv' }: HoverCardProps) {
-    const { portalUrl } = useAuthStore();
+    const { portalUrl, macAddress } = useAuthStore();
     const [isHovered, setIsHovered] = useState(false);
+    const [epgData, setEpgData] = useState<ShortEpg | null>(null);
+    const [loadingEpg, setLoadingEpg] = useState(false);
     const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     const handleMouseEnter = () => {
@@ -26,6 +29,29 @@ export default function HoverCard({ item, onInfo, contentType = 'itv' }: HoverCa
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
         setIsHovered(false);
     };
+
+    // Fetch EPG data when hovering over a channel
+    useEffect(() => {
+        if (isHovered && contentType === 'itv' && item.id && portalUrl && macAddress) {
+            setLoadingEpg(true);
+            
+            const fetchEpg = async () => {
+                try {
+                    const client = new StalkerClient({ url: portalUrl, mac: macAddress });
+                    await client.handshake();
+                    const epg = await client.getShortEpg(item.id);
+                    setEpgData(epg);
+                } catch (error) {
+                    console.error('Failed to fetch EPG:', error);
+                    setEpgData(null);
+                } finally {
+                    setLoadingEpg(false);
+                }
+            };
+            
+            fetchEpg();
+        }
+    }, [isHovered, contentType, item.id, portalUrl, macAddress]);
 
     // Construct full logo/poster URL
     const getImageUrl = () => {
@@ -193,9 +219,36 @@ export default function HoverCard({ item, onInfo, contentType = 'itv' }: HoverCa
                                             <span className="border border-purple-500 text-purple-400 px-1 rounded">ARCHIVE</span>
                                         ) : null}
                                     </div>
-                                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-zinc-300">
-                                        {item.cur_playing ? (
-                                            <span className="truncate">{item.cur_playing}</span>
+                                    
+                                    {/* EPG Information */}
+                                    <div className="mt-2 space-y-1 text-xs">
+                                        {loadingEpg ? (
+                                            <span className="text-zinc-500">Loading guide...</span>
+                                        ) : epgData?.current_program ? (
+                                            <>
+                                                <div className="bg-zinc-800/50 p-2 rounded">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-green-500 font-semibold">● LIVE</span>
+                                                        <span className="text-zinc-400">{epgData.current_program.time} - {epgData.current_program.time_to}</span>
+                                                    </div>
+                                                    <p className="text-white font-medium mt-1 line-clamp-1">{epgData.current_program.name}</p>
+                                                    {epgData.current_program.descr && (
+                                                        <p className="text-zinc-400 mt-1 line-clamp-2">{epgData.current_program.descr}</p>
+                                                    )}
+                                                </div>
+                                                
+                                                {epgData.next_program && (
+                                                    <div className="p-2 rounded">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-zinc-500 font-semibold">NEXT</span>
+                                                            <span className="text-zinc-500">{epgData.next_program.time}</span>
+                                                        </div>
+                                                        <p className="text-zinc-300 mt-1 line-clamp-1">{epgData.next_program.name}</p>
+                                                    </div>
+                                                )}
+                                            </>
+                                        ) : item.cur_playing ? (
+                                            <span className="text-zinc-300 truncate">{item.cur_playing}</span>
                                         ) : (
                                             <span className="text-zinc-500">No guide available</span>
                                         )}
