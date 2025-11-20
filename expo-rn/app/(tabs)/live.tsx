@@ -198,7 +198,7 @@ export default function LiveTVScreen() {
             style={styles.picker}
             dropdownIconColor="#fff"
           >
-            {categories.map((category) => (
+            {Array.isArray(categories) && categories.map((category) => (
               <Picker.Item
                 key={category.id}
                 label={category.title || category.name}
