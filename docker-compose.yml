@@ -33,13 +33,12 @@ services:
       - ./expo-rn/.env.local
     environment:
       - EXPO_DEVTOOLS_LISTEN_ADDRESS=0.0.0.0
-      - EXPO_NO_CORS_CHECK=1
     volumes:
       - ./expo-rn:/app
       - /app/node_modules
     networks:
       - iptv-network
-    command: npx expo start --lan --port 3005 --web-only
+    command: npx expo start --lan --port 3005
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3005"]
       interval: 30s
