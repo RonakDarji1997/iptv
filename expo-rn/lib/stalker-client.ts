@@ -45,7 +45,7 @@ export class StalkerClient {
     }
 
     private async request<T>(action: string, params: Record<string, string> = {}): Promise<T> {
-        // Use proxy for web, direct request for native
+        // Web needs proxy to avoid CORS, native apps can use direct
         if (Platform.OS === 'web') {
             return this.requestViaProxy(action, params);
         } else {
@@ -54,9 +54,13 @@ export class StalkerClient {
     }
 
     private async requestViaProxy<T>(action: string, params: Record<string, string> = {}): Promise<T> {
-        // Use internal proxy API route for web (matches Next.js implementation)
+        // Always use Next.js backend on port 3001 for API proxy
         const protocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
-        const host = typeof window !== 'undefined' ? window.location.host : 'localhost:8081';
+        const isLocalhost = typeof window !== 'undefined' && 
+            (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+        
+        // Use Next.js proxy on port 2005 (localhost or production domain)
+        const host = isLocalhost ? 'localhost:2005' : (typeof window !== 'undefined' ? window.location.host.replace(':3005', ':2005') : 'localhost:2005');
         const proxyUrl = new URL('/api/proxy', `${protocol}//${host}`);
         
         // Pass the target portal URL and credentials to the proxy

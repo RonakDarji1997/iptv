@@ -78,11 +78,35 @@ export async function GET(request: NextRequest) {
             }
         }
         
-        return NextResponse.json(data);
+        // Add CORS headers to allow Expo app to access this API
+        return NextResponse.json(data, {
+            headers: {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type',
+            }
+        });
 
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : 'Internal Proxy Error';
         console.error('[Proxy] Error:', error);
-        return NextResponse.json({ error: errorMessage }, { status: 500 });
+        return NextResponse.json({ error: errorMessage }, { 
+            status: 500,
+            headers: {
+                'Access-Control-Allow-Origin': '*',
+            }
+        });
     }
+}
+
+// Handle OPTIONS preflight requests
+export async function OPTIONS() {
+    return new NextResponse(null, {
+        status: 204,
+        headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+        }
+    });
 }
