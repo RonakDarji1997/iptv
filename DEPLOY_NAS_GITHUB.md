@@ -291,6 +291,6 @@ Then copy the hash to your NAS `.env.local` file.
 
 ## Ports Used
 
-- **8081**: Expo Metro bundler (development server)
+- **3005**: Expo Metro bundler (development server)
 - Access from mobile: Install Expo Go app, scan QR code
-- Access from web: `http://nas-ip:8081`
+- Access from web: `http://nas-ip:3005`
