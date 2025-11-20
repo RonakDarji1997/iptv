@@ -1,6 +1,15 @@
 FROM node:20-alpine AS base
 
-# Install dependencies only when needed
+# 1. Build Expo App
+FROM base AS expo-builder
+WORKDIR /app/expo-rn
+COPY expo-rn/package.json expo-rn/package-lock.json ./
+RUN npm ci
+COPY expo-rn/ .
+# The script "export:web" outputs to ../web-dist, which will be /app/web-dist
+RUN npm run export:web
+
+# 2. Install Next.js Dependencies
 FROM base AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
@@ -9,11 +18,15 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci --legacy-peer-deps
 
-# Rebuild the source code only when needed
+# 3. Build Next.js App
 FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+
+# Copy Expo build artifacts to public folder
+# The expo-builder created /app/web-dist
+COPY --from=expo-builder /app/web-dist ./public
 
 # Accept build arguments for Next.js public environment variables
 ARG NEXT_PUBLIC_STALKER_MAC
@@ -32,12 +45,12 @@ ENV NEXT_PUBLIC_APP_PASSWORD_HASH=$NEXT_PUBLIC_APP_PASSWORD_HASH
 # Build the application
 RUN npm run build
 
-# Production image, copy all the files and run next
+# 4. Production image, copy all the files and run next
 FROM base AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV PORT=3001
+ENV PORT=2005
 ENV HOSTNAME="0.0.0.0"
 
 RUN addgroup --system --gid 1001 nodejs
@@ -50,6 +63,6 @@ COPY --from=builder /app/public ./public
 
 USER nextjs
 
-EXPOSE 3001
+EXPOSE 2005
 
 CMD ["node", "server.js"]

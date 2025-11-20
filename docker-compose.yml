@@ -6,16 +6,16 @@ services:
     container_name: iptv-app
     restart: always
     ports:
-      - "2005:3001"
+      - "2005:2005"
     environment:
       - NODE_ENV=production
-      - PORT=3001
+      - PORT=2005
       - HOSTNAME=0.0.0.0
       - NEXT_PUBLIC_STALKER_BEARER=${NEXT_PUBLIC_STALKER_BEARER}
       - NEXT_PUBLIC_STALKER_ADID=${NEXT_PUBLIC_STALKER_ADID}
       - NEXT_PUBLIC_APP_PASSWORD_HASH=${NEXT_PUBLIC_APP_PASSWORD_HASH}
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:2005"]
       interval: 30s
       timeout: 10s
       retries: 3
