@@ -13,4 +13,4 @@ COPY . .
 EXPOSE 3005
 
 # Start Expo
-CMD ["npx", "expo", "start", "--web", "--host", "0.0.0.0", "--port", "3005"]
+CMD ["npx", "expo", "start", "--lan", "--port", "3005"]
