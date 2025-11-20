@@ -2,7 +2,15 @@ version: '3.8'
 
 services:
   iptv:
-    build: .
+    build:
+      context: .
+      args:
+        - EXPO_PUBLIC_STALKER_BEARER=${EXPO_PUBLIC_STALKER_BEARER}
+        - EXPO_PUBLIC_STALKER_ADID=${EXPO_PUBLIC_STALKER_ADID}
+        - EXPO_PUBLIC_APP_PASSWORD_HASH=${EXPO_PUBLIC_APP_PASSWORD_HASH}
+        - NEXT_PUBLIC_STALKER_BEARER=${NEXT_PUBLIC_STALKER_BEARER}
+        - NEXT_PUBLIC_STALKER_ADID=${NEXT_PUBLIC_STALKER_ADID}
+        - NEXT_PUBLIC_APP_PASSWORD_HASH=${NEXT_PUBLIC_APP_PASSWORD_HASH}
     container_name: iptv-app
     restart: unless-stopped
     ports:

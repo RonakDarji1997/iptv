@@ -3,6 +3,17 @@ FROM node:20-alpine AS base
 # 1. Build Expo App
 FROM base AS expo-builder
 WORKDIR /app/expo-rn
+
+# Accept build arguments for Expo public environment variables
+ARG EXPO_PUBLIC_STALKER_BEARER
+ARG EXPO_PUBLIC_STALKER_ADID
+ARG EXPO_PUBLIC_APP_PASSWORD_HASH
+
+# Set as environment variables for the Expo build
+ENV EXPO_PUBLIC_STALKER_BEARER=$EXPO_PUBLIC_STALKER_BEARER
+ENV EXPO_PUBLIC_STALKER_ADID=$EXPO_PUBLIC_STALKER_ADID
+ENV EXPO_PUBLIC_APP_PASSWORD_HASH=$EXPO_PUBLIC_APP_PASSWORD_HASH
+
 COPY expo-rn/package.json expo-rn/package-lock.json ./
 RUN npm ci
 COPY expo-rn/ .
