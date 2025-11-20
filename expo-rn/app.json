@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "IPTV Player",
-    "slug": "iptv-player",
+    "name": "Ronika's IPTV",
+    "slug": "ronikas-iptv",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
-    "scheme": "iptv",
+    "scheme": "ronikasiptv",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
@@ -15,7 +15,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.iptv.player",
+      "bundleIdentifier": "com.ronikas.iptv",
       "infoPlist": {
         "UIBackgroundModes": ["audio"],
         "NSAppTransportSecurity": {
@@ -28,7 +28,7 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#09090b"
       },
-      "package": "com.iptv.player",
+      "package": "com.ronikas.iptv",
       "permissions": [
         "INTERNET",
         "READ_EXTERNAL_STORAGE",
@@ -40,7 +40,7 @@
       "banner": "./assets/images/tv-banner.png"
     },
     "tvos": {
-      "bundleIdentifier": "com.iptv.player.tv"
+      "bundleIdentifier": "com.ronikas.iptv.tv"
     },
     "web": {
       "bundler": "metro",
