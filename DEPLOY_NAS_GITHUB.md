@@ -91,8 +91,8 @@ docker logs iptv-app
 
 ### 3️⃣ Access Your App
 
-- **Mobile**: Install Expo Go app, scan QR code from `http://nas-ip:8081`
-- **Web**: Open browser at `http://nas-ip:8081`
+- **Mobile**: Install Expo Go app, scan QR code from `http://nas-ip:3005`
+- **Web**: Open browser at `http://nas-ip:3005`
 
 ---
 
@@ -178,7 +178,7 @@ sudo git pull origin main
 
 ## Troubleshooting
 
-### Port 8081 already in use
+### Port 3005 already in use
 ```bash
 # Find what's using the port
 docker ps
@@ -186,7 +186,7 @@ docker ps
 docker stop container_name
 
 # Or kill the process
-sudo lsof -ti:8081 | xargs kill -9
+sudo lsof -ti:3005 | xargs kill -9
 ```
 
 ### Container not starting
@@ -205,8 +205,8 @@ docker compose up -d
 
 ### Can't access from mobile device
 - Make sure mobile device is on same network as NAS
-- Check NAS firewall allows port 8081
-- Try accessing from NAS browser first: `http://localhost:8081`
+- Check NAS firewall allows port 3005
+- Try accessing from NAS browser first: `http://localhost:3005`
 - Verify container is running: `docker ps`
 
 ### Git pull conflicts
@@ -253,7 +253,7 @@ sudo git stash pop && \
 docker compose down && \
 docker compose build && \
 docker compose up -d && \
-echo "✅ Update complete! App running on port 8081"
+echo "✅ Update complete! App running on port 3005"
 ```
 
 Make executable and run:
@@ -270,7 +270,7 @@ chmod +x update.sh
 2. Verify environment variables in `expo-rn/.env.local`
 3. Ensure Docker is running: `docker ps`
 4. Test Stalker portal connection from NAS
-5. Check NAS firewall settings for port 8081
+5. Check NAS firewall settings for port 3005
 6. Make sure mobile device is on same network
 
 ---
