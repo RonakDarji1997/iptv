@@ -1,4 +1,9 @@
-# Deploy IPTV App to NAS via GitHub
+# Deploy Ronika's IPTV (Expo RN) to NAS via GitHub + Docker
+
+## Your Setup
+- **App**: Expo React Native (mobile app)
+- **Deployment**: Docker on Synology NAS
+- **Source**: GitHub repository
 
 ## Quick Deployment Steps
 
@@ -8,55 +13,39 @@
 
 ```bash
 # SSH into your NAS
-ssh admin@your-nas-ip
+ssh ronak-admin@your-nas-ip
 
-# Navigate to your apps directory (adjust path for your NAS)
-cd /volume1/docker  # Synology
-# OR
-cd /share/Container  # QNAP
-# OR
-cd /mnt/user/appdata  # Unraid
+# Navigate to docker directory
+cd /volume1/docker
 
 # Clone your GitHub repository
-git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git iptv-app
-cd iptv-app
+git clone https://github.com/RonakDarji1997/iptv.git
+cd iptv
 
-# Install Node.js if not already installed
-# For Synology: Install via Package Center
-# For QNAP: Install via App Center
-# For others: curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs
-
-# Create environment file
+# Create environment file for Expo app
+cd expo-rn
 nano .env.local
 ```
 
-**Add to .env.local:**
+**Add to expo-rn/.env.local:**
 ```env
-NEXT_PUBLIC_STALKER_BEARER=your_bearer_token_here
-NEXT_PUBLIC_STALKER_ADID=your_adid_here
-NEXT_PUBLIC_APP_PASSWORD_HASH=your_bcrypt_hash_here
+EXPO_PUBLIC_STALKER_BEARER=your_bearer_token_here
+EXPO_PUBLIC_STALKER_ADID=your_adid_here
+EXPO_PUBLIC_STALKER_MAC=your_mac_address
+EXPO_PUBLIC_STALKER_URL=your_portal_url
+EXPO_PUBLIC_APP_PASSWORD_HASH=your_bcrypt_hash_here
 ```
 
-**Build and start:**
+**Start with Docker:**
 ```bash
-# Install dependencies
-npm install
+# Go back to root directory
+cd /volume1/docker/iptv
 
-# Build the app
-npm run build
+# Start the Expo app with Docker
+docker compose up -d
 
-# Install PM2 for process management
-npm install -g pm2
-
-# Start the app
-pm2 start npm --name "iptv" -- start
-
-# Save PM2 configuration
-pm2 save
-
-# Set PM2 to start on boot
-pm2 startup
-# Follow the command it outputs
+# Check if running
+docker ps
 ```
 
 ### 2️⃣ Deploying Updates (Every Time)
@@ -64,9 +53,14 @@ pm2 startup
 #### On Your Local Machine:
 
 ```bash
-# Make your changes, then:
+# Make your changes in expo-rn folder
+cd expo-rn
+# Test locally first with: npx expo start
+
+# Push to GitHub
+cd ..
 git add .
-git commit -m "Your update message"
+git commit -m "Update app"
 git push origin main
 ```
 
@@ -74,52 +68,77 @@ git push origin main
 
 ```bash
 # SSH into NAS
-ssh admin@your-nas-ip
-cd /volume1/docker/iptv-app
+ssh ronak-admin@your-nas-ip
+cd /volume1/docker/iptv
 
-# Pull latest changes
-git pull origin main
+# Stash any local changes (like .env.local)
+sudo git stash
 
-# Rebuild
-npm install
-npm run build
+# Pull latest changes from GitHub
+sudo git pull origin main
 
-# Restart the app
-pm2 restart iptv
+# Reapply local changes if needed
+sudo git stash pop
+
+# Rebuild and restart Docker container
+docker compose down
+docker compose build
+docker compose up -d
+
+# Check logs
+docker logs iptv-app
 ```
 
 ### 3️⃣ Access Your App
 
-Open browser: **`http://your-nas-ip:3001`**
+- **Mobile**: Install Expo Go app, scan QR code from `http://nas-ip:8081`
+- **Web**: Open browser at `http://nas-ip:8081`
 
 ---
 
-## Alternative: Docker Deployment
-
-If you prefer Docker on your NAS:
-
-### Initial Setup:
+## Docker Commands Reference
 
 ```bash
-# Clone repo (same as above)
-git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git iptv-app
-cd iptv-app
+# View running containers
+docker ps
 
-# Create .env.local with your credentials
-nano .env.local
+# View logs
+docker logs iptv-app
+docker logs -f iptv-app  # Follow logs
 
-# Build and run with Docker
-docker compose up -d
+# Restart container
+docker compose restart
+
+# Stop container
+docker compose down
+
+# Rebuild after code changes
+docker compose build --no-cache
+
+# Start fresh
+docker compose down && docker compose build && docker compose up -d
 ```
 
-### Updates:
+---
+
+## Handling Git Conflicts
+
+If you get "Your local changes would be overwritten" error:
 
 ```bash
-cd /volume1/docker/iptv-app
-git pull origin main
-docker compose down
-docker compose build
-docker compose up -d
+# Option 1: Stash local changes (recommended)
+sudo git stash
+sudo git pull origin main
+sudo git stash pop  # Reapply your .env.local
+
+# Option 2: Force overwrite with GitHub version
+sudo git reset --hard origin/main
+# Then recreate your .env.local file
+
+# Option 3: Commit local changes first
+sudo git add .
+sudo git commit -m "Local NAS changes"
+sudo git pull origin main
 ```
 
 ---
@@ -157,71 +176,56 @@ docker compose up -d
 
 ---
 
-## Common Commands
-
-```bash
-# Check if app is running
-pm2 status
-
-# View logs
-pm2 logs iptv
-
-# Restart app
-pm2 restart iptv
-
-# Stop app
-pm2 stop iptv
-
-# View app info
-pm2 show iptv
-
-# Monitor resources
-pm2 monit
-```
-
----
-
 ## Troubleshooting
 
-### Port 3001 already in use
+### Port 8081 already in use
 ```bash
 # Find what's using the port
-lsof -ti:3001
-# Kill the process
-kill -9 $(lsof -ti:3001)
-# Restart your app
-pm2 restart iptv
+docker ps
+# Stop conflicting container
+docker stop container_name
+
+# Or kill the process
+sudo lsof -ti:8081 | xargs kill -9
 ```
 
-### App not starting
+### Container not starting
 ```bash
-# Check logs
-pm2 logs iptv --lines 50
+# Check logs for errors
+docker logs iptv-app
 
-# Check Node version (needs v18+)
-node --version
+# Check if image built correctly
+docker images | grep iptv
 
-# Rebuild
-npm install
-npm run build
-pm2 restart iptv
+# Rebuild from scratch
+docker compose down
+docker compose build --no-cache
+docker compose up -d
 ```
 
-### Can't access from browser
-- Check firewall on NAS
-- Verify port 3001 is open
-- Try: `http://localhost:3001` from NAS browser first
-- Check if app is running: `pm2 status`
+### Can't access from mobile device
+- Make sure mobile device is on same network as NAS
+- Check NAS firewall allows port 8081
+- Try accessing from NAS browser first: `http://localhost:8081`
+- Verify container is running: `docker ps`
 
-### Git pull errors
+### Git pull conflicts
 ```bash
-# Stash local changes
-git stash
+# Your Dockerfile was modified locally
+sudo git stash
+sudo git pull origin main
+sudo git stash pop
+```
 
-# Pull updates
-git pull origin main
+### Environment variables not working
+```bash
+# Check if .env.local exists in expo-rn folder
+ls -la /volume1/docker/iptv/expo-rn/.env.local
 
-# Reapply your .env.local if needed
+# Rebuild to pick up new env vars
+docker compose down
+docker compose build --no-cache
+docker compose up -d
 ```
 
 ---
@@ -242,12 +246,14 @@ Create `update.sh` on your NAS:
 
 ```bash
 #!/bin/bash
-cd /volume1/docker/iptv-app && \
-git pull origin main && \
-npm install && \
-npm run build && \
-pm2 restart iptv && \
-echo "✅ Update complete!"
+cd /volume1/docker/iptv && \
+sudo git stash && \
+sudo git pull origin main && \
+sudo git stash pop && \
+docker compose down && \
+docker compose build && \
+docker compose up -d && \
+echo "✅ Update complete! App running on port 8081"
 ```
 
 Make executable and run:
@@ -260,17 +266,31 @@ chmod +x update.sh
 
 ## Need Help?
 
-1. Check PM2 logs: `pm2 logs iptv`
-2. Verify environment variables are set in `.env.local`
-3. Ensure Node.js version is 18 or higher: `node --version`
+1. Check Docker logs: `docker logs iptv-app -f`
+2. Verify environment variables in `expo-rn/.env.local`
+3. Ensure Docker is running: `docker ps`
 4. Test Stalker portal connection from NAS
-5. Check NAS firewall settings
+5. Check NAS firewall settings for port 8081
+6. Make sure mobile device is on same network
 
 ---
 
-**Default Login Password**: The password you set in `NEXT_PUBLIC_APP_PASSWORD_HASH`
+## App Configuration
 
-To generate a new hash, run on your local machine:
+**Login Password**: The password you set in `EXPO_PUBLIC_APP_PASSWORD_HASH`
+
+To generate a new password hash, run on your local machine:
 ```bash
-node scripts/hash-password.js
+cd expo-rn
+node ../scripts/hash-password.js
 ```
+
+Then copy the hash to your NAS `.env.local` file.
+
+---
+
+## Ports Used
+
+- **8081**: Expo Metro bundler (development server)
+- Access from mobile: Install Expo Go app, scan QR code
+- Access from web: `http://nas-ip:8081`
