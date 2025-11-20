@@ -14,10 +14,10 @@ const nextConfig: NextConfig = {
         source: '/api/:path*',
         destination: '/api/:path*',
       },
-      // All other routes proxy to Expo on port 3005
+      // All other routes proxy to Expo container (use service name in Docker)
       {
         source: '/:path*',
-        destination: 'http://localhost:3005/:path*',
+        destination: 'http://expo:3005/:path*',
       },
     ];
   },
