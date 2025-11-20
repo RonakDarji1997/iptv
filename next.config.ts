@@ -14,6 +14,15 @@ const nextConfig: NextConfig = {
         source: '/api/:path*',
         destination: '/api/:path*',
       },
+      // Expo Metro bundler assets and bundles
+      {
+        source: '/assets',
+        destination: 'http://expo:3005/assets',
+      },
+      {
+        source: '/node_modules/:path*',
+        destination: 'http://expo:3005/node_modules/:path*',
+      },
       // All other routes proxy to Expo container (use service name in Docker)
       {
         source: '/:path*',
