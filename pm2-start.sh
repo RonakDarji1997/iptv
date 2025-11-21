@@ -9,7 +9,7 @@ echo "📦 Installing Backend dependencies..."
 # Ensure we have the latest code and discard local changes
 sudo git reset --hard
 sudo git pull
-sudo npm install
+sudo npm install --legacy-peer-deps
 
 # 2. Build Backend (Next.js)
 echo "🏗️  Building Backend..."
@@ -17,7 +17,7 @@ sudo npm run build
 
 # 3. Install dependencies for Expo App
 echo "📦 Installing Expo App dependencies..."
-cd expo-rn && sudo npm install && cd ..
+cd expo-rn && sudo npm install --legacy-peer-deps && cd ..
 
 # 4. Manage PM2 Processes
 echo "Pm2 Management..."
