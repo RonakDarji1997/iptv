@@ -6,6 +6,8 @@ echo "🚀 Starting IPTV Server Setup..."
 
 # 1. Install dependencies for Backend
 echo "📦 Installing Backend dependencies..."
+# Ensure we have the latest code
+git pull
 npm install
 
 # 2. Build Backend (Next.js)
