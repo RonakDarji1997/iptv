@@ -15,6 +15,7 @@ import { StalkerClient } from '@/lib/stalker-client';
 import { Picker } from '@react-native-picker/picker';
 import { WatchHistoryManager, WatchHistoryItem } from '@/lib/watch-history';
 import { useCallback } from 'react';
+import { DebugLogger } from '@/lib/debug-logger';
 
 export default function SeriesDetailScreen() {
   const router = useRouter();
@@ -64,6 +65,7 @@ export default function SeriesDetailScreen() {
   };
 
   useEffect(() => {
+    DebugLogger.seriesOpened(params.id, params.title || 'Unknown');
     loadSeasons();
   }, []);
 
@@ -90,9 +92,11 @@ export default function SeriesDetailScreen() {
     try {
       setLoading(true);
       setError('');
+      DebugLogger.seasonsLoading(params.id);
       const client = new StalkerClient({ url: portalUrl, mac: macAddress });
 
       const seasonsData = await client.getSeriesSeasons(params.id);
+      DebugLogger.seasonsLoaded(seasonsData);
       
       // Filter out ADULT and CELEBRITY seasons
       const filteredSeasons = seasonsData.filter((season: any) => {
@@ -104,10 +108,17 @@ export default function SeriesDetailScreen() {
 
       // Select first season by default
       if (filteredSeasons.length > 0) {
-        setSelectedSeason(filteredSeasons[0].id);
+        const firstSeason = filteredSeasons[0];
+        DebugLogger.seasonSelected(
+          firstSeason.id,
+          firstSeason.name || firstSeason.series_name || 'Unknown',
+          firstSeason.season_number || 'N/A'
+        );
+        setSelectedSeason(firstSeason.id);
       }
     } catch (err) {
       console.error('Load seasons error:', err);
+      DebugLogger.seasonsError(err);
       setError(err instanceof Error ? err.message : 'Failed to load seasons');
     } finally {
       setLoading(false);
@@ -120,10 +131,12 @@ export default function SeriesDetailScreen() {
     try {
       setLoadingEpisodes(true);
       setError('');
+      DebugLogger.episodesLoading(params.id, selectedSeason);
       const client = new StalkerClient({ url: portalUrl, mac: macAddress });
 
       // Fetch all episodes (method now handles pagination internally)
       const result = await client.getSeriesEpisodes(params.id, selectedSeason);
+      DebugLogger.apiResponse('getSeriesEpisodes', result);
       
       // Sort episodes by episode number in ascending order
       const sortedEpisodes = result.data.sort((a: any, b: any) => {
@@ -133,8 +146,10 @@ export default function SeriesDetailScreen() {
       });
       
       setEpisodes(sortedEpisodes);
+      DebugLogger.episodesLoaded(sortedEpisodes, selectedSeason);
     } catch (err) {
       console.error('Load episodes error:', err);
+      DebugLogger.episodesError(err);
       setError(err instanceof Error ? err.message : 'Failed to load episodes');
     } finally {
       setLoadingEpisodes(false);
@@ -148,54 +163,26 @@ export default function SeriesDetailScreen() {
       // Check if we have existing progress for this episode
       const progress = episodeProgress.get(episode.id);
       
-      // If we have progress and a stored cmd, use it directly
-      if (progress && progress.cmd) {
-        router.push({
-          pathname: '/watch/[id]',
-          params: {
-            id: params.id,
-            cmd: progress.cmd,
-            type: 'series',
-            title: `${params.title} - ${episode.name}`,
-            screenshot: params.screenshot || '',
-            seasonId: selectedSeason,
-            seasonNumber: seasons.find(s => s.id === selectedSeason)?.season_number || '',
-            episodeId: episode.id,
-            episodeNumber: episode.series_number || '',
-            resumeFrom: progress.currentTime.toString(),
-          },
-        });
-        return;
-      }
+      DebugLogger.episodeClicked(episode, selectedSeason);
 
-      // Otherwise, fetch file info as usual
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
-      const fileInfo = await client.getSeriesFileInfo(params.id, selectedSeason, episode.id);
-      console.log('Episode file info:', fileInfo);
+      const navigationParams = {
+        id: params.id,
+        type: 'series' as const,
+        title: `${params.title} - ${episode.name}`,
+        screenshot: params.screenshot || '',
+        seasonId: selectedSeason,
+        seasonNumber: seasons.find(s => s.id === selectedSeason)?.season_number || '',
+        episodeId: episode.id,
+        episodeNumber: episode.series_number || '',
+        resumeFrom: progress?.currentTime.toString(),
+      };
 
-      if (!fileInfo || !fileInfo.id) {
-        alert('No file information found for this episode');
-        return;
-      }
+      DebugLogger.navigatingToWatch(navigationParams);
 
-      // Use the file id to construct the cmd path for create_link
-      const cmd = `/media/file_${fileInfo.id}.mpg`;
-      console.log('Using cmd for create_link:', cmd);
-
-      // Navigate to watch screen
+      // Navigate to watch screen - DO NOT pass cmd, let watch screen construct it
       router.push({
         pathname: '/watch/[id]',
-        params: {
-          id: params.id,
-          cmd: cmd,
-          type: 'series',
-          title: `${params.title} - ${episode.name}`,
-          screenshot: params.screenshot || '',
-          seasonId: selectedSeason,
-          seasonNumber: seasons.find(s => s.id === selectedSeason)?.season_number || '',
-          episodeId: episode.id,
-          episodeNumber: episode.series_number || '',
-        },
+        params: navigationParams,
       });
     } catch (err) {
       console.error('Episode play error:', err);

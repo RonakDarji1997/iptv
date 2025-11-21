@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { Platform } from 'react-native';
 import { StalkerCredentials, StalkerSession, StalkerError } from './stalker-api';
+import { DebugLogger } from './debug-logger';
 
 interface StalkerResponse<T> {
     js: T;
@@ -82,8 +83,11 @@ export class StalkerClient {
         });
 
         try {
+            DebugLogger.proxyCall(proxyUrl.toString(), { action, ...params });
             const response = await axios.get(proxyUrl.toString(), { timeout: 10000 });
             const data = response.data;
+            
+            DebugLogger.proxyResponse(proxyUrl.toString(), response.status, data);
             
             if (data && data.js) {
                 return data.js as T;
@@ -93,8 +97,10 @@ export class StalkerClient {
         } catch (error) {
             if (axios.isAxiosError(error)) {
                 console.error('[StalkerClient] Proxy error:', error.message);
+                DebugLogger.proxyError(proxyUrl.toString(), error);
                 throw new StalkerError(`Request failed: ${error.message}`);
             }
+            DebugLogger.proxyError(proxyUrl.toString(), error);
             throw error;
         }
     }
@@ -358,7 +364,7 @@ export class StalkerClient {
         return response.data && response.data.length > 0 ? response.data[0] : null;
     }
 
-    async getStreamUrl(cmd: string, type: string = 'itv'): Promise<string> {
+    async getStreamUrl(cmd: string, type: string = 'itv', episodeNumber?: string): Promise<string> {
         if (cmd && cmd.startsWith('http') && !cmd.includes('localhost')) {
             return cmd;
         }
@@ -369,7 +375,9 @@ export class StalkerClient {
             force_ch_link_check: '0'
         };
         
-        if (type === 'series') {
+        if (type === 'series' && episodeNumber) {
+            params.series = episodeNumber;
+        } else if (type === 'series') {
             params.series = '1';
         }
         

@@ -72,8 +72,8 @@ export function SeriesModal({ series, isOpen, onClose, onEpisodeSelect }: Series
                 // Construct the file path with file_ prefix
                 const filePath = `/media/file_${fileInfo.id}.mpg`;
                 
-                // Get stream URL with series=1 parameter
-                const url = await client.getStreamUrl(filePath, 'series');
+                // Get stream URL with series=episode_number parameter
+                const url = await client.getStreamUrl(filePath, 'series', episode.series_number);
                 
                 const title = `${series.name} - ${selectedSeason.name || 'Season ' + selectedSeason.id} - ${episode.name}`;
                 

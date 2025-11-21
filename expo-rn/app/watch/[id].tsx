@@ -6,6 +6,7 @@ import { useAuthStore } from '@/lib/store';
 import { StalkerClient } from '@/lib/stalker-client';
 import VideoPlayer from '@/components/VideoPlayer';
 import { WatchHistoryManager } from '@/lib/watch-history';
+import { DebugLogger } from '@/lib/debug-logger';
 
 export default function WatchScreen() {
   const router = useRouter();
@@ -33,18 +34,38 @@ export default function WatchScreen() {
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
+    console.log('[WATCH DEBUG] Route params received:', {
+      id: params.id,
+      episodeId: params.episodeId,
+      seasonId: params.seasonId,
+      episodeNumber: params.episodeNumber,
+      type: params.type,
+    });
+    
+    DebugLogger.watchScreenOpened({
+      id: params.id,
+      episodeId: params.episodeId,
+      type: params.type,
+      seasonId: params.seasonId,
+      episodeNumber: params.episodeNumber,
+      title: params.title,
+      resumeFrom: params.resumeFrom,
+    });
+    
     loadStream();
     if (params.type === 'series' && params.seasonId && params.episodeNumber) {
       loadNextEpisode();
     }
-  }, [params.id]);
+  }, [params.id, params.episodeId]);
 
   const loadNextEpisode = async () => {
     if (!portalUrl || !macAddress || !params.seasonId || !params.episodeNumber) return;
 
     try {
+      DebugLogger.loadingNextEpisode(params.id, params.seasonId, params.episodeNumber);
       const client = new StalkerClient({ url: portalUrl, mac: macAddress });
       const result = await client.getSeriesEpisodes(params.id, params.seasonId);
+      DebugLogger.apiResponse('getSeriesEpisodes (for next/prev)', result);
       
       // Sort episodes ascending
       const sortedEpisodes = result.data.sort((a: any, b: any) => {
@@ -59,12 +80,16 @@ export default function WatchScreen() {
       
       // Get next episode
       if (currentIndex !== -1 && currentIndex < sortedEpisodes.length - 1) {
-        setNextEpisode(sortedEpisodes[currentIndex + 1]);
+        const nextEp = sortedEpisodes[currentIndex + 1];
+        setNextEpisode(nextEp);
+        DebugLogger.nextEpisodeFound(nextEp);
       }
       
       // Get previous episode
       if (currentIndex > 0) {
-        setPrevEpisode(sortedEpisodes[currentIndex - 1]);
+        const prevEp = sortedEpisodes[currentIndex - 1];
+        setPrevEpisode(prevEp);
+        DebugLogger.prevEpisodeFound(prevEp);
       }
     } catch (err) {
       console.error('Error loading next episode:', err);
@@ -81,28 +106,54 @@ export default function WatchScreen() {
     try {
       setLoading(true);
       setError('');
+      DebugLogger.loadingStream(params.type || 'itv', params.episodeId);
 
       const client = new StalkerClient({ url: portalUrl, mac: macAddress });
       const contentType = params.type || 'itv';
 
+      console.log('[WATCH DEBUG] Content type:', contentType);
+      console.log('[WATCH DEBUG] Checking conditions:', {
+        isSeries: contentType === 'series',
+        hasEpisodeId: !!params.episodeId,
+        hasSeasonId: !!params.seasonId,
+        episodeId: params.episodeId,
+        seasonId: params.seasonId
+      });
+
       if (contentType === 'vod' || contentType === 'series') {
         let cmd: string;
 
-        // If cmd is already provided (from params), use it directly
-        if (params.cmd) {
-          cmd = params.cmd;
-        } else if (contentType === 'series' && params.seasonId && params.episodeId) {
-          // For series: need to call getSeriesFileInfo
+        if (contentType === 'series' && params.episodeId && params.seasonId) {
+          console.log('[WATCH DEBUG] ✅ Entering SERIES branch - will call getSeriesFileInfo');
+          
+          // For series: get file info using seriesId, seasonId, and episodeId
+          console.log('[WATCH DEBUG] Fetching file info for:', {
+            seriesId: params.id,
+            seasonId: params.seasonId,
+            episodeId: params.episodeId
+          });
+          
+          DebugLogger.log('Fetching series file info', {
+            seriesId: params.id,
+            seasonId: params.seasonId,
+            episodeId: params.episodeId
+          });
+          
           const fileInfo = await client.getSeriesFileInfo(params.id, params.seasonId, params.episodeId);
           
+          console.log('[WATCH DEBUG] File info received:', fileInfo);
+          
           if (!fileInfo || !fileInfo.id) {
-            setError('No file information found for this episode');
+            setError('No file information found for episode');
             setLoading(false);
             return;
           }
-
+          
           cmd = `/media/file_${fileInfo.id}.mpg`;
-        } else {
+          console.log('[WATCH DEBUG] Constructed cmd:', cmd);
+          DebugLogger.constructingCmd(fileInfo.id, cmd);
+        } else if (contentType === 'vod' && params.id) {
+          console.log('[WATCH DEBUG] ⚠️ Entering VOD branch (not series)');
           // For movies: get file info using movie_id
           const fileInfo = await client.getMovieInfo(params.id);
           
@@ -113,15 +164,28 @@ export default function WatchScreen() {
           }
 
           cmd = `/media/file_${fileInfo.id}.mpg`;
+        } else {
+          console.log('[WATCH DEBUG] ❌ No matching branch - missing parameters');
+          console.log('[WATCH DEBUG] Missing params check:', {
+            contentType,
+            hasId: !!params.id,
+            hasEpisodeId: !!params.episodeId,
+            hasSeasonId: !!params.seasonId
+          });
+          setError('Missing required parameters');
+          setLoading(false);
+          return;
         }
 
         // Store cmd for watch history
         setCurrentCmd(cmd);
 
         // Create link and get stream URL
-        // Use 'series' type for series episodes to set series=1 parameter
+        // Use 'series' type for series episodes to set series=episode_number parameter
         const streamType = contentType === 'series' ? 'series' : 'vod';
-        const url = await client.getStreamUrl(cmd, streamType);
+        DebugLogger.callingCreateLink(cmd, streamType);
+        const url = await client.getStreamUrl(cmd, streamType, params.episodeNumber);
+        DebugLogger.streamUrlReceived(url);
         setStreamUrl(url);
       } else if (contentType === 'itv') {
         // For live channels, use cmd directly
@@ -130,6 +194,7 @@ export default function WatchScreen() {
       }
     } catch (err) {
       console.error('Stream loading error:', err);
+      DebugLogger.streamError(err);
       setError(err instanceof Error ? err.message : 'Failed to load stream');
     } finally {
       setLoading(false);
@@ -191,22 +256,13 @@ export default function WatchScreen() {
     if (!nextEpisode || !portalUrl || !macAddress) return;
 
     try {
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
-      const fileInfo = await client.getSeriesFileInfo(params.id, params.seasonId!, nextEpisode.id);
-      
-      if (!fileInfo || !fileInfo.id) {
-        alert('Could not load next episode');
-        return;
-      }
-
-      const cmd = `/media/file_${fileInfo.id}.mpg`;
+      DebugLogger.navigatingToNextEpisode(nextEpisode.id, nextEpisode.series_number);
       
       // Navigate to next episode
       router.replace({
         pathname: '/watch/[id]',
         params: {
           id: params.id,
-          cmd: cmd,
           type: 'series',
           title: `${params.title?.split(' - ')[0]} - ${nextEpisode.name}`,
           screenshot: params.screenshot || '',
@@ -225,22 +281,13 @@ export default function WatchScreen() {
     if (!prevEpisode || !portalUrl || !macAddress) return;
 
     try {
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
-      const fileInfo = await client.getSeriesFileInfo(params.id, params.seasonId!, prevEpisode.id);
-      
-      if (!fileInfo || !fileInfo.id) {
-        alert('Could not load previous episode');
-        return;
-      }
-
-      const cmd = `/media/file_${fileInfo.id}.mpg`;
+      DebugLogger.navigatingToPrevEpisode(prevEpisode.id, prevEpisode.series_number);
       
       // Navigate to previous episode
       router.replace({
         pathname: '/watch/[id]',
         params: {
           id: params.id,
-          cmd: cmd,
           type: 'series',
           title: `${params.title?.split(' - ')[0]} - ${prevEpisode.name}`,
           screenshot: params.screenshot || '',

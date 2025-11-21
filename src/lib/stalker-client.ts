@@ -278,14 +278,14 @@ export class StalkerClient {
         return response.data && response.data.length > 0 ? response.data[0] : null;
     }
 
-    async getStreamUrl(cmd: string, type: string = 'itv'): Promise<string> {
+    async getStreamUrl(cmd: string, type: string = 'itv', episodeNumber?: string): Promise<string> {
         // If cmd is already a URL, return it (common in some playlists)
         if (cmd && cmd.startsWith('http') && !cmd.includes('localhost')) {
             return cmd;
         }
 
         // Otherwise ask portal to create a link
-        // type=vod&action=create_link&cmd=...&series={0|1}&force_ch_link_check=0
+        // type=vod&action=create_link&cmd=...&series={episode_number}&force_ch_link_check=0
         // Response: { js: { cmd: "http://...", ... } }
         
         const params: Record<string, string> = {
@@ -294,8 +294,10 @@ export class StalkerClient {
             force_ch_link_check: '0'
         };
         
-        // Add series=1 parameter for series content
-        if (type === 'series') {
+        // Add series=episode_number parameter for series content
+        if (type === 'series' && episodeNumber) {
+            params.series = episodeNumber;
+        } else if (type === 'series') {
             params.series = '1';
         }
         

@@ -63,19 +63,20 @@ export async function GET(request: NextRequest) {
         }
 
         const contentType = response.headers.get('content-type');
+        const text = await response.text();
         let data;
         
-        if (contentType?.includes('application/json')) {
-            data = await response.json();
-        } else {
-            const text = await response.text();
-            console.warn('[Proxy] Response is not JSON, attempting to parse:', contentType);
-            try {
-                data = JSON.parse(text);
-            } catch {
-                console.error('[Proxy] Failed to parse response as JSON');
-                return NextResponse.json({ error: 'Invalid JSON response from portal' }, { status: 502 });
-            }
+        // Log first 500 chars of response for debugging
+        console.log('[Proxy] Response preview:', text.substring(0, 500));
+        console.log('[Proxy] Content-Type:', contentType);
+        
+        try {
+            data = JSON.parse(text);
+        } catch (parseError) {
+            console.error('[Proxy] Failed to parse response as JSON');
+            console.error('[Proxy] Parse error:', parseError);
+            console.error('[Proxy] Full response:', text);
+            return NextResponse.json({ error: 'Invalid JSON response from portal' }, { status: 502 });
         }
         
         // Add CORS headers to allow Expo app to access this API
