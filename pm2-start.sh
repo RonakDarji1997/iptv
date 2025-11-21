@@ -6,7 +6,8 @@ echo "🚀 Starting IPTV Server Setup..."
 
 # 1. Install dependencies for Backend
 echo "📦 Installing Backend dependencies..."
-# Ensure we have the latest code
+# Ensure we have the latest code and discard local changes
+git reset --hard
 git pull
 npm install
 
