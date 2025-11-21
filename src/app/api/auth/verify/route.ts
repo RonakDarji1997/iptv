@@ -9,7 +9,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Password is required' }, { status: 400 });
     }
 
-    const passwordHash = process.env.NEXT_PUBLIC_APP_PASSWORD_HASH;
+    // Try both standard env var and NEXT_PUBLIC_ prefixed var
+    const passwordHash = process.env.APP_PASSWORD_HASH || process.env.NEXT_PUBLIC_APP_PASSWORD_HASH;
     
     if (!passwordHash) {
       console.error('Password hash not configured in environment variables');

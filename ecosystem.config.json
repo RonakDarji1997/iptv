@@ -1,13 +1,27 @@
 {
   "apps": [
     {
-      "name": "iptv",
+      "name": "iptv-backend",
       "script": "npm",
       "args": "start",
       "cwd": "./",
+      "env_file": ".env.local",
       "env": {
         "NODE_ENV": "production",
-        "PORT": "2005"
+        "PORT": "2005",
+        "APP_PASSWORD_HASH": "$2b$10$ozspMK4uf1yfngxeyspPrujny4IRQVn2UMil0KAhnAdVla1g1aQCS",
+        "NEXT_PUBLIC_APP_PASSWORD_HASH": "$2b$10$ozspMK4uf1yfngxeyspPrujny4IRQVn2UMil0KAhnAdVla1g1aQCS"
+      }
+    },
+    {
+      "name": "iptv-expo",
+      "script": "npx",
+      "args": "expo start --lan --port 3005",
+      "cwd": "./expo-rn",
+      "env": {
+        "NODE_ENV": "development",
+        "PORT": "3005",
+        "CI": "1"
       }
     }
   ]
