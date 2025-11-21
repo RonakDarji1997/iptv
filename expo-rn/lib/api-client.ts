@@ -18,8 +18,15 @@ const getApiBaseUrl = () => {
       return 'http://localhost:2005';
     }
     
-    // Production web - same domain
-    return typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.host}` : 'http://localhost:2005';
+    // Production web - same domain but port 2005
+    if (typeof window !== 'undefined') {
+      const protocol = window.location.protocol;
+      const hostname = window.location.hostname;
+      const url = `${protocol}//${hostname}:2005`;
+      console.log('🔧 API Client URL:', url);
+      return url;
+    }
+    return 'http://localhost:2005';
   }
   
   // For native apps, point to local development server
