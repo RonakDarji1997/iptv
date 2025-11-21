@@ -3,8 +3,9 @@ import { Platform } from 'react-native';
 
 // Backend API base URL - configurable via environment variable
 const getApiBaseUrl = () => {
-  // Use environment variable if provided
+  // Use environment variable if provided (check at runtime)
   if (process.env.EXPO_PUBLIC_API_URL) {
+    console.log('🔧 Using EXPO_PUBLIC_API_URL:', process.env.EXPO_PUBLIC_API_URL);
     return process.env.EXPO_PUBLIC_API_URL;
   }
   
@@ -15,6 +16,7 @@ const getApiBaseUrl = () => {
       (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
     
     if (isLocalhost) {
+      console.log('🔧 Using localhost:2005');
       return 'http://localhost:2005';
     }
     
@@ -23,7 +25,7 @@ const getApiBaseUrl = () => {
       const protocol = window.location.protocol;
       const hostname = window.location.hostname;
       const url = `${protocol}//${hostname}:2005`;
-      console.log('🔧 API Client URL:', url);
+      console.log('🔧 Constructed API URL from window:', url);
       return url;
     }
     return 'http://localhost:2005';
@@ -32,8 +34,6 @@ const getApiBaseUrl = () => {
   // For native apps, point to local development server
   return 'http://localhost:2005';
 };
-
-const API_BASE_URL = getApiBaseUrl();
 
 export interface ApiCredentials {
   mac: string;
@@ -49,8 +49,9 @@ export class ApiClient {
 
   private async post<T>(endpoint: string, data: any = {}): Promise<T> {
     try {
+      const apiUrl = getApiBaseUrl();
       const response = await axios.post(
-        `${API_BASE_URL}${endpoint}`,
+        `${apiUrl}${endpoint}`,
         { ...this.credentials, ...data },
         { timeout: 15000 }
       );
@@ -136,8 +137,11 @@ export class ApiClient {
 // Helper function for password verification (no credentials needed)
 export async function verifyPassword(password: string): Promise<boolean> {
   try {
+    // Get the URL dynamically each time
+    const apiUrl = getApiBaseUrl();
+    console.log('🔐 Verifying password with API URL:', apiUrl);
     const response = await axios.post(
-      `${API_BASE_URL}/api/auth/verify`,
+      `${apiUrl}/api/auth/verify`,
       { password },
       { timeout: 5000 }
     );
