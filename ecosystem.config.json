@@ -21,7 +21,8 @@
       "env": {
         "NODE_ENV": "development",
         "PORT": "3005",
-        "CI": "1"
+        "CI": "1",
+        "EXPO_PUBLIC_API_URL": "http://SERVER_IP:2005"
       }
     }
   ]

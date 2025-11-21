@@ -22,20 +22,23 @@ cd expo-rn && sudo npm install --legacy-peer-deps && cd ..
 
 # 4. Configure API URL for production
 echo "⚙️  Configuring API URL..."
-# Get the local IP address (for NAS, this will be the NAS IP)
-LOCAL_IP=$(hostname -I | awk '{print $1}' 2>/dev/null || ifconfig | grep "inet " | grep -v 127.0.0.1 | awk '{print $2}' | head -n 1)
-if [ -z "$LOCAL_IP" ]; then
-  LOCAL_IP="localhost"
+# Get the server IP - try multiple methods
+SERVER_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+if [ -z "$SERVER_IP" ] || [ "$SERVER_IP" = "127.0.0.1" ]; then
+  SERVER_IP=$(ip addr show 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | cut -d/ -f1 | head -n 1)
 fi
-echo "Detected IP: $LOCAL_IP"
-# Update .env file with the API URL
-cd expo-rn
-if grep -q "^EXPO_PUBLIC_API_URL=" .env; then
-  sed -i "s|^EXPO_PUBLIC_API_URL=.*|EXPO_PUBLIC_API_URL=http://${LOCAL_IP}:2005|" .env
-else
-  echo "EXPO_PUBLIC_API_URL=http://${LOCAL_IP}:2005" >> .env
+if [ -z "$SERVER_IP" ] || [ "$SERVER_IP" = "127.0.0.1" ]; then
+  SERVER_IP=$(ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -n 1)
 fi
-cd ..
+if [ -z "$SERVER_IP" ] || [ "$SERVER_IP" = "127.0.0.1" ]; then
+  echo "❌ Could not auto-detect server IP!"
+  echo "Please enter your server IP address (e.g., 100.68.86.22):"
+  read SERVER_IP
+fi
+echo "Using Server IP: $SERVER_IP"
+
+# Update ecosystem.config.json with the server IP
+sed -i.bak "s|http://SERVER_IP:2005|http://${SERVER_IP}:2005|g" ecosystem.config.json
 
 # 5. Manage PM2 Processes
 echo "Pm2 Management..."
