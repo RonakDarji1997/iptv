@@ -7,17 +7,17 @@ echo "🚀 Starting IPTV Server Setup..."
 # 1. Install dependencies for Backend
 echo "📦 Installing Backend dependencies..."
 # Ensure we have the latest code and discard local changes
-git reset --hard
-git pull
-npm install
+sudo git reset --hard
+sudo git pull
+sudo npm install
 
 # 2. Build Backend (Next.js)
 echo "🏗️  Building Backend..."
-npm run build
+sudo npm run build
 
 # 3. Install dependencies for Expo App
 echo "📦 Installing Expo App dependencies..."
-cd expo-rn && npm install && cd ..
+cd expo-rn && sudo npm install && cd ..
 
 # 4. Manage PM2 Processes
 echo "Pm2 Management..."
