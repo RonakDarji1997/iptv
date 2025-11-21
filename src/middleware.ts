@@ -7,6 +7,7 @@ export function middleware(request: NextRequest) {
 
   // Handle CORS preflight for API routes
   if (request.method === 'OPTIONS' && pathname.startsWith('/api')) {
+    console.log('🚦 Middleware: Handling OPTIONS for', pathname);
     return new NextResponse(null, {
       status: 204,
       headers: {
@@ -20,6 +21,7 @@ export function middleware(request: NextRequest) {
 
   // Allow API routes to pass through with CORS headers
   if (pathname.startsWith('/api')) {
+    console.log('🚦 Middleware: Passing API request', pathname);
     const response = NextResponse.next();
     response.headers.set('Access-Control-Allow-Origin', '*');
     response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
