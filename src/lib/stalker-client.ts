@@ -32,27 +32,88 @@ export class StalkerClient {
     }
 
     private async request<T>(action: string, params: Record<string, string> = {}): Promise<T> {
-        // Use the internal proxy to bypass CORS
-        // Construct proxy URL relative to current location
-        const protocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
-        const host = typeof window !== 'undefined' ? window.location.host : 'localhost:3000';
-        const baseUrl = `${protocol}//${host}`;
-        const proxyUrl = new URL('/api/proxy', baseUrl);
+        const isServer = typeof window === 'undefined';
+
+        if (isServer) {
+            // Server-side: Call Stalker portal directly with proper headers
+            return this.requestDirect<T>(action, params);
+        } else {
+            // Client-side: Use proxy to avoid CORS
+            return this.requestViaProxy<T>(action, params);
+        }
+    }
+
+    private async requestDirect<T>(action: string, params: Record<string, string> = {}): Promise<T> {
+        // Direct server-side request to Stalker portal
+        const forwardParams = new URLSearchParams();
         
-        // Pass the target portal URL and credentials to the proxy
+        // Stalker params
+        if (!params.type) {
+            forwardParams.append('type', 'stb');
+        }
+        forwardParams.append('action', action);
+        
+        // Append other params
+        Object.entries(params).forEach(([key, value]) => {
+            forwardParams.append(key, value);
+        });
+
+        // Build final URL
+        let finalUrl = this.baseUrl;
+        if (!finalUrl.endsWith('/')) {
+            finalUrl += '/';
+        }
+        finalUrl = `${finalUrl}server/load.php?${forwardParams.toString()}`;
+
+        // Get credentials from environment
+        const bearer = process.env.NEXT_PUBLIC_STALKER_BEARER || '';
+        const adid = process.env.NEXT_PUBLIC_STALKER_ADID || '';
+
+        const headers: HeadersInit = {
+            'User-Agent': 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
+            'X-User-Agent': 'Model: MAG270; Link: WiFi',
+            'Referer': this.baseUrl + 'c/',
+            'Authorization': `Bearer ${bearer}`,
+            'Cookie': `mac=${this.mac.toLowerCase()}; timezone=America/Toronto; adid=${adid};${this.token ? ` st=${this.token};` : ''}`,
+        };
+
+        try {
+            const response = await fetch(finalUrl, { method: 'GET', headers });
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error(`[StalkerClient] Direct request failed: ${response.status} ${response.statusText}`);
+                throw new Error(`Portal request failed: ${response.status}`);
+            }
+
+            const data = await response.json();
+            
+            if (data && data.js) {
+                return data.js as T;
+            }
+            
+            return data as T;
+        } catch (error) {
+            console.error('[StalkerClient] Direct request error:', error);
+            throw error;
+        }
+    }
+
+    private async requestViaProxy<T>(action: string, params: Record<string, string> = {}): Promise<T> {
+        // Client-side: use proxy
+        const proxyUrl = new URL('/api/proxy', window.location.origin);
+        
         proxyUrl.searchParams.append('url', this.baseUrl);
         proxyUrl.searchParams.append('mac', this.mac);
         if (this.token) {
             proxyUrl.searchParams.append('token', this.token);
         }
 
-        // Stalker params - only add type=stb if params don't already have a type
         if (!params.type) {
             proxyUrl.searchParams.append('type', 'stb');
         }
         proxyUrl.searchParams.append('action', action);
         
-        // Append other params
         Object.entries(params).forEach(([key, value]) => {
             proxyUrl.searchParams.append(key, value);
         });
@@ -68,16 +129,13 @@ export class StalkerClient {
 
             const data = await response.json();
             
-            // Stalker API returns { js: { data?: [...] } } or { js: [...] } or { js: { ... } }
             if (data && data.js) {
-                const jsContent = data.js;
-                // Handle both array responses and object responses
-                return jsContent as T;
+                return data.js as T;
             }
             
             return data as T;
         } catch (error) {
-            console.error('[StalkerClient] Error:', error);
+            console.error('[StalkerClient] Proxy request error:', error);
             throw error;
         }
     }
@@ -136,7 +194,11 @@ export class StalkerClient {
     async getSeriesCategories(): Promise<any[]> {
         // Get all VOD categories and filter for series-related ones
         const allCategories = await this.getMovieCategories();
-        const seriesKeywords = ['SERIES', 'SERIALS','WEB_SERIES', 'TV_SERIALS'];
+        const seriesKeywords = [
+            'SERIES', 'SERIALS', 'WEB_SERIES', 'TV_SERIALS', 
+            'ANIME', 'DOCUMENTARY', 'DRAMA', 'SHOWS',
+            'KOREAN', 'DUBB', 'CELEBRITY', 'EVENTS'
+        ];
         
         return allCategories.filter((cat: any) => {
             const combinedText = `${cat.title} ${cat.alias}`.toUpperCase();

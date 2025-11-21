@@ -12,7 +12,7 @@ import {
 import { useState, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
-import { StalkerClient } from '@/lib/stalker-client';
+import { ApiClient } from '@/lib/api-client';
 import ContentCard from '@/components/ContentCard';
 import { Picker } from '@react-native-picker/picker';
 
@@ -85,9 +85,9 @@ export default function MoviesScreen() {
 
     try {
       setError('');
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
+      const client = new ApiClient({ url: portalUrl, mac: macAddress });
 
-      const cats = await client.getMovieCategories();
+      const { categories: cats } = await client.getMovieCategories();
       // Skip first 'All' category and show rest
       const filteredCats = cats.slice(1);
       setCategories(filteredCats);
@@ -110,9 +110,9 @@ export default function MoviesScreen() {
     try {
       setError('');
 
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
+      const client = new ApiClient({ url: portalUrl, mac: macAddress });
 
-      const result = await client.getMovies(selectedCategory, page);
+      const { items: result } = await client.getMovies(selectedCategory, page);
       
       // Filter out series - only show actual movies
       // Some items have is_series: "1" or is_series: 1, those should appear in Series tab only

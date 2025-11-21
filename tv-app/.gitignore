@@ -1,0 +1,40 @@
+# React Native
+node_modules/
+.expo/
+dist/
+web-build/
+
+# BUCK
+buck-out/
+\.buckd/
+*.keystore
+!debug.keystore
+
+# Android
+android/app/debug.keystore
+android/app/upload.keystore
+android/gradle/
+android/captures/
+android/local.properties
+android/.gradle
+android/build
+android/app/build
+
+# iOS
+ios/*.mode1v3
+ios/*.mode2v3
+ios/*.movetotrash
+ios/*.pbxuser
+ios/*.perspectivev3
+ios/*.xcworkspace
+!ios/default.xcworkspace
+ios/build/
+ios/Pods/
+ios/.xcode.env.local
+
+# CocoaPods
+.CocoaPods/
+
+# System
+.DS_Store
+Thumbs.db

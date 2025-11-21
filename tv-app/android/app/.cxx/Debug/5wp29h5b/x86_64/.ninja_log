@@ -1,0 +1,25 @@
+# ninja log v5
+0	5	0	clean	183696c365fe303
+1099	1150	1763740813562326146	/Users/ronika/Desktop/iptv/tv-app/android/app/build/intermediates/cxx/Debug/5wp29h5b/obj/x86_64/libappmodules.so	e51e0be720cbf20c
+0	1099	1763740813507628727	CMakeFiles/appmodules.dir/OnLoad.cpp.o	33c78d37cd2c5856
+0	1008	1763740813417520267	CMakeFiles/appmodules.dir/Users/ronika/Desktop/iptv/tv-app/android/app/build/generated/autolinking/src/main/jni/autolinking.cpp.o	b80d2a8a623a3658
+1	953	1763740813362424513	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/ComponentDescriptors.cpp.o	1d3e798cb848e1ee
+1	967	1763740813375192668	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/rnasyncstorage-generated.cpp.o	79585c2be5be61c1
+1	904	1763740813313893107	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/ShadowNodes.cpp.o	2e8b61461ea0ee4b
+1	8	0	/Users/ronika/Desktop/iptv/tv-app/android/app/.cxx/Debug/5wp29h5b/x86_64/CMakeFiles/cmake.verify_globs	9db500fd9aa838e9
+1	716	1763740813126148210	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/EventEmitters.cpp.o	393382647283011e
+1	887	1763740813293750102	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/rnasyncstorageJSI-generated.cpp.o	78db2ea63240641a
+1	960	1763740813369396029	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/Props.cpp.o	a9631c5872614925
+1	656	1763740813065659402	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/States.cpp.o	e4a5899067c13495
+0	8	0	/Users/ronika/Desktop/iptv/tv-app/android/app/.cxx/Debug/5wp29h5b/x86_64/CMakeFiles/cmake.verify_globs	9db500fd9aa838e9
+5	647	1763740950286550631	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/States.cpp.o	e4a5899067c13495
+5	691	1763740950330629401	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/EventEmitters.cpp.o	393382647283011e
+5	896	1763740950533869459	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/ShadowNodes.cpp.o	2e8b61461ea0ee4b
+5	897	1763740950534315043	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/rnasyncstorageJSI-generated.cpp.o	78db2ea63240641a
+5	939	1763740950578202937	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/ComponentDescriptors.cpp.o	1d3e798cb848e1ee
+5	943	1763740950580706401	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/Props.cpp.o	a9631c5872614925
+5	956	1763740950593543682	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/rnasyncstorage-generated.cpp.o	79585c2be5be61c1
+4	990	1763740950628953598	CMakeFiles/appmodules.dir/Users/ronika/Desktop/iptv/tv-app/android/app/build/generated/autolinking/src/main/jni/autolinking.cpp.o	b80d2a8a623a3658
+5	1084	1763740950722644359	CMakeFiles/appmodules.dir/OnLoad.cpp.o	33c78d37cd2c5856
+1084	1137	1763740950777536779	/Users/ronika/Desktop/iptv/tv-app/android/app/build/intermediates/cxx/Debug/5wp29h5b/obj/x86_64/libappmodules.so	e51e0be720cbf20c
+0	8	0	/Users/ronika/Desktop/iptv/tv-app/android/app/.cxx/Debug/5wp29h5b/x86_64/CMakeFiles/cmake.verify_globs	9db500fd9aa838e9

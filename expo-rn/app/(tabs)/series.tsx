@@ -12,7 +12,7 @@ import {
 import { useState, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
-import { StalkerClient } from '@/lib/stalker-client';
+import { ApiClient } from '@/lib/api-client';
 import ContentCard from '@/components/ContentCard';
 import { Picker } from '@react-native-picker/picker';
 
@@ -85,9 +85,9 @@ export default function SeriesScreen() {
 
     try {
       setError('');
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
+      const client = new ApiClient({ url: portalUrl, mac: macAddress });
 
-      const cats = await client.getSeriesCategories();
+      const { categories: cats } = await client.getSeriesCategories();
       setCategories(cats);
       
       // Set first category as default
@@ -108,9 +108,9 @@ export default function SeriesScreen() {
     try {
       setError('');
 
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
+      const client = new ApiClient({ url: portalUrl, mac: macAddress });
 
-      const result = await client.getSeries(selectedCategory, page);
+      const { items: result } = await client.getSeries(selectedCategory, page);
       
       // Filter to only show series - items with is_series: "1" or is_series: 1
       let actualSeries = result.data.filter((item: any) => {

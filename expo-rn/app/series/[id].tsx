@@ -11,7 +11,7 @@ import {
 import { useState, useEffect } from 'react';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
-import { StalkerClient } from '@/lib/stalker-client';
+import { ApiClient } from '@/lib/api-client';
 import { Picker } from '@react-native-picker/picker';
 import { WatchHistoryManager, WatchHistoryItem } from '@/lib/watch-history';
 import { useCallback } from 'react';
@@ -93,9 +93,9 @@ export default function SeriesDetailScreen() {
       setLoading(true);
       setError('');
       DebugLogger.seasonsLoading(params.id);
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
+      const client = new ApiClient({ url: portalUrl, mac: macAddress });
 
-      const seasonsData = await client.getSeriesSeasons(params.id);
+      const { seasons: seasonsData } = await client.getSeriesSeasons(params.id);
       DebugLogger.seasonsLoaded(seasonsData);
       
       // Filter out ADULT and CELEBRITY seasons
@@ -132,7 +132,7 @@ export default function SeriesDetailScreen() {
       setLoadingEpisodes(true);
       setError('');
       DebugLogger.episodesLoading(params.id, selectedSeason);
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
+      const client = new ApiClient({ url: portalUrl, mac: macAddress });
 
       // Fetch all episodes (method now handles pagination internally)
       const result = await client.getSeriesEpisodes(params.id, selectedSeason);

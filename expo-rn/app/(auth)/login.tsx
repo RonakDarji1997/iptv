@@ -12,7 +12,7 @@ import {
 import { useState } from 'react';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
-import { verifyPassword } from '@/lib/auth';
+import { verifyPassword } from '@/lib/api-client';
 
 export default function LoginScreen() {
   const router = useRouter();

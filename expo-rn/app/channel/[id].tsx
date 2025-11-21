@@ -2,7 +2,7 @@ import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Platf
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import { useAuthStore } from '@/lib/store';
-import { StalkerClient, EpgProgram } from '@/lib/stalker-client';
+import { ApiClient, EpgProgram } from '@/lib/api-client';
 import VideoPlayer from '@/components/VideoPlayer';
 import { MaterialIcons } from '@expo/vector-icons';
 
@@ -32,7 +32,7 @@ export default function ChannelDetailScreen() {
       setLoading(true);
       setError('');
 
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
+      const client = new ApiClient({ url: portalUrl, mac: macAddress });
 
       // Load stream URL
       let cmd = params.cmd;
@@ -42,12 +42,12 @@ export default function ChannelDetailScreen() {
         return;
       }
 
-      const url = await client.getStreamUrl(cmd, params.type || 'itv');
+      const { url } = await client.getStreamUrl(cmd, params.type || 'itv');
       setStreamUrl(url);
 
       // Load EPG data
       try {
-        const epgData = await client.getEpg(params.id);
+        const { epg: epgData } = await client.getEpg(params.id);
         setEpg(epgData);
       } catch (epgError) {
         console.error('EPG load error:', epgError);

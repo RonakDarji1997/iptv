@@ -48,4 +48,7 @@ next-env.d.ts
 
 # Deployment files
 iptv-deploy-*
-*.tar.gz
+
+# Ignored asset node_modules
+public/assets/node_modules/
+web-dist/assets/node_modules/

@@ -3,7 +3,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import { useAuthStore } from '@/lib/store';
-import { StalkerClient } from '@/lib/stalker-client';
+import { ApiClient } from '@/lib/api-client';
 import VideoPlayer from '@/components/VideoPlayer';
 import { WatchHistoryManager } from '@/lib/watch-history';
 import { DebugLogger } from '@/lib/debug-logger';
@@ -63,7 +63,7 @@ export default function WatchScreen() {
 
     try {
       DebugLogger.loadingNextEpisode(params.id, params.seasonId, params.episodeNumber);
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
+      const client = new ApiClient({ url: portalUrl, mac: macAddress });
       const result = await client.getSeriesEpisodes(params.id, params.seasonId);
       DebugLogger.apiResponse('getSeriesEpisodes (for next/prev)', result);
       
@@ -108,7 +108,7 @@ export default function WatchScreen() {
       setError('');
       DebugLogger.loadingStream(params.type || 'itv', params.episodeId);
 
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
+      const client = new ApiClient({ url: portalUrl, mac: macAddress });
       const contentType = params.type || 'itv';
 
       console.log('[WATCH DEBUG] Content type:', contentType);
@@ -184,12 +184,12 @@ export default function WatchScreen() {
         // Use 'series' type for series episodes to set series=episode_number parameter
         const streamType = contentType === 'series' ? 'series' : 'vod';
         DebugLogger.callingCreateLink(cmd, streamType);
-        const url = await client.getStreamUrl(cmd, streamType, params.episodeNumber);
+        const { url } = await client.getStreamUrl(cmd, streamType, params.episodeNumber);
         DebugLogger.streamUrlReceived(url);
         setStreamUrl(url);
       } else if (contentType === 'itv') {
         // For live channels, use cmd directly
-        const url = await client.getStreamUrl(params.cmd || '', contentType);
+        const { url } = await client.getStreamUrl(params.cmd || '', contentType);
         setStreamUrl(url);
       }
     } catch (err) {

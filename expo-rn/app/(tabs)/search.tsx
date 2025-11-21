@@ -11,7 +11,7 @@ import {
 import { useState } from 'react';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
-import { StalkerClient } from '@/lib/stalker-client';
+import { ApiClient } from '@/lib/api-client';
 import ContentCard from '@/components/ContentCard';
 
 export default function SearchScreen() {
@@ -65,7 +65,7 @@ export default function SearchScreen() {
     setError('');
     
     try {
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
+      const client = new ApiClient({ url: portalUrl, mac: macAddress });
       const { data } = await client.searchContent(searchQuery, 1);
       
       setSearchResults(data);

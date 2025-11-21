@@ -12,7 +12,7 @@ import {
 import { useState, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
-import { StalkerClient } from '@/lib/stalker-client';
+import { ApiClient } from '@/lib/api-client';
 import ContentCard from '@/components/ContentCard';
 import { Picker } from '@react-native-picker/picker';
 
@@ -86,14 +86,14 @@ export default function LiveTVScreen() {
 
     try {
       setError('');
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
+      const client = new ApiClient({ url: portalUrl, mac: macAddress });
 
-      const cats = await client.getCategories();
-      setCategories(cats);
+      const { genres } = await client.getGenres();
+      setCategories(genres);
       
       // Set first category as default
-      if (cats.length > 0 && !selectedCategory) {
-        setSelectedCategory(cats[0].id);
+      if (genres.length > 0 && !selectedCategory) {
+        setSelectedCategory(genres[0].id);
       }
     } catch (err) {
       console.error('Load categories error:', err);
@@ -109,9 +109,9 @@ export default function LiveTVScreen() {
     try {
       setError('');
 
-      const client = new StalkerClient({ url: portalUrl, mac: macAddress });
+      const client = new ApiClient({ url: portalUrl, mac: macAddress });
 
-      const result = await client.getChannels(selectedCategory, page);
+      const { channels: result } = await client.getChannels(selectedCategory, page);
       
       if (page === 1) {
         setChannels(result.data);
