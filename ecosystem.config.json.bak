@@ -3,11 +3,11 @@
     {
       "name": "iptv-backend",
       "script": "npm",
-      "args": "run dev",
+      "args": "start",
       "cwd": "./",
       "env_file": ".env.local",
       "env": {
-        "NODE_ENV": "development",
+        "NODE_ENV": "production",
         "PORT": "2005",
         "APP_PASSWORD_HASH": "$2b$10$ozspMK4uf1yfngxeyspPrujny4IRQVn2UMil0KAhnAdVla1g1aQCS",
         "NEXT_PUBLIC_APP_PASSWORD_HASH": "$2b$10$ozspMK4uf1yfngxeyspPrujny4IRQVn2UMil0KAhnAdVla1g1aQCS"
@@ -22,7 +22,7 @@
         "NODE_ENV": "development",
         "PORT": "3005",
         "CI": "1",
-        "EXPO_PUBLIC_API_URL": "http://192.168.2.69:2005"
+        "EXPO_PUBLIC_API_URL": "http://SERVER_IP:2005"
       }
     }
   ]

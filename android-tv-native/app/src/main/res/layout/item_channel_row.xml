@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp"
+    android:layout_marginTop="2dp"
+    android:layout_marginBottom="2dp"
+    android:gravity="center_vertical"
+    android:focusable="true"
+    android:clickable="true"
+    android:background="@android:color/transparent">
+
+    <ImageView
+        android:id="@+id/play_indicator"
+        android:layout_width="18dp"
+        android:layout_height="18dp"
+        android:src="@drawable/ic_play"
+        android:layout_marginEnd="10dp"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/channel_number"
+        android:layout_width="50dp"
+        android:layout_height="wrap_content"
+        android:text="1"
+        android:textColor="#b0bec5"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:gravity="center" />
+
+    <ImageView
+        android:id="@+id/channel_logo"
+        android:layout_width="50dp"
+        android:layout_height="32dp"
+        android:scaleType="centerInside"
+        android:layout_marginStart="10dp"
+        android:src="@android:drawable/ic_menu_gallery" />
+
+    <TextView
+        android:id="@+id/channel_name"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:text="Channel Name"
+        android:textColor="#ffffff"
+        android:textSize="14sp"
+        android:layout_marginStart="12dp"
+        android:maxLines="1"
+        android:ellipsize="end" />
+
+</LinearLayout>
