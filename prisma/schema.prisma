@@ -1,0 +1,346 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User accounts
+model User {
+  id           String    @id @default(uuid())
+  username     String    @unique
+  email        String    @unique
+  passwordHash String
+  role         UserRole  @default(USER)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  
+  providers Provider[]
+  profiles  Profile[]
+  devices   Device[]
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+// IPTV Providers (Stalker, Xtream, M3U)
+model Provider {
+  id         String       @id @default(uuid())
+  userId     String
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type       ProviderType
+  name       String
+  url        String
+  
+  // Stalker-specific fields
+  stalkerMac     String?
+  stalkerBearer  String?  // Encrypted
+  stalkerToken   String?  // From handshake, encrypted
+  stalkerAdid    String?
+  stalkerStbId   String?
+  
+  // Xtream-specific fields
+  xtreamUsername String?  // Encrypted
+  xtreamPassword String?  // Encrypted
+  
+  // M3U-specific
+  m3uUrl    String?
+  
+  isActive  Boolean   @default(true)
+  lastSync  DateTime?
+  firstFullSyncCompleted Boolean @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  
+  devices    Device[]
+  profiles   Profile[]
+  syncJobs   SyncJob[]
+  snapshots  Snapshot[]
+  channels   Channel[]
+  movies     Movie[]
+  series     Series[]
+  categories Category[]
+  
+  @@index([userId])
+}
+
+// Devices (TV apps) - each device has a MAC and token
+model Device {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  providerId String
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  
+  deviceName String
+  mac        String
+  token      String?  // Encrypted
+  stbId      String?
+  lastActive DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  
+  @@index([userId])
+  @@index([providerId])
+}
+
+// Profiles (Admin, Kid, Guest) with parental controls
+model Profile {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  providerId String?
+  provider   Provider? @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  
+  name       String
+  avatar     String?      // Profile avatar (emoji or color)
+  type       ProfileType
+  pin        String?      // Encrypted, for profile lock
+  ageRating  Int?         // Max age rating allowed
+  isActive   Boolean      @default(false) // Currently active profile
+  
+  // Category/Channel filtering - stored as JSON arrays of IDs
+  // If null/empty, all content is allowed
+  allowedCategories String?  @db.Text // JSON array of allowed category IDs
+  blockedCategories String?  @db.Text // JSON array of blocked category IDs
+  allowedChannels   String?  @db.Text // JSON array of allowed channel IDs  
+  blockedChannels   String?  @db.Text // JSON array of blocked channel IDs
+  
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  
+  snapshots Snapshot[]
+  
+  @@index([userId])
+  @@index([providerId])
+}
+
+// Snapshot - pre-built filtered content per profile or raw provider data
+model Snapshot {
+  id         String   @id @default(uuid())
+  profileId  String?
+  profile    Profile?  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  providerId String
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  
+  type       String?  // 'profile', 'channels', 'categories', 'genres'
+  version    Int?
+  data       String   @db.Text  // JSON/MsgPack compressed snapshot or raw JSON
+  createdAt  DateTime @default(now())
+  
+  @@index([profileId])
+  @@index([providerId, type])
+}
+
+// Categories (Movies, Series, Channels)
+model Category {
+  id         String   @id @default(uuid())
+  providerId String
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  
+  externalId String   // Provider's category ID
+  name       String
+  type       CategoryType
+  parentId   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  
+  channels Channel[]
+  movies   Movie[]
+  series   Series[]
+  
+  @@unique([providerId, externalId])
+  @@index([providerId])
+}
+
+// Channels (Live TV)
+model Channel {
+  id          String   @id @default(uuid())
+  providerId  String
+  provider    Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  
+  externalId  String
+  name        String
+  number      Int?
+  logo        String?
+  cmd         String?  // Stream command
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@unique([providerId, externalId])
+  @@index([providerId])
+  @@index([categoryId])
+}
+
+// Movies (VOD)
+model Movie {
+  id              String    @id @default(uuid())
+  providerId      String
+  provider        Provider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  categoryId      String?
+  category        Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  
+  externalId      String    // Stalker's movie ID
+  name            String
+  originalName    String?   // o_name
+  description     String?   @db.Text
+  poster          String?   // screenshot_uri
+  year            String?
+  director        String?
+  actors          String?   @db.Text
+  country         String?
+  ratingImdb      Float?
+  ratingKinopoisk Float?
+  kinopoiskId     String?
+  genreId         String?   // Main genre
+  genres          String?   // genres_str combined
+  duration        Int?      // minutes
+  addedAt         DateTime?
+  lastPlayed      DateTime?
+  isHd            Boolean   @default(false)
+  highQuality     Boolean   @default(false)
+  censored        Boolean   @default(false)
+  cmd             String?   // Playback command
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  @@unique([providerId, externalId])
+  @@index([providerId])
+  @@index([categoryId])
+  @@index([name])
+}
+
+// Series (TV Shows)
+model Series {
+  id              String    @id @default(uuid())
+  providerId      String
+  provider        Provider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  categoryId      String?
+  category        Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  
+  externalId      String    // Stalker's series ID
+  name            String
+  originalName    String?   // o_name
+  description     String?   @db.Text
+  poster          String?   // screenshot_uri
+  year            String?
+  yearEnd         String?
+  director        String?
+  actors          String?   @db.Text
+  country         String?
+  ratingImdb      Float?
+  ratingKinopoisk Float?
+  kinopoiskId     String?
+  genreId         String?
+  genres          String?   // genres_str
+  episodeCount    Int       @default(0) // has_files
+  addedAt         DateTime?
+  lastPlayed      DateTime?
+  isHd            Boolean   @default(false)
+  highQuality     Boolean   @default(false)
+  censored        Boolean   @default(false)
+  cmd             String?   // Playback command
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  seasons         Season[]
+  
+  @@unique([providerId, externalId])
+  @@index([providerId])
+  @@index([categoryId])
+  @@index([name])
+}
+
+// Seasons
+model Season {
+  id          String   @id @default(uuid())
+  seriesId    String
+  series      Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  
+  externalId  String
+  seasonNumber Int
+  name        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  episodes   Episode[]
+  
+  @@unique([seriesId, externalId])
+  @@index([seriesId])
+}
+
+// Sync Jobs (for progress tracking)
+model SyncJob {
+  id              String    @id @default(uuid())
+  providerId      String
+  provider        Provider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  
+  status          String    // 'pending', 'processing', 'completed', 'failed'
+  totalItems      Int       @default(0)
+  processedItems  Int       @default(0)
+  moviesCount     Int       @default(0)
+  seriesCount     Int       @default(0)
+  channelsCount   Int       @default(0)
+  
+  error           String?   @db.Text
+  
+  startedAt       DateTime  @default(now())
+  completedAt     DateTime?
+  
+  @@index([providerId])
+  @@index([status])
+}
+
+// Episodes (lazy loaded)
+model Episode {
+  id            String   @id @default(uuid())
+  seasonId      String
+  season        Season   @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  
+  externalId    String
+  episodeNumber Int
+  name          String?
+  description   String?  @db.Text
+  duration      Int?     // minutes
+  thumbnail     String?
+  cmd           String?  // Stream command
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@unique([seasonId, externalId])
+  @@index([seasonId])
+}
+
+// Enums
+enum ProviderType {
+  STALKER
+  XTREAM
+  M3U
+}
+
+enum ProfileType {
+  ADMIN
+  KID
+  GUEST
+}
+
+enum CategoryType {
+  CHANNEL
+  MOVIE
+  SERIES
+}

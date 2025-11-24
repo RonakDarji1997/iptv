@@ -5,79 +5,88 @@ import {
   ActivityIndicator,
   RefreshControl,
   Pressable,
-  FlatList,
-  Platform,
-  useWindowDimensions,
+  ScrollView,
 } from 'react-native';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
-import { ApiClient } from '@/lib/api-client';
-import ContentCard from '@/components/ContentCard';
-import { Picker } from '@react-native-picker/picker';
+import { useSnapshotStore } from '@/lib/snapshot-store';
+import CategoryRow from '@/components/CategoryRow';
+
+interface Series {
+  id: string;
+  name: string;
+  poster: string | null;
+  year: string | null;
+  yearEnd: string | null;
+  ratingImdb: number | null;
+  genres: string | null;
+  episodeCount: number | null;
+  categoryId: string | null;
+}
+
+interface Category {
+  id: string;
+  name: string;
+  type: string;
+}
 
 export default function SeriesScreen() {
   const router = useRouter();
-  const { portalUrl, macAddress } = useAuthStore();
-  const { width: screenWidth } = useWindowDimensions();
+  const { user, selectedProfile } = useAuthStore();
+  const { snapshot: cachedSnapshot, setSnapshot } = useSnapshotStore();
 
-  // Calculate card size based on screen width - series use vertical poster layout
-  const getNumColumns = () => {
-    if (screenWidth < 480) return 2; // Small phones
-    if (screenWidth < 768) return 3; // Phones
-    if (screenWidth < 1024) return 4; // Tablets
-    if (screenWidth < 1440) return 5; // Small desktops
-    if (screenWidth < 1920) return 6; // Medium desktops
-    return 7; // Large screens
-  };
-  
-  const numColumns = getNumColumns();
-  const gap = 16;
-  const totalPadding = 32; // 16px padding on each side
-  const totalGaps = (numColumns - 1) * gap; // gaps between cards
-  const availableWidth = screenWidth - totalPadding - totalGaps;
-  const cardWidth = Math.floor(availableWidth / numColumns);
-  const cardHeight = Math.floor(cardWidth * 1.5); // 2:3 aspect ratio for series posters
-
-  const [categories, setCategories] = useState<any[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<string>('');
-  const [series, setSeries] = useState<any[]>([]);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [providerId, setProviderId] = useState<string | null>(null);
+  const [series, setSeries] = useState<Series[]>([]);
+  const [categorizedSeries, setCategorizedSeries] = useState<{ [key: string]: Series[] }>({});
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    loadCategories();
-  }, []);
+    // Dashboard already fetched and cached snapshot, just use it
+    if (cachedSnapshot && cachedSnapshot.series) {
+      console.log('[Series] Using cached snapshot from dashboard');
+      loadFromCache();
+    } else {
+      console.log('[Series] No cache yet, waiting for dashboard to load...');
+      // Dashboard will load it, but fetch as fallback
+      loadSnapshot();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cachedSnapshot]);
 
   useEffect(() => {
-    if (selectedCategory) {
-      loadInitialPages();
-    }
-  }, [selectedCategory]);
+    organizeSeriesByCategory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [series, categories]);
 
-  const loadInitialPages = async () => {
-    // Load first 10 pages to ensure we get content even with filtering
-    setLoading(true);
-    try {
-      const pages = [];
-      for (let i = 1; i <= 10; i++) {
-        pages.push(loadSeries(i));
-      }
-      await Promise.all(pages);
-      setCurrentPage(10);
-    } catch (err) {
-      console.error('Error loading initial pages:', err);
-    } finally {
-      setLoading(false);
-    }
+  // Ensure adult categories render at the end of the list
+  const orderCategoriesWithAdultLast = (cats: Category[]) => {
+    const adultRe = /adult/i;
+    const normal = cats.filter((c) => !adultRe.test(c.name));
+    const adult = cats.filter((c) => adultRe.test(c.name));
+    return [...normal, ...adult];
   };
 
-  const loadCategories = async () => {
-    if (!portalUrl || !macAddress) {
+  const loadFromCache = () => {
+    if (!cachedSnapshot) return;
+    
+    const seriesCategories = cachedSnapshot.categories.filter(
+      (cat: { hasSeries?: boolean }) => cat.hasSeries === true
+    );
+
+    // move adult categories to the end
+    setCategories(orderCategoriesWithAdultLast(seriesCategories));
+    setSeries(cachedSnapshot.series || []);
+    setLoading(false);
+    
+    console.log(`[Series] Loaded from cache: ${cachedSnapshot.series?.length || 0} series`);
+  };
+
+  const loadSnapshot = async (forceRefresh = false) => {
+    if (!user) {
       setError('Not authenticated');
       setLoading(false);
       return;
@@ -85,99 +94,89 @@ export default function SeriesScreen() {
 
     try {
       setError('');
-      const client = new ApiClient({ url: portalUrl, mac: macAddress });
+      if (!forceRefresh) setLoading(true);
 
-      const { categories: cats } = await client.getSeriesCategories();
-      setCategories(cats);
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
       
-      // Set first category as default
-      if (cats.length > 0 && !selectedCategory) {
-        setSelectedCategory(cats[0].id);
+      // Get user's provider
+      const providersResp = await fetch(`${apiUrl}/api/providers?userId=${user.id}`);
+      const providersData = await providersResp.json();
+      
+      if (!providersData.providers || providersData.providers.length === 0) {
+        setError('No provider configured');
+        setLoading(false);
+        return;
       }
+
+      const provider = providersData.providers[0];
+      setProviderId(provider.id);
+
+      // Fetch compressed snapshot
+      const profileParam = selectedProfile?.id ? `?profileId=${selectedProfile.id}` : '';
+      const snapshotResp = await fetch(`${apiUrl}/api/providers/${provider.id}/snapshot${profileParam}`, {
+        headers: {
+          'Accept-Encoding': 'gzip',
+        },
+      });
+
+      if (!snapshotResp.ok) {
+        throw new Error('Failed to load content');
+      }
+
+      const snapshot = await snapshotResp.json();
+
+      // Cache the snapshot in store
+      setSnapshot(snapshot);
+
+      // Extract series categories (categories that contain series)
+      const seriesCategories = snapshot.categories.filter(
+        (cat: { hasSeries?: boolean }) => cat.hasSeries === true
+      );
+
+      // make sure adult categories appear last
+      setCategories(orderCategoriesWithAdultLast(seriesCategories));
+
+      // Set all series
+      setSeries(snapshot.series || []);
+      
+      console.log(`[Series] Loaded ${snapshot.series?.length || 0} series, ${seriesCategories.length} categories`);
     } catch (err) {
-      console.error('Load categories error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load categories');
+      console.error('Load snapshot error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load series');
     } finally {
       setLoading(false);
+      if (forceRefresh) setRefreshing(false);
     }
   };
 
-  const loadSeries = async (page: number) => {
-    if (!portalUrl || !macAddress || !selectedCategory) return;
-
-    try {
-      setError('');
-
-      const client = new ApiClient({ url: portalUrl, mac: macAddress });
-
-      const { items: result } = await client.getSeries(selectedCategory, page);
-      
-      // Filter to only show series - items with is_series: "1" or is_series: 1
-      let actualSeries = result.data.filter((item: any) => {
-        return item.is_series === '1' || item.is_series === 1;
-      });
-      
-      // If filtering removes everything, show all items (for adult/celebrity categories)
-      if (actualSeries.length === 0 && result.data.length > 0) {
-        actualSeries = result.data;
+  const organizeSeriesByCategory = () => {
+    const organized: { [key: string]: Series[] } = {};
+    
+    categories.forEach((category) => {
+      const categorySeries = series.filter(s => s.categoryId === category.id);
+      if (categorySeries.length > 0) {
+        organized[category.id] = categorySeries;
       }
-      
-      if (page === 1) {
-        setSeries(actualSeries);
-        // Calculate total pages: API typically returns 14 items per page
-        const itemsPerPage = result.data.length > 0 ? result.data.length : 14;
-        const calculatedPages = Math.ceil(result.total / itemsPerPage);
-        setTotalPages(calculatedPages > 0 ? calculatedPages : 1);
-      } else {
-        // Deduplicate by ID to prevent duplicate keys
-        setSeries(prev => {
-          const existingIds = new Set(prev.map(s => s.id));
-          const newSeries = actualSeries.filter((s: any) => !existingIds.has(s.id));
-          return [...prev, ...newSeries];
-        });
-      }
-      
-      return result;
-    } catch (err) {
-      console.error('Load series error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load series');
-      throw err;
-    }
+    });
+    
+    setCategorizedSeries(organized);
   };
 
-  const handleSeriesPress = (seriesItem: any) => {
+  const handleSeriesPress = (item: Series) => {
     router.push({
       pathname: '/series/[id]',
       params: {
-        id: seriesItem.id,
-        title: seriesItem.name,
-        screenshot: seriesItem.screenshot_uri || seriesItem.screenshot,
-        description: seriesItem.description || '',
-        actors: seriesItem.actors || '',
-        year: seriesItem.year || '',
-        country: seriesItem.country || '',
-        genres: seriesItem.genres_str || '',
-        totalFiles: seriesItem.has_files || '',
+        id: item.id,
+        name: item.name,
+        poster: item.poster || '',
+        providerId: providerId || '',
       },
     });
   };
 
-  const handleLoadMore = async () => {
-    if (!loadingMore && currentPage < totalPages) {
-      setLoadingMore(true);
-      try {
-        await loadSeries(currentPage + 1);
-        setCurrentPage(currentPage + 1);
-      } finally {
-        setLoadingMore(false);
-      }
-    }
-  };
-
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setRefreshing(true);
-    setSeries([]);
-    loadInitialPages().finally(() => setRefreshing(false));
+    await loadSnapshot(true);
   };
 
   if (loading && series.length === 0) {
@@ -193,7 +192,7 @@ export default function SeriesScreen() {
     return (
       <View style={styles.centerContainer}>
         <Text style={styles.errorText}>{error}</Text>
-        <Pressable style={styles.retryButton} onPress={() => loadCategories()}>
+        <Pressable style={styles.retryButton} onPress={() => loadSnapshot()}>
           <Text style={styles.retryText}>Retry</Text>
         </Pressable>
       </View>
@@ -202,64 +201,39 @@ export default function SeriesScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Category Dropdown */}
-      <View style={styles.dropdownContainer}>
-        <Text style={styles.dropdownLabel}>Select Series Category</Text>
-        <View style={styles.pickerWrapper}>
-          <Picker
-            selectedValue={selectedCategory}
-            onValueChange={(value) => setSelectedCategory(value)}
-            style={styles.picker}
-            dropdownIconColor="#fff"
-          >
-            {categories.map((category) => (
-              <Picker.Item
-                key={category.id}
-                label={category.title || category.name}
-                value={category.id}
-                color={Platform.OS === 'ios' ? '#fff' : undefined}
-              />
-            ))}
-          </Picker>
-        </View>
-      </View>
-
-      {/* Series Grid */}
-      <FlatList
-        data={series}
-        numColumns={numColumns}
-        key={numColumns}
-        keyExtractor={(item, index) => `series-${item.id}-${index}`}
-        contentContainerStyle={styles.gridContainer}
-        columnWrapperStyle={styles.columnWrapper}
-        renderItem={({ item }) => (
-          <ContentCard
-            item={item}
-            onPress={() => handleSeriesPress(item)}
-            contentType="series"
-            portalUrl={portalUrl || undefined}
-            width={cardWidth}
-            height={cardHeight}
-          />
-        )}
-        onEndReached={handleLoadMore}
-        onEndReachedThreshold={0.5}
+      {/* Category Rows */}
+      <ScrollView
+        style={styles.scrollView}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#ef4444" />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor="#ef4444"
+          />
         }
-        ListFooterComponent={
-          loadingMore ? (
-            <View style={styles.footerLoader}>
-              <ActivityIndicator size="small" color="#ef4444" />
-              <Text style={styles.footerText}>Loading more...</Text>
-            </View>
-          ) : currentPage >= totalPages ? (
-            <View style={styles.footerLoader}>
-              <Text style={styles.footerText}>All series loaded</Text>
-            </View>
-          ) : null
-        }
-      />
+      >
+        {categories.map((category) => {
+          const categorySeries = categorizedSeries[category.id] || [];
+          if (categorySeries.length === 0) return null;
+
+          return (
+            <CategoryRow
+              key={category.id}
+              category={category}
+              items={categorySeries as any}
+              contentType="series"
+              onItemPress={handleSeriesPress as any}
+              maxItems={25}
+            />
+          );
+        })}
+
+        {categories.length === 0 && !loading && (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>No series categories available</Text>
+          </View>
+        )}
+      </ScrollView>
     </View>
   );
 }
@@ -267,76 +241,63 @@ export default function SeriesScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#09090b',
+    backgroundColor: '#0f0f0f',
   },
   centerContainer: {
     flex: 1,
-    backgroundColor: '#09090b',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
-  },
-  dropdownContainer: {
-    backgroundColor: '#18181b',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#27272a',
-  },
-  dropdownLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#a1a1aa',
-    marginBottom: 8,
-  },
-  pickerWrapper: {
-    backgroundColor: '#18181b',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#3f3f46',
-    overflow: 'hidden',
-  },
-  picker: {
-    color: '#fff',
-    backgroundColor: '#18181b',
-    height: 50,
-  },
-  gridContainer: {
-    padding: 16,
-  },
-  columnWrapper: {
-    gap: 16,
-    paddingBottom: 16,
+    backgroundColor: '#0f0f0f',
+    padding: 20,
   },
   loadingText: {
-    color: '#fff',
+    marginTop: 12,
     fontSize: 16,
-    marginTop: 16,
+    color: '#888',
   },
   errorText: {
+    fontSize: 16,
     color: '#ef4444',
-    fontSize: 18,
-    fontWeight: 'bold',
     textAlign: 'center',
-    marginBottom: 16,
+    marginBottom: 20,
   },
   retryButton: {
-    backgroundColor: '#ef4444',
     paddingHorizontal: 24,
     paddingVertical: 12,
+    backgroundColor: '#ef4444',
     borderRadius: 8,
   },
   retryText: {
     color: '#fff',
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '600',
   },
-  footerLoader: {
-    padding: 20,
+  header: {
+    padding: 16,
+    backgroundColor: '#1a1a1a',
+    borderBottomWidth: 1,
+    borderBottomColor: '#2a2a2a',
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 4,
+  },
+  headerSubtitle: {
+    fontSize: 14,
+    color: '#888',
+  },
+  scrollView: {
+    flex: 1,
+  },
+  emptyContainer: {
+    padding: 40,
     alignItems: 'center',
   },
-  footerText: {
-    color: '#71717a',
-    fontSize: 14,
-    marginTop: 8,
+  emptyText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
   },
 });

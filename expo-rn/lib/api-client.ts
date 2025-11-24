@@ -134,7 +134,287 @@ export class ApiClient {
   }
 }
 
-// Helper function for password verification (no credentials needed)
+// =========================
+// Backend Auth API
+// =========================
+
+export interface LoginResponse {
+  success: boolean;
+  user: {
+    id: string;
+    username: string;
+    email: string;
+    role: 'ADMIN' | 'USER';
+  };
+  token: string;
+}
+
+export interface RegisterResponse {
+  success: boolean;
+  user: {
+    id: string;
+    username: string;
+    email: string;
+    role: 'ADMIN' | 'USER';
+  };
+  token: string;
+}
+
+export interface Profile {
+  id: string;
+  name: string;
+  avatar?: string;
+  type: 'ADMIN' | 'KID' | 'GUEST';
+  ageRating?: number;
+  userId: string;
+  providerId: string;
+  isActive?: boolean;
+  allowedCategories?: string[];
+  blockedCategories?: string[];
+  allowedChannels?: string[];
+  blockedChannels?: string[];
+}
+
+export interface SnapshotData {
+  categories: any[];
+  channels: any[];
+  movies: any[];
+  series: any[];
+}
+
+export async function loginUser(username: string, password: string): Promise<LoginResponse> {
+  try {
+    const apiUrl = getApiBaseUrl();
+    console.log('🔐 Logging in user:', username);
+    const response = await axios.post(
+      `${apiUrl}/api/auth/login`,
+      { username, password },
+      { timeout: 10000 }
+    );
+    return response.data;
+  } catch (error) {
+    console.error('[ApiClient] Login error:', error);
+    if (axios.isAxiosError(error)) {
+      throw new Error(error.response?.data?.error || 'Login failed');
+    }
+    throw error;
+  }
+}
+
+export async function registerUser(username: string, email: string, password: string): Promise<RegisterResponse> {
+  try {
+    const apiUrl = getApiBaseUrl();
+    console.log('📝 Registering user:', username);
+    const response = await axios.post(
+      `${apiUrl}/api/auth/register`,
+      { username, email, password },
+      { timeout: 10000 }
+    );
+    return response.data;
+  } catch (error) {
+    console.error('[ApiClient] Registration error:', error);
+    if (axios.isAxiosError(error)) {
+      throw new Error(error.response?.data?.error || 'Registration failed');
+    }
+    throw error;
+  }
+}
+
+export async function getUserProfiles(userId: string, jwtToken: string, providerId?: string): Promise<Profile[]> {
+  try {
+    const apiUrl = getApiBaseUrl();
+    console.log('👤 Fetching profiles for user:', userId);
+    const url = providerId 
+      ? `${apiUrl}/api/profiles?userId=${userId}&providerId=${providerId}`
+      : `${apiUrl}/api/profiles?userId=${userId}`;
+    const response = await axios.get(url, {
+      headers: {
+        'Authorization': `Bearer ${jwtToken}`
+      },
+      timeout: 10000
+    });
+    return response.data.profiles || [];
+  } catch (error) {
+    console.error('[ApiClient] Fetch profiles error:', error);
+    if (axios.isAxiosError(error)) {
+      throw new Error(error.response?.data?.error || 'Failed to fetch profiles');
+    }
+    throw error;
+  }
+}
+
+export async function createProfile(
+  userId: string,
+  jwtToken: string,
+  profileData: {
+    name: string;
+    providerId?: string;
+    avatar?: string;
+    type?: 'ADMIN' | 'KID' | 'GUEST';
+    ageRating?: number;
+    pin?: string;
+    allowedCategories?: string[];
+    blockedCategories?: string[];
+    allowedChannels?: string[];
+    blockedChannels?: string[];
+  }
+): Promise<Profile> {
+  try {
+    const apiUrl = getApiBaseUrl();
+    console.log('➕ Creating profile:', profileData.name);
+    const response = await axios.post(
+      `${apiUrl}/api/profiles`,
+      { userId, ...profileData },
+      {
+        headers: {
+          'Authorization': `Bearer ${jwtToken}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+    return response.data.profile;
+  } catch (error) {
+    console.error('[ApiClient] Create profile error:', error);
+    if (axios.isAxiosError(error)) {
+      throw new Error(error.response?.data?.error || 'Failed to create profile');
+    }
+    throw error;
+  }
+}
+
+export async function updateProfile(
+  profileId: string,
+  jwtToken: string,
+  updates: {
+    name?: string;
+    avatar?: string;
+    type?: 'ADMIN' | 'KID' | 'GUEST';
+    ageRating?: number;
+    pin?: string;
+    allowedCategories?: string[];
+    blockedCategories?: string[];
+    allowedChannels?: string[];
+    blockedChannels?: string[];
+  }
+): Promise<Profile> {
+  try {
+    const apiUrl = getApiBaseUrl();
+    console.log('✏️ Updating profile:', profileId);
+    const response = await axios.patch(
+      `${apiUrl}/api/profiles/${profileId}`,
+      updates,
+      {
+        headers: {
+          'Authorization': `Bearer ${jwtToken}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+    return response.data.profile;
+  } catch (error) {
+    console.error('[ApiClient] Update profile error:', error);
+    if (axios.isAxiosError(error)) {
+      throw new Error(error.response?.data?.error || 'Failed to update profile');
+    }
+    throw error;
+  }
+}
+
+export async function deleteProfile(profileId: string, jwtToken: string): Promise<void> {
+  try {
+    const apiUrl = getApiBaseUrl();
+    console.log('🗑️ Deleting profile:', profileId);
+    await axios.delete(
+      `${apiUrl}/api/profiles/${profileId}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${jwtToken}`
+        },
+        timeout: 10000
+      }
+    );
+  } catch (error) {
+    console.error('[ApiClient] Delete profile error:', error);
+    if (axios.isAxiosError(error)) {
+      throw new Error(error.response?.data?.error || 'Failed to delete profile');
+    }
+    throw error;
+  }
+}
+
+export async function switchProfile(profileId: string, jwtToken: string): Promise<Profile> {
+  try {
+    const apiUrl = getApiBaseUrl();
+    console.log('🔄 Switching to profile:', profileId);
+    const response = await axios.post(
+      `${apiUrl}/api/profiles/${profileId}/switch`,
+      {},
+      {
+        headers: {
+          'Authorization': `Bearer ${jwtToken}`
+        },
+        timeout: 10000
+      }
+    );
+    return response.data.profile;
+  } catch (error) {
+    console.error('[ApiClient] Switch profile error:', error);
+    if (axios.isAxiosError(error)) {
+      throw new Error(error.response?.data?.error || 'Failed to switch profile');
+    }
+    throw error;
+  }
+}
+
+export async function getProfileSnapshot(profileId: string, jwtToken: string): Promise<SnapshotData> {
+  try {
+    const apiUrl = getApiBaseUrl();
+    console.log('📦 Fetching snapshot for profile:', profileId);
+    const response = await axios.get(
+      `${apiUrl}/api/snapshots/${profileId}/latest`,
+      {
+        headers: {
+          'Authorization': `Bearer ${jwtToken}`
+        },
+        timeout: 15000
+      }
+    );
+    return response.data.snapshot;
+  } catch (error) {
+    console.error('[ApiClient] Fetch snapshot error:', error);
+    if (axios.isAxiosError(error)) {
+      throw new Error(error.response?.data?.error || 'Failed to fetch snapshot');
+    }
+    throw error;
+  }
+}
+
+export async function getStreamLink(
+  deviceToken: string, 
+  cmd: string, 
+  type: string = 'itv'
+): Promise<{ url: string }> {
+  try {
+    const apiUrl = getApiBaseUrl();
+    console.log('🎬 Requesting stream link');
+    const response = await axios.post(
+      `${apiUrl}/api/stream/link`,
+      { deviceToken, cmd, type },
+      { timeout: 10000 }
+    );
+    return { url: response.data.url };
+  } catch (error) {
+    console.error('[ApiClient] Stream link error:', error);
+    if (axios.isAxiosError(error)) {
+      throw new Error(error.response?.data?.error || 'Failed to get stream link');
+    }
+    throw error;
+  }
+}
+
+// Helper function for password verification (legacy - no credentials needed)
 export async function verifyPassword(password: string): Promise<boolean> {
   try {
     // Get the URL dynamically each time

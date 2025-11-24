@@ -5,79 +5,86 @@ import {
   ActivityIndicator,
   RefreshControl,
   Pressable,
-  FlatList,
-  Platform,
-  useWindowDimensions,
+  ScrollView,
 } from 'react-native';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
-import { ApiClient } from '@/lib/api-client';
-import ContentCard from '@/components/ContentCard';
-import { Picker } from '@react-native-picker/picker';
+import { useSnapshotStore } from '@/lib/snapshot-store';
+import CategoryRow from '@/components/CategoryRow';
+
+interface Movie {
+  id: string;
+  name: string;
+  poster: string | null;
+  year: string | null;
+  ratingImdb: number | null;
+  genres: string | null;
+  categoryId: string | null;
+}
+
+interface Category {
+  id: string;
+  name: string;
+  type: string;
+}
 
 export default function MoviesScreen() {
   const router = useRouter();
-  const { portalUrl, macAddress } = useAuthStore();
-  const { width: screenWidth } = useWindowDimensions();
+  const { user, selectedProfile } = useAuthStore();
+  const { snapshot: cachedSnapshot, setSnapshot } = useSnapshotStore();
 
-  // Calculate card size based on screen width - movies use vertical poster layout
-  const getNumColumns = () => {
-    if (screenWidth < 480) return 2; // Small phones
-    if (screenWidth < 768) return 3; // Phones
-    if (screenWidth < 1024) return 4; // Tablets
-    if (screenWidth < 1440) return 5; // Small desktops
-    if (screenWidth < 1920) return 6; // Medium desktops
-    return 7; // Large screens
-  };
-  
-  const numColumns = getNumColumns();
-  const gap = 16;
-  const totalPadding = 32; // 16px padding on each side
-  const totalGaps = (numColumns - 1) * gap; // gaps between cards
-  const availableWidth = screenWidth - totalPadding - totalGaps;
-  const cardWidth = Math.floor(availableWidth / numColumns);
-  const cardHeight = Math.floor(cardWidth * 1.5); // 2:3 aspect ratio for movie posters
-
-  const [categories, setCategories] = useState<any[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<string>('');
-  const [movies, setMovies] = useState<any[]>([]);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [providerId, setProviderId] = useState<string | null>(null);
+  const [movies, setMovies] = useState<Movie[]>([]);
+  const [categorizedMovies, setCategorizedMovies] = useState<{ [key: string]: Movie[] }>({});
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    loadCategories();
-  }, []);
+    // Dashboard already fetched and cached snapshot, just use it
+    if (cachedSnapshot && cachedSnapshot.movies) {
+      console.log('[Movies] Using cached snapshot from dashboard');
+      loadFromCache();
+    } else {
+      console.log('[Movies] No cache yet, waiting for dashboard to load...');
+      // Dashboard will load it, but fetch as fallback
+      loadSnapshot();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cachedSnapshot]);
 
   useEffect(() => {
-    if (selectedCategory) {
-      loadInitialPages();
-    }
-  }, [selectedCategory]);
+    organizeMoviesByCategory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [movies, categories]);
 
-  const loadInitialPages = async () => {
-    // Load first 10 pages to ensure we get content even with filtering
-    setLoading(true);
-    try {
-      const pages = [];
-      for (let i = 1; i <= 10; i++) {
-        pages.push(loadMovies(i));
-      }
-      await Promise.all(pages);
-      setCurrentPage(10);
-    } catch (err) {
-      console.error('Error loading initial pages:', err);
-    } finally {
-      setLoading(false);
-    }
+  // Ensure adult categories render at the end of the list
+  const orderCategoriesWithAdultLast = (cats: Category[]) => {
+    const adultRe = /adult/i;
+    const normal = cats.filter((c) => !adultRe.test(c.name));
+    const adult = cats.filter((c) => adultRe.test(c.name));
+    return [...normal, ...adult];
   };
 
-  const loadCategories = async () => {
-    if (!portalUrl || !macAddress) {
+  const loadFromCache = () => {
+    if (!cachedSnapshot) return;
+    
+    const movieCategories = cachedSnapshot.categories.filter(
+      (cat: any) => cat.hasMovies === true
+    );
+
+    // move adult categories to the end
+    setCategories(orderCategoriesWithAdultLast(movieCategories));
+    setMovies(cachedSnapshot.movies || []);
+    setLoading(false);
+    
+    console.log(`[Movies] Loaded from cache: ${cachedSnapshot.movies?.length || 0} movies`);
+  };
+
+  const loadSnapshot = async (forceRefresh = false) => {
+    if (!user) {
       setError('Not authenticated');
       setLoading(false);
       return;
@@ -85,97 +92,90 @@ export default function MoviesScreen() {
 
     try {
       setError('');
-      const client = new ApiClient({ url: portalUrl, mac: macAddress });
+      if (!forceRefresh) setLoading(true);
 
-      const { categories: cats } = await client.getMovieCategories();
-      // Skip first 'All' category and show rest
-      const filteredCats = cats.slice(1);
-      setCategories(filteredCats);
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
       
-      // Set first category as default (now 2nd category from API)
-      if (filteredCats.length > 0 && !selectedCategory) {
-        setSelectedCategory(filteredCats[0].id);
+      // Get user's provider
+      const providersResp = await fetch(`${apiUrl}/api/providers?userId=${user.id}`);
+      const providersData = await providersResp.json();
+      
+      if (!providersData.providers || providersData.providers.length === 0) {
+        setError('No provider configured');
+        setLoading(false);
+        return;
       }
+
+      const provider = providersData.providers[0];
+      setProviderId(provider.id);
+
+      // Fetch compressed snapshot
+      const profileParam = selectedProfile?.id ? `?profileId=${selectedProfile.id}` : '';
+      const snapshotResp = await fetch(`${apiUrl}/api/providers/${provider.id}/snapshot${profileParam}`, {
+        headers: {
+          'Accept-Encoding': 'gzip',
+        },
+      });
+
+      if (!snapshotResp.ok) {
+        throw new Error('Failed to load content');
+      }
+
+      const snapshot = await snapshotResp.json();
+
+      // Cache the snapshot in store
+      setSnapshot(snapshot);
+
+      // Extract movie categories (categories that contain movies)
+      const movieCategories = snapshot.categories.filter(
+        (cat: any) => cat.hasMovies === true
+      );
+
+      // make sure adult categories appear last
+      setCategories(orderCategoriesWithAdultLast(movieCategories));
+
+      // Set all movies
+      setMovies(snapshot.movies || []);
+      
+      console.log(`[Movies] Loaded ${snapshot.movies?.length || 0} movies, ${movieCategories.length} categories`);
     } catch (err) {
-      console.error('Load categories error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load categories');
+      console.error('Load snapshot error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load movies');
     } finally {
       setLoading(false);
+      if (forceRefresh) setRefreshing(false);
     }
   };
 
-  const loadMovies = async (page: number) => {
-    if (!portalUrl || !macAddress || !selectedCategory) return;
-
-    try {
-      setError('');
-
-      const client = new ApiClient({ url: portalUrl, mac: macAddress });
-
-      const { items: result } = await client.getMovies(selectedCategory, page);
-      
-      // Filter out series - only show actual movies
-      // Some items have is_series: "1" or is_series: 1, those should appear in Series tab only
-      let actualMovies = result.data.filter((item: any) => {
-        return item.is_series !== '1' && item.is_series !== 1;
-      });
-      
-      // If filtering removes everything, show all items (for adult/celebrity categories)
-      if (actualMovies.length === 0 && result.data.length > 0) {
-        actualMovies = result.data;
+  const organizeMoviesByCategory = () => {
+    const organized: { [key: string]: Movie[] } = {};
+    
+    categories.forEach((category) => {
+      const categoryMovies = movies.filter(movie => movie.categoryId === category.id);
+      if (categoryMovies.length > 0) {
+        organized[category.id] = categoryMovies;
       }
-      
-      if (page === 1) {
-        setMovies(actualMovies);
-        // Calculate total pages: API typically returns 14 items per page
-        const itemsPerPage = result.data.length > 0 ? result.data.length : 14;
-        const calculatedPages = Math.ceil(result.total / itemsPerPage);
-        setTotalPages(calculatedPages > 0 ? calculatedPages : 1);
-      } else {
-        // Deduplicate by ID to prevent duplicate keys
-        setMovies(prev => {
-          const existingIds = new Set(prev.map(m => m.id));
-          const newMovies = actualMovies.filter((m: any) => !existingIds.has(m.id));
-          return [...prev, ...newMovies];
-        });
-      }
-      
-      return result;
-    } catch (err) {
-      console.error('Load movies error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load movies');
-      throw err;
-    }
+    });
+    
+    setCategorizedMovies(organized);
   };
 
-  const handleMoviePress = (movie: any) => {
+  const handleMoviePress = (item: Movie) => {
     router.push({
       pathname: '/watch/[id]',
       params: {
-        id: movie.id,
+        id: item.id,
         type: 'vod',
-        title: movie.name,
-        screenshot: movie.screenshot_uri || movie.screenshot || '',
+        title: item.name,
+        screenshot: item.poster || '',
+        providerId: providerId || '',
       },
     });
   };
 
-  const handleLoadMore = async () => {
-    if (!loadingMore && currentPage < totalPages) {
-      setLoadingMore(true);
-      try {
-        await loadMovies(currentPage + 1);
-        setCurrentPage(currentPage + 1);
-      } finally {
-        setLoadingMore(false);
-      }
-    }
-  };
-
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setRefreshing(true);
-    setMovies([]);
-    loadInitialPages().finally(() => setRefreshing(false));
+    await loadSnapshot(true);
   };
 
   if (loading && movies.length === 0) {
@@ -191,7 +191,7 @@ export default function MoviesScreen() {
     return (
       <View style={styles.centerContainer}>
         <Text style={styles.errorText}>{error}</Text>
-        <Pressable style={styles.retryButton} onPress={() => loadCategories()}>
+        <Pressable style={styles.retryButton} onPress={loadSnapshot}>
           <Text style={styles.retryText}>Retry</Text>
         </Pressable>
       </View>
@@ -200,64 +200,39 @@ export default function MoviesScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Category Dropdown */}
-      <View style={styles.dropdownContainer}>
-        <Text style={styles.dropdownLabel}>Select Movie Category</Text>
-        <View style={styles.pickerWrapper}>
-          <Picker
-            selectedValue={selectedCategory}
-            onValueChange={(value) => setSelectedCategory(value)}
-            style={styles.picker}
-            dropdownIconColor="#fff"
-          >
-            {categories.map((category) => (
-              <Picker.Item
-                key={category.id}
-                label={category.title || category.name}
-                value={category.id}
-                color={Platform.OS === 'ios' ? '#fff' : undefined}
-              />
-            ))}
-          </Picker>
-        </View>
-      </View>
-
-      {/* Movies Grid */}
-      <FlatList
-        data={movies}
-        numColumns={numColumns}
-        key={numColumns}
-        keyExtractor={(item, index) => `movie-${item.id}-${index}`}
-        contentContainerStyle={styles.gridContainer}
-        columnWrapperStyle={styles.columnWrapper}
-        renderItem={({ item }) => (
-          <ContentCard
-            item={item}
-            onPress={() => handleMoviePress(item)}
-            contentType="vod"
-            portalUrl={portalUrl || undefined}
-            width={cardWidth}
-            height={cardHeight}
-          />
-        )}
-        onEndReached={handleLoadMore}
-        onEndReachedThreshold={0.5}
+      {/* Category Rows */}
+      <ScrollView
+        style={styles.scrollView}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#ef4444" />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor="#ef4444"
+          />
         }
-        ListFooterComponent={
-          loadingMore ? (
-            <View style={styles.footerLoader}>
-              <ActivityIndicator size="small" color="#ef4444" />
-              <Text style={styles.footerText}>Loading more...</Text>
-            </View>
-          ) : currentPage >= totalPages ? (
-            <View style={styles.footerLoader}>
-              <Text style={styles.footerText}>All movies loaded</Text>
-            </View>
-          ) : null
-        }
-      />
+      >
+        {categories.map((category) => {
+          const categoryMovies = categorizedMovies[category.id] || [];
+          if (categoryMovies.length === 0) return null;
+
+          return (
+            <CategoryRow
+              key={category.id}
+              category={category}
+              items={categoryMovies}
+              contentType="vod"
+              onItemPress={handleMoviePress}
+              maxItems={25}
+            />
+          );
+        })}
+
+        {categories.length === 0 && !loading && (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>No movie categories available</Text>
+          </View>
+        )}
+      </ScrollView>
     </View>
   );
 }
@@ -265,76 +240,63 @@ export default function MoviesScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#09090b',
+    backgroundColor: '#0f0f0f',
   },
   centerContainer: {
     flex: 1,
-    backgroundColor: '#09090b',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
-  },
-  dropdownContainer: {
-    backgroundColor: '#18181b',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#27272a',
-  },
-  dropdownLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#a1a1aa',
-    marginBottom: 8,
-  },
-  pickerWrapper: {
-    backgroundColor: '#18181b',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#3f3f46',
-    overflow: 'hidden',
-  },
-  picker: {
-    color: '#fff',
-    backgroundColor: '#18181b',
-    height: 50,
-  },
-  gridContainer: {
-    padding: 16,
-  },
-  columnWrapper: {
-    gap: 16,
-    paddingBottom: 16,
+    backgroundColor: '#0f0f0f',
+    padding: 20,
   },
   loadingText: {
-    color: '#fff',
+    marginTop: 12,
     fontSize: 16,
-    marginTop: 16,
+    color: '#888',
   },
   errorText: {
+    fontSize: 16,
     color: '#ef4444',
-    fontSize: 18,
-    fontWeight: 'bold',
     textAlign: 'center',
-    marginBottom: 16,
+    marginBottom: 20,
   },
   retryButton: {
-    backgroundColor: '#ef4444',
     paddingHorizontal: 24,
     paddingVertical: 12,
+    backgroundColor: '#ef4444',
     borderRadius: 8,
   },
   retryText: {
     color: '#fff',
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '600',
   },
-  footerLoader: {
-    padding: 20,
+  header: {
+    padding: 16,
+    backgroundColor: '#1a1a1a',
+    borderBottomWidth: 1,
+    borderBottomColor: '#2a2a2a',
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 4,
+  },
+  headerSubtitle: {
+    fontSize: 14,
+    color: '#888',
+  },
+  scrollView: {
+    flex: 1,
+  },
+  emptyContainer: {
+    padding: 40,
     alignItems: 'center',
   },
-  footerText: {
-    color: '#71717a',
-    fontSize: 14,
-    marginTop: 8,
+  emptyText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
   },
 });

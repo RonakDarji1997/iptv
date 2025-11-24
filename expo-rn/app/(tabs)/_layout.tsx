@@ -12,7 +12,7 @@ function TabBarIcon(props: {
 export default function TabLayout() {
   return (
     <Tabs
-      initialRouteName="live"
+      initialRouteName="index"
       screenOptions={{
         tabBarActiveTintColor: '#ef4444',
         tabBarInactiveTintColor: '#71717a',
@@ -30,7 +30,8 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          href: null, // Hide from tab bar
+          title: 'Dashboard',
+          tabBarIcon: ({ color }) => <TabBarIcon name="dashboard" color={color} />,
         }}
       />
       <Tabs.Screen

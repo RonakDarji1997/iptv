@@ -10,26 +10,24 @@ import {
   Pressable,
 } from 'react-native';
 import { useState } from 'react';
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
-import { verifyPassword } from '@/lib/api-client';
+import { acquireNavLock } from '@/lib/navigation-lock';
+import { loginUser } from '@/lib/api-client';
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { setCredentials, setSession } = useAuthStore();
+  const { setUser } = useAuthStore();
   
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Get credentials from environment
-  const macAddress = process.env.EXPO_PUBLIC_STALKER_MAC || '';
-  const portalUrl = process.env.EXPO_PUBLIC_STALKER_URL || '';
-
   const handleLogin = async () => {
-    if (!password) {
-      setError('Please enter password');
+    if (!username || !password) {
+      setError('Please enter username and password');
       return;
     }
 
@@ -37,25 +35,52 @@ export default function LoginScreen() {
     setError('');
 
     try {
-      // Verify password
-      const isValid = await verifyPassword(password);
-      if (!isValid) {
-        setError('Incorrect password');
-        setLoading(false);
-        return;
+      // Login with backend API
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
+      console.log(`[Login] Sending login request to ${apiUrl}/api/auth/login for username=${username}`);
+      const response = await loginUser(username, password);
+
+      console.log('[Login] Login response received for user:', response.user?.id);
+
+      // Store user and JWT token immediately in the global store
+      setUser(response.user, response.token);
+
+      // Run a single provider check here so routing decision happens atomically
+      try {
+        // Determine provider-check URL and call it
+        const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
+        const providersUrl = `${apiUrl}/api/providers?userId=${response.user.id}`;
+        console.log(`[Login] Checking providers using GET ${providersUrl}`);
+        const providersResp = await fetch(providersUrl, {
+          headers: { Authorization: `Bearer ${response.token}` },
+        });
+        console.log('[Login] providers response status:', providersResp.status);
+        const providersData = providersResp.ok ? await providersResp.json() : { providers: [] };
+        console.log('[Login] providers response payload:', providersData);
+        const hasProviders = Array.isArray(providersData.providers) && providersData.providers.length > 0;
+
+        // persist provider presence in the store for other screens to read
+        const { setHasProvider } = useAuthStore.getState();
+        setHasProvider(hasProviders);
+        console.log('[Login] Provider check result:', hasProviders ? 'HAS_PROVIDER' : 'NO_PROVIDER');
+        // navigate to next step (use replace to avoid leaving login on the stack)
+        if (acquireNavLock()) {
+          if (hasProviders) {
+            console.log('[Login] Navigating to: dashboard');
+            router.replace('/(tabs)');
+          } else {
+            console.log('[Login] Navigating to: setup-provider');
+            router.replace('/(auth)/setup-provider' as Href);
+          }
+        }
+      } catch (err) {
+        console.error('[Login] Provider check failed:', err);
+        // If the providers check fails for any reason, fall back to setup-provider
+        if (acquireNavLock()) {
+          console.log('[Login] Falling back to setup-provider due to error');
+          router.replace('/(auth)/setup-provider' as Href);
+        }
       }
-
-      // Store credentials
-      setCredentials(macAddress, portalUrl);
-
-      // No handshake needed - auth handled by bearer/adid
-
-      // Store session with 7-day expiry
-      const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
-      setSession('authenticated', Date.now() + sevenDaysInMs);
-
-      // Navigate to home
-      router.replace('/(tabs)');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {
@@ -74,7 +99,21 @@ export default function LoginScreen() {
       >
         <View style={styles.formContainer}>
           <Text style={styles.title}>Ronika&apos;s IPTV</Text>
-          <Text style={styles.subtitle}>Enter password to continue</Text>
+          <Text style={styles.subtitle}>Sign in to continue</Text>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Username</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Enter username"
+              placeholderTextColor="#6b7280"
+              value={username}
+              onChangeText={setUsername}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="next"
+            />
+          </View>
 
           <View style={styles.inputContainer}>
             <Text style={styles.label}>Password</Text>

@@ -52,3 +52,5 @@ iptv-deploy-*
 # Ignored asset node_modules
 public/assets/node_modules/
 web-dist/assets/node_modules/
+
+/src/generated/prisma

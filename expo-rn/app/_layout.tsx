@@ -48,11 +48,11 @@ export default function RootLayout() {
 
 function RootLayoutNav() {
   const colorScheme = useColorScheme();
-  const { isAuthenticated, checkSession } = useAuthStore();
+  const { isAuthenticated, checkSession, user } = useAuthStore();
   const segments = useSegments();
   const router = useRouter();
 
-  // Check authentication after navigator is mounted
+  // Check authentication and navigation flow
   useEffect(() => {
     // Add a small delay to ensure navigator is fully mounted
     const timeout = setTimeout(() => {
@@ -60,17 +60,22 @@ function RootLayoutNav() {
       const sessionValid = checkSession();
       const isAuthed = isAuthenticated && sessionValid;
 
+      // Not authenticated at all → login
       if (!isAuthed && !inAuthGroup) {
-        // Not authenticated - redirect to login
         router.replace('/login');
-      } else if (isAuthed && inAuthGroup) {
-        // Already authenticated - redirect to app
-        router.replace('/live');
+        return;
+      }
+
+      // Authenticated user on setup-provider page → allow them to stay
+      const onSetupProvider = segments[0] === '(auth)' && segments[1] === 'setup-provider';
+      if (isAuthed && user && inAuthGroup && !onSetupProvider) {
+        router.replace('/(tabs)');
+        return;
       }
     }, 0);
 
     return () => clearTimeout(timeout);
-  }, [isAuthenticated, segments]);
+  }, [isAuthenticated, segments, user]);
 
   // Periodic session check every 5 minutes
   useEffect(() => {

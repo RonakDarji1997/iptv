@@ -8,13 +8,11 @@ import {
   Platform,
   Image,
 } from 'react-native';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
-import { ApiClient } from '@/lib/api-client';
 import { Picker } from '@react-native-picker/picker';
 import { WatchHistoryManager, WatchHistoryItem } from '@/lib/watch-history';
-import { useCallback } from 'react';
 import { DebugLogger } from '@/lib/debug-logger';
 
 export default function SeriesDetailScreen() {
@@ -29,10 +27,11 @@ export default function SeriesDetailScreen() {
     country?: string;
     genres?: string;
     totalFiles?: string;
+    providerId?: string;
   }>();
-  const { portalUrl, macAddress } = useAuthStore();
+  const { jwtToken, user, portalUrl } = useAuthStore();
 
-  const [seriesInfo] = useState<any>({
+  const [seriesInfo, setSeriesInfo] = useState<any>({
     name: params.title,
     screenshot_uri: params.screenshot,
     description: params.description,
@@ -70,6 +69,7 @@ export default function SeriesDetailScreen() {
   }, []);
 
   // Reload watch history when screen comes into focus
+  // Only load seasons once on mount, not on every focus
   useFocusEffect(
     useCallback(() => {
       loadWatchHistory();
@@ -83,7 +83,7 @@ export default function SeriesDetailScreen() {
   }, [selectedSeason]);
 
   const loadSeasons = async () => {
-    if (!portalUrl || !macAddress) {
+    if (!jwtToken || !user || !params.providerId) {
       setError('Not authenticated');
       setLoading(false);
       return;
@@ -93,14 +93,41 @@ export default function SeriesDetailScreen() {
       setLoading(true);
       setError('');
       DebugLogger.seasonsLoading(params.id);
-      const client = new ApiClient({ url: portalUrl, mac: macAddress });
-
-      const { seasons: seasonsData } = await client.getSeriesSeasons(params.id);
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
+      
+      const response = await fetch(`${apiUrl}/api/providers/${params.providerId}/series/${params.id}/seasons`, {
+        headers: {
+          'Authorization': `Bearer ${jwtToken}`,
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to load seasons');
+      }
+      
+      const { series: seriesData, seasons: seasonsData } = await response.json();
       DebugLogger.seasonsLoaded(seasonsData);
+      
+      // Update series info from API response
+      if (seriesData) {
+        setSeriesInfo({
+          name: seriesData.name,
+          poster: seriesData.poster,
+          screenshot_uri: seriesData.poster, // Keep for backward compatibility
+          description: seriesData.description,
+          actors: seriesData.actors,
+          year: seriesData.year,
+          country: seriesData.country,
+          genres_str: seriesData.genres,
+          has_files: seriesData.episodeCount,
+        });
+        // Store series name for navigation
+        (params as any).title = seriesData.name;
+      }
       
       // Filter out ADULT and CELEBRITY seasons
       const filteredSeasons = seasonsData.filter((season: any) => {
-        const name = (season.name || season.series_name || '').toUpperCase();
+        const name = (season.name || '').toUpperCase();
         return !name.includes('ADULT') && !name.includes('CELEBRITY');
       });
       
@@ -111,10 +138,12 @@ export default function SeriesDetailScreen() {
         const firstSeason = filteredSeasons[0];
         DebugLogger.seasonSelected(
           firstSeason.id,
-          firstSeason.name || firstSeason.series_name || 'Unknown',
-          firstSeason.season_number || 'N/A'
+          firstSeason.name || 'Unknown',
+          firstSeason.seasonNumber || 'N/A'
         );
         setSelectedSeason(firstSeason.id);
+        // Set episodes from the first season
+        setEpisodes(firstSeason.episodes || []);
       }
     } catch (err) {
       console.error('Load seasons error:', err);
@@ -126,27 +155,24 @@ export default function SeriesDetailScreen() {
   };
 
   const loadEpisodes = async () => {
-    if (!portalUrl || !macAddress || !selectedSeason) return;
+    if (!selectedSeason) return;
 
     try {
       setLoadingEpisodes(true);
-      setError('');
-      DebugLogger.episodesLoading(params.id, selectedSeason);
-      const client = new ApiClient({ url: portalUrl, mac: macAddress });
-
-      // Fetch all episodes (method now handles pagination internally)
-      const result = await client.getSeriesEpisodes(params.id, selectedSeason);
-      DebugLogger.apiResponse('getSeriesEpisodes', result);
       
-      // Sort episodes by episode number in ascending order
-      const sortedEpisodes = result.data.sort((a: any, b: any) => {
-        const numA = parseInt(a.series_number) || 0;
-        const numB = parseInt(b.series_number) || 0;
-        return numA - numB;
-      });
-      
-      setEpisodes(sortedEpisodes);
-      DebugLogger.episodesLoaded(sortedEpisodes, selectedSeason);
+      // Find the selected season and get its episodes
+      const season = seasons.find(s => s.id === selectedSeason);
+      if (season) {
+        // Sort episodes by episode number in ascending order
+        const sortedEpisodes = (season.episodes || []).sort((a: any, b: any) => {
+          const numA = parseInt(a.episodeNumber) || 0;
+          const numB = parseInt(b.episodeNumber) || 0;
+          return numA - numB;
+        });
+        
+        setEpisodes(sortedEpisodes);
+        DebugLogger.episodesLoaded(sortedEpisodes, selectedSeason);
+      }
     } catch (err) {
       console.error('Load episodes error:', err);
       DebugLogger.episodesError(err);
@@ -157,7 +183,7 @@ export default function SeriesDetailScreen() {
   };
 
   const handleEpisodePress = async (episode: any) => {
-    if (!portalUrl || !macAddress) return;
+    if (!jwtToken || !user) return;
 
     try {
       // Check if we have existing progress for this episode
@@ -168,13 +194,15 @@ export default function SeriesDetailScreen() {
       const navigationParams = {
         id: params.id,
         type: 'series' as const,
-        title: `${params.title} - ${episode.name}`,
+        title: `${params.title || seriesInfo.name || 'Series'} - ${episode.name}`,
         screenshot: params.screenshot || '',
         seasonId: selectedSeason,
-        seasonNumber: seasons.find(s => s.id === selectedSeason)?.season_number || '',
+        seasonNumber: seasons.find(s => s.id === selectedSeason)?.seasonNumber || '',
         episodeId: episode.id,
-        episodeNumber: episode.series_number || '',
+        episodeNumber: episode.episodeNumber?.toString() || '',
+        cmd: episode.cmd || '',
         resumeFrom: progress?.currentTime.toString(),
+        providerId: params.providerId || '',
       };
 
       DebugLogger.navigatingToWatch(navigationParams);
@@ -210,15 +238,34 @@ export default function SeriesDetailScreen() {
     );
   }
 
-  // Helper to get full image URL
+  // Helper to get full image URL (same logic as ContentCard)
   const getImageUrl = (screenshot: string | undefined) => {
-    if (!screenshot || !portalUrl) return undefined;
+    if (!screenshot) return undefined;
     if (screenshot.startsWith('http')) return screenshot;
-    const cleanUrl = portalUrl.replace(/\/stalker_portal\/?$/, '');
-    return `${cleanUrl}${screenshot}`;
+    
+    // Use portalUrl from store or fallback to environment variable
+    const basePortalUrl = portalUrl || process.env.EXPO_PUBLIC_STALKER_URL || 'http://tv.stream4k.cc/stalker_portal/';
+    
+    // Extract domain without stalker_portal path for proper concatenation
+    const domainUrl = basePortalUrl.replace(/\/stalker_portal\/?$/, '');
+    
+    // If path starts with /, append to domain
+    if (screenshot.startsWith('/')) {
+      return `${domainUrl}${screenshot}`;
+    }
+    
+    return screenshot;
   };
 
-  const posterUrl = getImageUrl(seriesInfo?.screenshot_uri || params.screenshot);
+  const posterUrl = getImageUrl(seriesInfo?.screenshot_uri || seriesInfo?.poster || params.screenshot);
+  
+  console.log('[Series Detail] Poster debug:', {
+    screenshot_uri: seriesInfo?.screenshot_uri,
+    poster: seriesInfo?.poster,
+    params_screenshot: params.screenshot,
+    posterUrl,
+    portalUrl
+  });
 
   return (
     <ScrollView style={styles.container}>
@@ -332,13 +379,13 @@ export default function SeriesDetailScreen() {
               >
                 <View style={styles.episodeNumber}>
                   <Text style={styles.episodeNumberText}>
-                    {episode.series_number || episode.name.match(/\d+/)?.[0] || ''}
+                    {episode.episodeNumber || episode.name.match(/\d+/)?.[0] || ''}
                   </Text>
                 </View>
                 <View style={styles.episodeInfo}>
                   <Text style={styles.episodeName}>{episode.name}</Text>
-                  {episode.time && (
-                    <Text style={styles.episodeTime}>{episode.time}</Text>
+                  {episode.duration && (
+                    <Text style={styles.episodeTime}>{episode.duration} min</Text>
                   )}
                   {/* Progress Bar */}
                   {hasProgress && (

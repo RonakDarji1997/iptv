@@ -1,5 +1,6 @@
 import { View, Text, Image, StyleSheet, Pressable, Platform } from 'react-native';
 import { useState } from 'react';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 interface ContentCardProps {
   item: {
@@ -15,6 +16,8 @@ interface ContentCardProps {
     cmd?: string;
     year?: string;
     rating_imdb?: number;
+    description?: string;
+    cast?: string | string[];
     hd?: string | number;
     high_quality?: string | number;
   };
@@ -34,6 +37,14 @@ export default function ContentCard({
   portalUrl,
 }: ContentCardProps) {
   const [imageError, setImageError] = useState(false);
+  const scale = useSharedValue(1);
+  const opacity = useSharedValue(1);
+
+  // Only enable hover effects on web (desktop / browser) — don't show on mobile/touch
+  const isHoverEnabled = Platform.OS === 'web';
+
+  // hovered indicates we should display the large preview overlay (web only)
+  const [hovered, setHovered] = useState(false);
 
   const getImageUrl = () => {
     const baseUrl = portalUrl || 'http://tv.stream4k.cc/stalker_portal/';
@@ -82,24 +93,48 @@ export default function ContentCard({
       )}`
     : getImageUrl();
 
+  const handleHoverIn = () => {
+    if (isHoverEnabled) {
+      scale.value = withTiming(1.05, { duration: 200 });
+      opacity.value = withTiming(0.9, { duration: 200 });
+      setHovered(true);
+    }
+  };
+
+  const handleHoverOut = () => {
+    if (isHoverEnabled) {
+      scale.value = withTiming(1, { duration: 200 });
+      opacity.value = withTiming(1, { duration: 200 });
+      setHovered(false);
+    }
+  };
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+    opacity: opacity.value,
+  }));
+
   return (
-    <Pressable
-      style={({ pressed }) => [
-        styles.container,
-        { width, height },
-        pressed && styles.pressed,
-        Platform.isTV && styles.tvFocusable,
-      ]}
-      onPress={() => onPress(item)}
-    >
-      <View style={styles.imageContainer}>
-        <Image
-          source={{ uri: imageUrl }}
-          style={styles.image}
-          resizeMode="cover"
-          onError={() => setImageError(true)}
-        />
-        <View style={styles.gradient} />
+    <Animated.View style={[animatedStyle, { width, height }]}>
+      <Pressable
+        style={({ pressed }) => [
+          styles.container,
+          { width: '100%', height: '100%' },
+          pressed && styles.pressed,
+          Platform.isTV && styles.tvFocusable,
+        ]}
+        onPress={() => onPress(item)}
+        onHoverIn={isHoverEnabled ? handleHoverIn : undefined}
+        onHoverOut={isHoverEnabled ? handleHoverOut : undefined}
+      >
+        <View style={styles.imageContainer}>
+          <Image
+            source={{ uri: imageUrl }}
+            style={styles.image}
+            resizeMode="cover"
+            onError={() => setImageError(true)}
+          />
+          <View style={styles.gradient} />
         
         {/* Badges */}
         <View style={styles.badges}>
@@ -134,7 +169,10 @@ export default function ContentCard({
           </View>
         )}
       </View>
-    </Pressable>
+      </Pressable>
+
+      {/* On hover, only enlarge image. No overlay content. */}
+    </Animated.View>
   );
 }
 
@@ -219,5 +257,100 @@ const styles = StyleSheet.create({
   rating: {
     color: '#fbbf24',
     fontSize: 12,
+  },
+  /* Hover overlay styles (web only) */
+  hoverOverlay: {
+    position: 'absolute',
+    top: -220,
+    zIndex: 999,
+    backgroundColor: '#0b0b0b',
+    borderRadius: 10,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#222',
+    shadowColor: '#000',
+    shadowOpacity: 0.6,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+  },
+  hoverImageWrap: {
+    width: '100%',
+    height: 140,
+    position: 'relative',
+  },
+  hoverImage: {
+    width: '100%',
+    height: '100%',
+  },
+  hoverGradient: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: '40%',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  hoverInfo: {
+    padding: 12,
+    gap: 8,
+  },
+  hoverTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  hoverActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 6,
+  },
+  playButton: {
+    backgroundColor: '#ef4444',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 6,
+  },
+  playText: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+  iconButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  iconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  hoverMetaRow: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  hoverMeta: {
+    color: '#a1a1aa',
+    fontSize: 12,
+  },
+  hoverDescription: {
+    color: '#ddd',
+    fontSize: 13,
+    marginTop: 8,
+  },
+  hoverCast: {
+    color: '#9ca3af',
+    fontSize: 12,
+    marginTop: 6,
   },
 });

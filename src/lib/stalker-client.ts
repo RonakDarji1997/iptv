@@ -25,10 +25,25 @@ export class StalkerClient {
     private baseUrl: string;
     private mac: string;
     private token: string | null = null;
+    private bearer: string;
+    private adid: string;
 
-    constructor(credentials: StalkerCredentials) {
-        this.baseUrl = credentials.url.endsWith('/') ? credentials.url : `${credentials.url}/`;
-        this.mac = credentials.mac;
+    constructor(credentials: StalkerCredentials);
+    constructor(url: string, bearer: string, adid: string);
+    constructor(credentialsOrUrl: StalkerCredentials | string, bearer?: string, adid?: string) {
+        if (typeof credentialsOrUrl === 'string') {
+            // New signature: (url, bearer, adid)
+            this.baseUrl = credentialsOrUrl.endsWith('/') ? credentialsOrUrl : `${credentialsOrUrl}/`;
+            this.bearer = bearer || '';
+            this.adid = adid || '';
+            this.mac = ''; // Will be set during handshake
+        } else {
+            // Old signature: (credentials)
+            this.baseUrl = credentialsOrUrl.url.endsWith('/') ? credentialsOrUrl.url : `${credentialsOrUrl.url}/`;
+            this.mac = credentialsOrUrl.mac;
+            this.bearer = '';
+            this.adid = '';
+        }
     }
 
     private async request<T>(action: string, params: Record<string, string> = {}): Promise<T> {
@@ -65,15 +80,16 @@ export class StalkerClient {
         }
         finalUrl = `${finalUrl}server/load.php?${forwardParams.toString()}`;
 
-        // Get credentials from environment
-        const bearer = process.env.NEXT_PUBLIC_STALKER_BEARER || '';
-        const adid = process.env.NEXT_PUBLIC_STALKER_ADID || '';
+        // Get credentials from instance or environment (prefer instance, then server-side vars, fallback to public)
+        const bearer = this.bearer || process.env.STALKER_BEARER || process.env.NEXT_PUBLIC_STALKER_BEARER || '';
+        const adid = this.adid || process.env.STALKER_ADID || process.env.NEXT_PUBLIC_STALKER_ADID || '';
 
         const headers: HeadersInit = {
             'User-Agent': 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
             'X-User-Agent': 'Model: MAG270; Link: WiFi',
             'Referer': this.baseUrl + 'c/',
             'Authorization': `Bearer ${bearer}`,
+            'Accept-Encoding': 'gzip',
             'Cookie': `mac=${this.mac.toLowerCase()}; timezone=America/Toronto; adid=${adid};${this.token ? ` st=${this.token};` : ''}`,
         };
 
@@ -83,6 +99,12 @@ export class StalkerClient {
             if (!response.ok) {
                 const errorText = await response.text();
                 console.error(`[StalkerClient] Direct request failed: ${response.status} ${response.statusText}`);
+                
+                // Handle rate limiting with retry
+                if (response.status === 429) {
+                    throw new Error('RATE_LIMIT');
+                }
+                
                 throw new Error(`Portal request failed: ${response.status}`);
             }
 
@@ -165,12 +187,28 @@ export class StalkerClient {
                 })) as any;
             case 'create_link':
                 return { cmd: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4' } as any;
+            case 'get_main_info':
+                return {
+                    id: 1,
+                    name: 'Demo User',
+                    balance: '0.00',
+                    status: 'ACTIVE',
+                    exp_date: null
+                } as any;
             default:
                 throw new Error(`Unknown mock action: ${action}`);
         }
     }
 
-    async handshake(): Promise<void> {
+    async handshake(mac?: string): Promise<void> {
+        if (mac) {
+            this.mac = mac;
+        }
+        
+        if (!this.mac) {
+            throw new StalkerError('MAC address is required for handshake');
+        }
+        
         try {
             const response = await this.request<{ token: string }>('handshake');
             this.token = response.token;
@@ -178,6 +216,10 @@ export class StalkerClient {
             console.error('Handshake failed', error);
             throw new StalkerError('Failed to connect to portal');
         }
+    }
+    
+    getToken(): string | null {
+        return this.token;
     }
 
     async getCategories(): Promise<any[]> {
@@ -314,9 +356,11 @@ export class StalkerClient {
         };
     }
 
-    async getSeriesFileInfo(seriesId: string, seasonId: string, episodeId: string): Promise<any> {
+    async getEpisodeFileInfo(seriesId: string, seasonId: string, episodeId: string): Promise<any> {
+        // Step 3: Get episode file info
         // type=vod&action=get_ordered_list&movie_id={series_id}&season_id={season_id}&episode_id={episode_id}
-        // Returns { js: { data: [{ id: "file_id", cmd: "...", ... }] } }
+        // Returns { js: { data: [{ id: "file_id", cmd: "http://...", url: "...", ... }] } }
+        // The response contains the actual file_id and cmd that should be passed to create_link
         const response = await this.request<{ data: any[] }>('get_ordered_list', { 
             type: 'vod',
             movie_id: seriesId,
@@ -325,6 +369,7 @@ export class StalkerClient {
         });
         
         // Return the first file from the data array
+        // This file object contains: id (file_id), cmd, url, protocol, etc.
         return response.data && response.data.length > 0 ? response.data[0] : null;
     }
 
@@ -365,8 +410,10 @@ export class StalkerClient {
         
         const response = await this.request<{ cmd: string, id?: number }>('create_link', params);
         
+        console.log('[StalkerClient] create_link response:', JSON.stringify(response));
+        
         if (!response || !response.cmd) {
-             console.error('[StalkerClient] Invalid response, no cmd field found');
+             console.error('[StalkerClient] Invalid response, no cmd field found. Full response:', response);
              throw new Error('Failed to generate stream link - no cmd in response');
         }
         
@@ -396,5 +443,38 @@ export class StalkerClient {
         });
         
         return response || { current_program: null, next_program: null };
+    }
+
+    async getProfile(mac?: string): Promise<any> {
+        // type=stb&action=get_profile
+        // Returns { js: { id, name, login, stb_id, ... } }
+        if (mac) {
+            this.mac = mac;
+        }
+        
+        try {
+            const response = await this.request<any>('get_profile');
+            // The portal sometimes wraps data under `js` — request() already returns the resolved js or raw
+            return response || null;
+        } catch (error) {
+            console.error('[StalkerClient] getProfile error:', error);
+            throw error;
+        }
+    }
+
+    async getAccountInfo(mac?: string): Promise<any> {
+        // type=account_info&action=get_main_info
+        // The portal returns account info for the current MAC under this action
+        if (mac) {
+            this.mac = mac;
+        }
+        
+        try {
+            const response = await this.request<any>('get_main_info', { type: 'account_info' });
+            return response || null;
+        } catch (error) {
+            console.error('[StalkerClient] getAccountInfo error:', error);
+            throw error;
+        }
     }
 }

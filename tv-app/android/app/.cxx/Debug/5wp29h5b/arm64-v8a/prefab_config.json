@@ -1,9 +1,0 @@
-{
-  "enabled": true,
-  "prefabPath": "/Users/ronika/.gradle/caches/modules-2/files-2.1/com.google.prefab/cli/2.1.0/aa32fec809c44fa531f01dcfb739b5b3304d3050/cli-2.1.0-all.jar",
-  "packages": [
-    "/Users/ronika/.gradle/caches/8.8/transforms/788d4e75e488e99aa20069b2e712f1b7/transformed/react-android-0.76.0-debug/prefab",
-    "/Users/ronika/.gradle/caches/8.8/transforms/7678f40d20735397e9efac58f4c88b0c/transformed/hermes-android-0.76.0-debug/prefab",
-    "/Users/ronika/.gradle/caches/8.8/transforms/d10425e25238410342ffcbb966f9fafd/transformed/fbjni-0.6.0/prefab"
-  ]
-}

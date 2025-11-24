@@ -3,7 +3,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import { useAuthStore } from '@/lib/store';
-import { ApiClient } from '@/lib/api-client';
 import VideoPlayer from '@/components/VideoPlayer';
 import { WatchHistoryManager } from '@/lib/watch-history';
 import { DebugLogger } from '@/lib/debug-logger';
@@ -21,10 +20,11 @@ export default function WatchScreen() {
     seasonNumber?: string;
     episodeId?: string;
     episodeNumber?: string;
+    providerId?: string;
   }>();
   
   const [currentCmd, setCurrentCmd] = useState<string | null>(null);
-  const { portalUrl, macAddress } = useAuthStore();
+  const { jwtToken, user } = useAuthStore();
 
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,12 +59,23 @@ export default function WatchScreen() {
   }, [params.id, params.episodeId]);
 
   const loadNextEpisode = async () => {
-    if (!portalUrl || !macAddress || !params.seasonId || !params.episodeNumber) return;
+    if (!jwtToken || !user || !params.seasonId || !params.episodeNumber || !params.providerId) return;
 
     try {
       DebugLogger.loadingNextEpisode(params.id, params.seasonId, params.episodeNumber);
-      const client = new ApiClient({ url: portalUrl, mac: macAddress });
-      const result = await client.getSeriesEpisodes(params.id, params.seasonId);
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
+      
+      const response = await fetch(`${apiUrl}/api/providers/${params.providerId}/series/${params.id}/seasons/${params.seasonId}/episodes`, {
+        headers: {
+          'Authorization': `Bearer ${jwtToken}`,
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to load episodes');
+      }
+      
+      const result = await response.json();
       DebugLogger.apiResponse('getSeriesEpisodes (for next/prev)', result);
       
       // Sort episodes ascending
@@ -97,7 +108,7 @@ export default function WatchScreen() {
   };
 
   const loadStream = async () => {
-    if (!portalUrl || !macAddress) {
+    if (!jwtToken || !user || !params.providerId) {
       setError('Not authenticated');
       setLoading(false);
       return;
@@ -108,7 +119,7 @@ export default function WatchScreen() {
       setError('');
       DebugLogger.loadingStream(params.type || 'itv', params.episodeId);
 
-      const client = new ApiClient({ url: portalUrl, mac: macAddress });
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
       const contentType = params.type || 'itv';
 
       console.log('[WATCH DEBUG] Content type:', contentType);
@@ -124,7 +135,7 @@ export default function WatchScreen() {
         let cmd: string;
 
         if (contentType === 'series' && params.episodeId && params.seasonId) {
-          console.log('[WATCH DEBUG] ✅ Entering SERIES branch - will call getSeriesFileInfo');
+          console.log('[WATCH DEBUG] ✅ Entering SERIES branch');
           
           // For series: get file info using seriesId, seasonId, and episodeId
           console.log('[WATCH DEBUG] Fetching file info for:', {
@@ -139,8 +150,17 @@ export default function WatchScreen() {
             episodeId: params.episodeId
           });
           
-          const fileInfo = await client.getSeriesFileInfo(params.id, params.seasonId, params.episodeId);
+          const fileInfoResp = await fetch(`${apiUrl}/api/providers/${params.providerId}/series/${params.id}/seasons/${params.seasonId}/episodes/${params.episodeId}/file`, {
+            headers: {
+              'Authorization': `Bearer ${jwtToken}`,
+            },
+          });
           
+          if (!fileInfoResp.ok) {
+            throw new Error('Failed to get file info');
+          }
+          
+          const fileInfo = await fileInfoResp.json();
           console.log('[WATCH DEBUG] File info received:', fileInfo);
           
           if (!fileInfo || !fileInfo.id) {
@@ -153,9 +173,19 @@ export default function WatchScreen() {
           console.log('[WATCH DEBUG] Constructed cmd:', cmd);
           DebugLogger.constructingCmd(fileInfo.id, cmd);
         } else if (contentType === 'vod' && params.id) {
-          console.log('[WATCH DEBUG] ⚠️ Entering VOD branch (not series)');
+          console.log('[WATCH DEBUG] ⚠️ Entering VOD branch');
           // For movies: get file info using movie_id
-          const fileInfo = await client.getMovieInfo(params.id);
+          const fileInfoResp = await fetch(`${apiUrl}/api/providers/${params.providerId}/movies/${params.id}/file`, {
+            headers: {
+              'Authorization': `Bearer ${jwtToken}`,
+            },
+          });
+          
+          if (!fileInfoResp.ok) {
+            throw new Error('Failed to get file info');
+          }
+          
+          const fileInfo = await fileInfoResp.json();
           
           if (!fileInfo || !fileInfo.id) {
             setError('No file information found');
@@ -180,17 +210,52 @@ export default function WatchScreen() {
         // Store cmd for watch history
         setCurrentCmd(cmd);
 
-        // Create link and get stream URL
-        // Use 'series' type for series episodes to set series=episode_number parameter
+        // Get stream URL from provider endpoint
         const streamType = contentType === 'series' ? 'series' : 'vod';
         DebugLogger.callingCreateLink(cmd, streamType);
-        const { url } = await client.getStreamUrl(cmd, streamType, params.episodeNumber);
-        DebugLogger.streamUrlReceived(url);
-        setStreamUrl(url);
+        
+        const streamResp = await fetch(`${apiUrl}/api/providers/${params.providerId}/stream`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${jwtToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            cmd,
+            contentType: streamType,
+            episodeNumber: params.episodeNumber,
+          }),
+        });
+        
+        if (!streamResp.ok) {
+          const errorData = await streamResp.json();
+          throw new Error(errorData.error || 'Failed to get stream URL');
+        }
+        
+        const streamData = await streamResp.json();
+        DebugLogger.streamUrlReceived(streamData.streamUrl);
+        setStreamUrl(streamData.streamUrl);
       } else if (contentType === 'itv') {
         // For live channels, use cmd directly
-        const { url } = await client.getStreamUrl(params.cmd || '', contentType);
-        setStreamUrl(url);
+        const streamResp = await fetch(`${apiUrl}/api/providers/${params.providerId}/stream`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${jwtToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            cmd: params.cmd || '',
+            contentType: 'itv',
+          }),
+        });
+        
+        if (!streamResp.ok) {
+          const errorData = await streamResp.json();
+          throw new Error(errorData.error || 'Failed to get stream URL');
+        }
+        
+        const streamData = await streamResp.json();
+        setStreamUrl(streamData.streamUrl);
       }
     } catch (err) {
       console.error('Stream loading error:', err);

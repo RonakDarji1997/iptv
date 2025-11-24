@@ -2,17 +2,26 @@ import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Platf
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import { useAuthStore } from '@/lib/store';
-import { ApiClient, EpgProgram } from '@/lib/api-client';
 import VideoPlayer from '@/components/VideoPlayer';
 import { MaterialIcons } from '@expo/vector-icons';
 
+const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
+
+interface Channel {
+  id: string;
+  name: string;
+  number: number;
+  logo?: string;
+  cmd: string;
+}
+
 export default function ChannelDetailScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ id: string; type: string; cmd?: string; title?: string }>();
-  const { portalUrl, macAddress } = useAuthStore();
+  const params = useLocalSearchParams<{ id: string; name?: string; logo?: string; providerId?: string; cmd?: string }>();
+  const { jwtToken, user } = useAuthStore();
 
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
-  const [epg, setEpg] = useState<EpgProgram[]>([]);
+  const [channel, setChannel] = useState<Channel | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -22,7 +31,7 @@ export default function ChannelDetailScreen() {
   }, [params.id]);
 
   const loadChannelData = async () => {
-    if (!portalUrl || !macAddress) {
+    if (!jwtToken || !user) {
       setError('Not authenticated');
       setLoading(false);
       return;
@@ -32,47 +41,44 @@ export default function ChannelDetailScreen() {
       setLoading(true);
       setError('');
 
-      const client = new ApiClient({ url: portalUrl, mac: macAddress });
-
-      // Load stream URL
-      let cmd = params.cmd;
-      if (!cmd) {
-        setError('Stream command not found');
-        setLoading(false);
-        return;
+      if (!params.cmd || !params.providerId) {
+        throw new Error('Missing channel information');
       }
 
-      const { url } = await client.getStreamUrl(cmd, params.type || 'itv');
-      setStreamUrl(url);
+      // Set channel info from params
+      setChannel({
+        id: params.id,
+        name: params.name || 'Live Channel',
+        number: 0,
+        cmd: params.cmd,
+      });
 
-      // Load EPG data
-      try {
-        const { epg: epgData } = await client.getEpg(params.id);
-        setEpg(epgData);
-      } catch (epgError) {
-        console.error('EPG load error:', epgError);
-        // Continue even if EPG fails
+      // Get stream URL directly from Stalker API
+      const streamResponse = await fetch(`${API_URL}/api/providers/${params.providerId}/stream`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${jwtToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          cmd: params.cmd,
+          contentType: 'itv',
+        }),
+      });
+
+      if (!streamResponse.ok) {
+        const errorData = await streamResponse.json();
+        throw new Error(errorData.error || 'Failed to get stream URL');
       }
+
+      const streamData = await streamResponse.json();
+      setStreamUrl(streamData.streamUrl);
     } catch (err) {
       console.error('Channel data loading error:', err);
       setError(err instanceof Error ? err.message : 'Failed to load channel');
     } finally {
       setLoading(false);
     }
-  };
-
-  const formatTime = (timeStr: string) => {
-    try {
-      const date = new Date(parseInt(timeStr) * 1000);
-      return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    } catch {
-      return timeStr;
-    }
-  };
-
-  const formatDuration = (duration: string) => {
-    const mins = Math.floor(parseInt(duration) / 60);
-    return `${mins} min`;
   };
 
   if (loading) {
@@ -100,7 +106,7 @@ export default function ChannelDetailScreen() {
       <View style={styles.fullscreenContainer}>
         <VideoPlayer
           uri={streamUrl}
-          title={params.title}
+          title={channel?.name || params.name || 'Live Channel'}
           onBack={() => setIsFullscreen(false)}
           autoPlay
         />
@@ -109,58 +115,36 @@ export default function ChannelDetailScreen() {
   }
 
   return (
-    <ScrollView style={styles.container}>
-      {/* Player Section */}
-      <View style={styles.playerSection}>
-        <View style={styles.playerContainer}>
-          <VideoPlayer
-            uri={streamUrl}
-            title={params.title}
-            onBack={() => router.back()}
-            autoPlay
-          />
+    <View style={styles.container}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Pressable style={styles.backButton} onPress={() => router.back()}>
+          <MaterialIcons name="arrow-back" size={24} color="#fff" />
+        </Pressable>
+        <View style={styles.headerInfo}>
+          <Text style={styles.channelName}>{channel?.name || params.name || 'Live Channel'}</Text>
+          {channel?.number && (
+            <Text style={styles.channelNumber}>Ch {channel.number}</Text>
+          )}
         </View>
         <Pressable
           style={styles.fullscreenButton}
           onPress={() => setIsFullscreen(true)}
         >
           <MaterialIcons name="fullscreen" size={24} color="#fff" />
-          <Text style={styles.fullscreenText}>Fullscreen</Text>
         </Pressable>
       </View>
 
-      {/* EPG Section */}
-      <View style={styles.epgSection}>
-        <Text style={styles.sectionTitle}>Program Guide</Text>
-        {epg.length > 0 ? (
-          epg.map((program, index) => (
-            <View key={index} style={styles.epgItem}>
-              <View style={styles.epgTime}>
-                <Text style={styles.epgTimeText}>
-                  {formatTime(program.time)}
-                </Text>
-                <Text style={styles.epgDuration}>
-                  {formatDuration(program.duration)}
-                </Text>
-              </View>
-              <View style={styles.epgContent}>
-                <Text style={styles.epgTitle}>{program.name}</Text>
-                {program.descr && (
-                  <Text style={styles.epgDescription} numberOfLines={2}>
-                    {program.descr}
-                  </Text>
-                )}
-              </View>
-            </View>
-          ))
-        ) : (
-          <View style={styles.noEpg}>
-            <MaterialIcons name="tv-off" size={48} color="#3f3f46" />
-            <Text style={styles.noEpgText}>No program guide available</Text>
-          </View>
-        )}
+      {/* Player Section */}
+      <View style={styles.playerSection}>
+        <VideoPlayer
+          uri={streamUrl}
+          title={channel?.name || params.name || 'Live Channel'}
+          onBack={() => router.back()}
+          autoPlay
+        />
       </View>
-    </ScrollView>
+    </View>
   );
 }
 
@@ -184,84 +168,64 @@ const styles = StyleSheet.create({
     bottom: 0,
     backgroundColor: '#000',
   },
-  playerSection: {
-    backgroundColor: '#000',
-    borderBottomWidth: 1,
-    borderBottomColor: '#18181b',
-  },
-  playerContainer: {
-    width: '100%',
-    aspectRatio: 16 / 9,
-    backgroundColor: '#000',
-  },
-  fullscreenButton: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    padding: 12,
-    backgroundColor: '#18181b',
-  },
-  fullscreenText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  epgSection: {
+    justifyContent: 'space-between',
     padding: 16,
+    paddingTop: 60,
+    backgroundColor: '#18181b',
+    borderBottomWidth: 1,
+    borderBottomColor: '#27272a',
   },
-  sectionTitle: {
-    fontSize: 20,
+  headerInfo: {
+    flex: 1,
+    marginHorizontal: 12,
+  },
+  channelName: {
+    fontSize: 18,
     fontWeight: 'bold',
     color: '#fff',
-    marginBottom: 16,
   },
-  epgItem: {
-    flexDirection: 'row',
-    backgroundColor: '#18181b',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#27272a',
-  },
-  epgTime: {
-    minWidth: 80,
-    marginRight: 12,
-  },
-  epgTimeText: {
+  channelNumber: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#ef4444',
-    marginBottom: 4,
-  },
-  epgDuration: {
-    fontSize: 12,
     color: '#71717a',
+    marginTop: 2,
   },
-  epgContent: {
-    flex: 1,
+  playerSection: {
+    backgroundColor: '#000',
+    aspectRatio: 16 / 9,
   },
-  epgTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 4,
+  infoSection: {
+    padding: 16,
+    backgroundColor: '#18181b',
+    borderBottomWidth: 1,
+    borderBottomColor: '#27272a',
   },
-  epgDescription: {
+  liveIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  liveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#ef4444',
+    marginRight: 8,
+  },
+  liveText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#ef4444',
+    letterSpacing: 1,
+  },
+  infoText: {
     fontSize: 14,
     color: '#a1a1aa',
-    lineHeight: 20,
   },
-  noEpg: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 48,
-  },
-  noEpgText: {
-    color: '#71717a',
-    fontSize: 16,
-    marginTop: 16,
+  fullscreenButton: {
+    padding: 8,
   },
   loadingText: {
     color: '#fff',

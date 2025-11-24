@@ -1,33 +1,8 @@
-'use client';
-
-import { useAuthStore } from '@/lib/store';
-import ContentRow from '@/components/ContentRow';
-import { SearchBar } from '@/components/SearchBar';
-import { StalkerClient } from '@/lib/stalker-client';
-import LoginForm from '@/components/LoginForm';
-import { useEffect, useState, useRef } from 'react';
-import { verifyPassword } from '@/lib/auth';
+import { redirect } from 'next/navigation';
 
 export default function Home() {
-  const { isAuthenticated, macAddress, portalUrl, categories, channels, setCredentials, setSession, setCategories } = useAuthStore();
-  const [mounted, setMounted] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [defaultStreamUrl, setDefaultStreamUrl] = useState<string | null>(null);
-  const [defaultChannelName, setDefaultChannelName] = useState<string>('Loading...');
-  const [currentItem, setCurrentItem] = useState<any>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  
-  // Tab state
-  const [activeTab, setActiveTab] = useState<'channels' | 'movies' | 'series'>('channels');
-  const [movieCategories, setMovieCategories] = useState<Array<{ id: string; title: string }>>([]);
-  const [seriesCategories, setSeriesCategories] = useState<Array<{ id: string; title: string }>>([]);
-  
-  // Selected category state for each tab
-  const [selectedChannelCategory, setSelectedChannelCategory] = useState<string>('');
-  const [selectedMovieCategory, setSelectedMovieCategory] = useState<string>('');
-  const [selectedSeriesCategory, setSelectedSeriesCategory] = useState<string>('');
-  
-  // Search state
+  // Redirect root to dashboard since UI is now in expo app
+  redirect('/dashboard');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -153,8 +128,8 @@ export default function Home() {
              return;
           }
           
-          // Filter out censored and dvb categories
-          const filteredCats = cats.filter((cat: { censored?: number; id: string }) => cat.censored !== 1 && cat.id !== 'dvb');
+          // Show all categories (including censored/adult content)
+          const filteredCats = cats.filter((cat: { id: string }) => cat.id !== 'dvb');
           setCategories(filteredCats);
           if (filteredCats.length > 0) {
             setSelectedChannelCategory(filteredCats[0].id);

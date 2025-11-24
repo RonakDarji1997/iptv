@@ -5,137 +5,333 @@ import {
   StyleSheet,
   ActivityIndicator,
   Pressable,
-  FlatList,
+  ScrollView,
+  Image,
   useWindowDimensions,
+  Platform,
 } from 'react-native';
-import { useState } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
-import { ApiClient } from '@/lib/api-client';
-import ContentCard from '@/components/ContentCard';
+import { useSnapshotStore } from '@/lib/snapshot-store';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 export default function SearchScreen() {
   const router = useRouter();
-  const { portalUrl, macAddress } = useAuthStore();
+  const { snapshot: cachedSnapshot, setSnapshot } = useSnapshotStore();
+  const { user, selectedProfile } = useAuthStore();
   const { width: screenWidth } = useWindowDimensions();
 
-  // Calculate card size based on screen width - responsive columns with vertical posters
-  const getNumColumns = () => {
-    if (screenWidth < 480) return 2; // Small phones
-    if (screenWidth < 768) return 3; // Phones
-    if (screenWidth < 1024) return 4; // Tablets
-    if (screenWidth < 1440) return 5; // Small desktops
-    if (screenWidth < 1920) return 6; // Medium desktops
-    return 7; // Large screens
+  const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [providerId, setProviderId] = useState<string>('');
+  const [isSearching, setIsSearching] = useState(false);
+
+  // Debounce search query for performance (100ms for instant feel)
+  useEffect(() => {
+    if (query !== debouncedQuery) {
+      setIsSearching(true);
+    }
+    
+    const timer = setTimeout(() => {
+      setDebouncedQuery(query);
+      setIsSearching(false);
+    }, 100); // 100ms debounce - fast and smooth
+
+    return () => clearTimeout(timer);
+  }, [query, debouncedQuery]);
+
+  // Load snapshot when component mounts or profile changes
+  useEffect(() => {
+    if (cachedSnapshot) {
+      console.log('[Search] Using cached snapshot');
+      // Extract providerId from snapshot metadata
+      if (cachedSnapshot.metadata?.providerId) {
+        setProviderId(cachedSnapshot.metadata.providerId);
+      }
+      setLoading(false);
+    } else {
+      console.log('[Search] No cache, loading snapshot...');
+      loadSnapshot();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cachedSnapshot]);
+
+  // Reload snapshot when profile changes
+  useEffect(() => {
+    if (selectedProfile) {
+      console.log('[Search] Profile changed, reloading snapshot...');
+      loadSnapshot();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProfile?.id]);
+
+  const loadSnapshot = async () => {
+    if (!user) {
+      setError('Not authenticated');
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setError('');
+      setLoading(true);
+
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
+      
+      const providersResp = await fetch(`${apiUrl}/api/providers?userId=${user.id}`);
+      const providersData = await providersResp.json();
+      
+      if (!providersData.providers || providersData.providers.length === 0) {
+        setError('No provider configured');
+        setLoading(false);
+        return;
+      }
+
+      const provider = providersData.providers[0];
+      setProviderId(provider.id); // Store providerId in state
+      
+      const profileParam = selectedProfile?.id ? `?profileId=${selectedProfile.id}` : '';
+      const snapshotResp = await fetch(`${apiUrl}/api/providers/${provider.id}/snapshot${profileParam}`, {
+        headers: {
+          'Accept-Encoding': 'gzip',
+        },
+      });
+
+      if (!snapshotResp.ok) {
+        throw new Error('Failed to load content');
+      }
+
+      const snapshot = await snapshotResp.json();
+      setSnapshot(snapshot);
+      setLoading(false);
+
+      console.log(`[Search] Loaded snapshot with profile ${selectedProfile?.id || 'default'}`);
+    } catch (err) {
+      console.error('[Search] Error loading snapshot:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load content');
+      setLoading(false);
+    }
   };
   
-  const numColumns = getNumColumns();
-  const gap = 16;
-  const totalPadding = 32; // 16px padding on each side
-  const totalGaps = (numColumns - 1) * gap; // gaps between cards
-  const availableWidth = screenWidth - totalPadding - totalGaps;
-  const cardWidth = Math.floor(availableWidth / numColumns);
-  const cardHeight = Math.floor(cardWidth * 1.5); // 2:3 aspect ratio for vertical posters
+  // Get portalUrl from snapshot metadata with fallback
+  const portalUrl = cachedSnapshot?.metadata?.portalUrl || 'http://tv.stream4k.cc/stalker_portal/';
 
-  const [query, setQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  // Card dimensions for horizontal scrolling
+  const cardWidth = 140;
+  const cardHeight = 210;
 
-  const handleSearch = async (searchQuery: string) => {
+  // Helper function to convert relative image URLs to full URLs (same as ContentCard)
+  const getImageUrl = useCallback((imageUrl: string | null | undefined, itemName: string = '', contentType: string = 'vod'): string => {
+    const baseUrl = portalUrl;
+    const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+    const domainUrl = cleanBaseUrl.replace(/\/stalker_portal\/?$/, '');
+
+    if (!imageUrl) {
+      return `https://placehold.co/${cardWidth}x${cardHeight}/1f2937/ffffff?text=${encodeURIComponent(itemName || 'Content')}`;
+    }
+
+    if (imageUrl.startsWith('http')) {
+      return imageUrl;
+    }
+    
+    if (imageUrl.startsWith('/')) {
+      return `${domainUrl}${imageUrl}`;
+    }
+    
+    // For channels without full path
+    if (contentType === 'itv') {
+      return `${cleanBaseUrl}/misc/logos/320/${imageUrl}`;
+    }
+    
+    return imageUrl;
+  }, [portalUrl, cardWidth, cardHeight]);
+
+  // Search in cached snapshot data (instant, no API calls)
+  const searchResults = useMemo(() => {
+    if (!debouncedQuery.trim() || debouncedQuery.trim().length < 2) {
+      return { channels: [], movies: [], series: [] };
+    }
+
+    if (!cachedSnapshot) {
+      return { channels: [], movies: [], series: [] };
+    }
+
+    const searchTerm = debouncedQuery.toLowerCase().trim();
+    const channels: any[] = [];
+    const movies: any[] = [];
+    const series: any[] = [];
+
+    // Optimized search - prioritize name matches for speed
+    // Search in channels (fastest - typically smallest dataset)
+    if (cachedSnapshot.channels) {
+      for (const channel of cachedSnapshot.channels) {
+        if (channel.name?.toLowerCase().includes(searchTerm) ||
+            channel.number?.toString().includes(searchTerm)) {
+          channels.push(channel);
+        }
+      }
+    }
+
+    // Search in movies (exclude censored, prioritize name)
+    if (cachedSnapshot.movies) {
+      for (const movie of cachedSnapshot.movies) {
+        // Skip censored content early
+        if (movie.censored === '1' || movie.censored === 1 || movie.censored === true) {
+          continue;
+        }
+        
+        // Check name first (most common match)
+        if (movie.name?.toLowerCase().includes(searchTerm)) {
+          movies.push(movie);
+          continue;
+        }
+        
+        // Then check other fields
+        if (movie.o_name?.toLowerCase().includes(searchTerm) ||
+            movie.description?.toLowerCase().includes(searchTerm) ||
+            movie.actors?.toLowerCase().includes(searchTerm) ||
+            movie.director?.toLowerCase().includes(searchTerm)) {
+          movies.push(movie);
+        }
+      }
+    }
+
+    // Search in series (exclude censored, prioritize name)
+    if (cachedSnapshot.series) {
+      for (const seriesItem of cachedSnapshot.series) {
+        // Skip censored content early
+        if (seriesItem.censored === '1' || seriesItem.censored === 1 || seriesItem.censored === true) {
+          continue;
+        }
+        
+        // Check name first (most common match)
+        if (seriesItem.name?.toLowerCase().includes(searchTerm)) {
+          series.push(seriesItem);
+          continue;
+        }
+        
+        // Then check other fields
+        if (seriesItem.o_name?.toLowerCase().includes(searchTerm) ||
+            seriesItem.description?.toLowerCase().includes(searchTerm) ||
+            seriesItem.actors?.toLowerCase().includes(searchTerm) ||
+            seriesItem.director?.toLowerCase().includes(searchTerm)) {
+          series.push(seriesItem);
+        }
+      }
+    }
+
+    const total = channels.length + movies.length + series.length;
+    console.log(`[Search] Found ${total} results (${channels.length} channels, ${movies.length} movies, ${series.length} series) for "${searchTerm}"`);
+    return { channels, movies, series };
+  }, [debouncedQuery, cachedSnapshot]);
+
+  const handleSearch = (searchQuery: string) => {
     setQuery(searchQuery);
-    
-    if (!searchQuery.trim()) {
-      setSearchResults([]);
-      setLoading(false);
-      return;
-    }
-    
-    // Only search if query is at least 2 characters
-    if (searchQuery.trim().length < 2) {
-      return;
-    }
-    
-    if (!portalUrl || !macAddress) {
-      setError('Not authenticated');
-      return;
-    }
-    
-    setLoading(true);
-    setError('');
-    
-    try {
-      const client = new ApiClient({ url: portalUrl, mac: macAddress });
-      const { data } = await client.searchContent(searchQuery, 1);
-      
-      setSearchResults(data);
-    } catch (err) {
-      console.error('Search error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to search');
-      setSearchResults([]);
-    } finally {
-      setLoading(false);
-    }
   };
 
-  const handleContentPress = (item: any) => {
-    // Determine if it's a series or movie based on is_series flag or genres
-    const isSeries = item.is_series === '1' || item.genres_str?.includes('SERIES');
-    
-    if (isSeries) {
-      router.push({
-        pathname: '/series/[id]',
-        params: {
-          id: item.id,
-          title: item.name,
-          screenshot: item.screenshot_uri || item.screenshot,
-          description: item.description || '',
-          actors: item.actors || '',
-          year: item.year || '',
-          country: item.country || '',
-          genres: item.genres_str || '',
-          totalFiles: item.has_files || '',
-        },
-      });
-    } else {
-      router.push({
-        pathname: '/watch/[id]',
-        params: {
-          id: item.id,
-          type: 'vod',
-          title: item.name,
-        },
-      });
+  const handleChannelPress = (channel: any) => {
+    if (!providerId) {
+      console.error('[Search] Cannot navigate: providerId is missing');
+      return;
     }
+    if (!channel.cmd) {
+      console.error('[Search] Cannot navigate: channel.cmd is missing');
+      return;
+    }
+    
+    router.push({
+      pathname: '/channel/[id]',
+      params: {
+        id: channel.id,
+        name: channel.name,
+        logo: channel.logo || '',
+        providerId: providerId,
+        cmd: channel.cmd,
+      },
+    });
+  };
+
+  const handleMoviePress = (movie: any) => {
+    if (!providerId) {
+      console.error('[Search] Cannot navigate: providerId is missing');
+      return;
+    }
+    
+    router.push({
+      pathname: '/watch/[id]',
+      params: {
+        id: movie.id,
+        type: 'vod',
+        title: movie.name,
+        screenshot: movie.poster || movie.screenshot_uri || '',
+        providerId: providerId,
+      },
+    });
+  };
+
+  const handleSeriesPress = (series: any) => {
+    if (!providerId) {
+      console.error('[Search] Cannot navigate: providerId is missing');
+      return;
+    }
+    
+    router.push({
+      pathname: '/series/[id]',
+      params: {
+        id: series.id,
+        title: series.name,
+        screenshot: series.screenshot_uri || series.screenshot || '',
+        description: series.description || '',
+        actors: series.actors || '',
+        year: series.year || '',
+        country: series.country || '',
+        genres: series.genres_str || '',
+        totalFiles: series.has_files || series.episodeCount || '',
+        providerId: providerId,
+      },
+    });
   };
 
   const handleClear = () => {
     setQuery('');
-    setSearchResults([]);
-    setError('');
   };
+
+  const totalResults = searchResults.channels.length + searchResults.movies.length + searchResults.series.length;
+  const hasResults = query.length >= 2 && totalResults > 0;
 
   return (
     <View style={styles.container}>
       {/* Search Input */}
       <View style={styles.searchContainer}>
         <View style={styles.searchInputWrapper}>
-          <Text style={styles.searchIcon}>🔍</Text>
+          <MaterialIcons name="search" size={24} color="#71717a" style={{ marginRight: 8 }} />
           <TextInput
             style={styles.searchInput}
             value={query}
             onChangeText={handleSearch}
-            placeholder="Search movies and series..."
+            placeholder="Search channels, movies, and series..."
             placeholderTextColor="#71717a"
             autoCapitalize="none"
             autoCorrect={false}
             returnKeyType="search"
+            nativeID="search-input"
+            accessibilityLabel="Search for channels, movies, and series"
+            {...(Platform.OS === 'web' && {
+              id: 'search-input',
+              name: 'search',
+              autoComplete: 'off',
+            })}
           />
-          {query.length > 0 && (
+          {isSearching && query.length > 0 ? (
+            <ActivityIndicator size="small" color="#ef4444" style={{ marginHorizontal: 8 }} />
+          ) : query.length > 0 ? (
             <Pressable onPress={handleClear} style={styles.clearButton}>
-              <Text style={styles.clearIcon}>✕</Text>
+              <MaterialIcons name="close" size={20} color="#71717a" />
             </Pressable>
-          )}
+          ) : null}
         </View>
       </View>
 
@@ -143,18 +339,34 @@ export default function SearchScreen() {
       {loading ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color="#ef4444" />
-          <Text style={styles.loadingText}>Searching...</Text>
+          <Text style={styles.loadingText}>Loading content...</Text>
         </View>
       ) : error ? (
         <View style={styles.centerContainer}>
-          <Text style={styles.errorText}>{error}</Text>
+          <MaterialIcons name="error-outline" size={64} color="#ef4444" />
+          <Text style={styles.emptyTitle}>Error</Text>
+          <Text style={styles.emptyText}>{error}</Text>
+          <Pressable 
+            style={{ marginTop: 16, paddingHorizontal: 24, paddingVertical: 12, backgroundColor: '#ef4444', borderRadius: 8 }}
+            onPress={loadSnapshot}
+          >
+            <Text style={{ color: '#fff', fontWeight: '600' }}>Retry</Text>
+          </Pressable>
+        </View>
+      ) : !cachedSnapshot ? (
+        <View style={styles.centerContainer}>
+          <MaterialIcons name="error-outline" size={64} color="#71717a" />
+          <Text style={styles.emptyTitle}>No Content Available</Text>
+          <Text style={styles.emptyText}>
+            Please select a provider to load content
+          </Text>
         </View>
       ) : query.length === 0 ? (
         <View style={styles.centerContainer}>
-          <Text style={styles.emptyIcon}>🔍</Text>
-          <Text style={styles.emptyTitle}>Search for Movies & Series</Text>
+          <MaterialIcons name="search" size={64} color="#3f3f46" />
+          <Text style={styles.emptyTitle}>Search for Content</Text>
           <Text style={styles.emptyText}>
-            Enter at least 2 characters to start searching
+            Find channels, movies, and series
           </Text>
         </View>
       ) : query.length < 2 ? (
@@ -163,35 +375,136 @@ export default function SearchScreen() {
             Type at least 2 characters...
           </Text>
         </View>
-      ) : searchResults.length === 0 ? (
+      ) : !hasResults ? (
         <View style={styles.centerContainer}>
-          <Text style={styles.emptyIcon}>😔</Text>
+          <MaterialIcons name="sentiment-dissatisfied" size={64} color="#3f3f46" />
           <Text style={styles.emptyTitle}>No Results Found</Text>
           <Text style={styles.emptyText}>
             Try searching with different keywords
           </Text>
         </View>
       ) : (
-        <View style={styles.resultsContainer}>
+        <ScrollView style={styles.resultsContainer}>
+          {/* Results Count */}
           <Text style={styles.resultsCount}>
-            Found {searchResults.length} result{searchResults.length !== 1 ? 's' : ''}
+            Found {totalResults} result{totalResults !== 1 ? 's' : ''} 
+            {searchResults.channels.length > 0 && ` • ${searchResults.channels.length} channels`}
+            {searchResults.movies.length > 0 && ` • ${searchResults.movies.length} movies`}
+            {searchResults.series.length > 0 && ` • ${searchResults.series.length} series`}
           </Text>
-          <FlatList
-            data={searchResults}
-            keyExtractor={(item) => item.id.toString()}
-            contentContainerStyle={styles.gridContainer}
-            renderItem={({ item }) => (
-              <ContentCard
-                item={item}
-                onPress={() => handleContentPress(item)}
-                contentType={item.is_series === '1' || item.genres_str?.includes('SERIES') ? 'series' : 'vod'}
-                portalUrl={portalUrl || undefined}
-                width={cardWidth}
-                height={cardHeight}
-              />
-            )}
-          />
-        </View>
+
+          {/* Channels Section */}
+          {searchResults.channels.length > 0 && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <MaterialIcons name="live-tv" size={20} color="#ef4444" />
+                <Text style={styles.sectionTitle}>Channels ({searchResults.channels.length})</Text>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
+                {searchResults.channels.map((channel: any) => (
+                  <Pressable
+                    key={channel.id}
+                    style={[styles.channelCard, { width: cardWidth * 1.2 }]}
+                    onPress={() => handleChannelPress(channel)}
+                  >
+                    <View style={styles.channelLogoContainer}>
+                      <Image 
+                        source={{ uri: getImageUrl(channel.logo, channel.name, 'itv') }} 
+                        style={styles.channelLogo} 
+                        resizeMode="contain"
+                      />
+                    </View>
+                    <View style={styles.channelInfo}>
+                      {channel.number && (
+                        <Text style={styles.channelNumber}>{channel.number}</Text>
+                      )}
+                      <Text style={styles.channelName} numberOfLines={2}>{channel.name}</Text>
+                    </View>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+
+          {/* Movies Section */}
+          {searchResults.movies.length > 0 && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <MaterialIcons name="movie" size={20} color="#3b82f6" />
+                <Text style={styles.sectionTitle}>Movies ({searchResults.movies.length})</Text>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
+                {searchResults.movies.map((movie: any) => (
+                  <Pressable
+                    key={movie.id}
+                    style={[styles.contentCard, { width: cardWidth, height: cardHeight }]}
+                    onPress={() => handleMoviePress(movie)}
+                  >
+                    <Image
+                      source={{ uri: getImageUrl(movie.screenshot_uri || movie.poster, movie.name, 'vod') }}
+                      style={styles.poster}
+                      resizeMode="cover"
+                    />
+                    <View style={styles.contentOverlay}>
+                      <Text style={styles.contentTitle} numberOfLines={2}>{movie.name}</Text>
+                      {movie.year && (
+                        <Text style={styles.contentYear}>{movie.year}</Text>
+                      )}
+                      {movie.ratingImdb && (
+                        <View style={styles.ratingBadge}>
+                          <MaterialIcons name="star" size={12} color="#fbbf24" />
+                          <Text style={styles.ratingText}>{movie.ratingImdb}</Text>
+                        </View>
+                      )}
+                    </View>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+
+          {/* Series Section */}
+          {searchResults.series.length > 0 && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <MaterialIcons name="tv" size={20} color="#22c55e" />
+                <Text style={styles.sectionTitle}>Series ({searchResults.series.length})</Text>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
+                {searchResults.series.map((series: any) => (
+                  <Pressable
+                    key={series.id}
+                    style={[styles.contentCard, { width: cardWidth, height: cardHeight }]}
+                    onPress={() => handleSeriesPress(series)}
+                  >
+                    <Image
+                      source={{ uri: getImageUrl(series.screenshot_uri || series.poster, series.name, 'series') }}
+                      style={styles.poster}
+                      resizeMode="cover"
+                    />
+                    <View style={styles.contentOverlay}>
+                      <Text style={styles.contentTitle} numberOfLines={2}>{series.name}</Text>
+                      {series.year && (
+                        <Text style={styles.contentYear}>{series.year}</Text>
+                      )}
+                      {series.episodeCount > 0 && (
+                        <Text style={styles.episodeCount}>{series.episodeCount} episodes</Text>
+                      )}
+                      {series.ratingImdb && (
+                        <View style={styles.ratingBadge}>
+                          <MaterialIcons name="star" size={12} color="#fbbf24" />
+                          <Text style={styles.ratingText}>{series.ratingImdb}</Text>
+                        </View>
+                      )}
+                    </View>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+
+          <View style={{ height: 40 }} />
+        </ScrollView>
       )}
     </View>
   );
@@ -217,10 +530,6 @@ const styles = StyleSheet.create({
     borderColor: '#3f3f46',
     paddingHorizontal: 12,
   },
-  searchIcon: {
-    fontSize: 20,
-    marginRight: 8,
-  },
   searchInput: {
     flex: 1,
     color: '#fff',
@@ -230,35 +539,22 @@ const styles = StyleSheet.create({
   clearButton: {
     padding: 4,
   },
-  clearIcon: {
-    color: '#71717a',
-    fontSize: 20,
-  },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
+    gap: 16,
   },
   loadingText: {
-    color: '#fff',
+    color: '#a1a1aa',
     fontSize: 16,
-    marginTop: 16,
-  },
-  errorText: {
-    color: '#ef4444',
-    fontSize: 16,
-    textAlign: 'center',
-  },
-  emptyIcon: {
-    fontSize: 64,
-    marginBottom: 16,
   },
   emptyTitle: {
     color: '#fff',
     fontSize: 20,
     fontWeight: 'bold',
-    marginBottom: 8,
+    marginTop: 8,
   },
   emptyText: {
     color: '#71717a',
@@ -270,16 +566,116 @@ const styles = StyleSheet.create({
   },
   resultsCount: {
     color: '#a1a1aa',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '500',
     paddingHorizontal: 16,
     paddingVertical: 12,
+    backgroundColor: '#18181b',
   },
-  gridContainer: {
-    padding: 16,
+  section: {
+    marginTop: 16,
+  },
+  sectionHeader: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 16,
-    justifyContent: 'flex-start',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+  sectionTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  horizontalScroll: {
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  channelCard: {
+    backgroundColor: '#18181b',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#27272a',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    height: 80,
+  },
+  channelLogoContainer: {
+    width: 56,
+    height: 56,
+    backgroundColor: '#27272a',
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  channelLogo: {
+    width: 48,
+    height: 48,
+  },
+  channelInfo: {
+    flex: 1,
+  },
+  channelNumber: {
+    color: '#ef4444',
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  channelName: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  contentCard: {
+    backgroundColor: '#18181b',
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#27272a',
+  },
+  poster: {
+    width: '100%',
+    height: '100%',
+  },
+  placeholderPoster: {
+    backgroundColor: '#27272a',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  contentOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    padding: 8,
+  },
+  contentTitle: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  contentYear: {
+    color: '#a1a1aa',
+    fontSize: 11,
+  },
+  episodeCount: {
+    color: '#22c55e',
+    fontSize: 11,
+    marginTop: 2,
+  },
+  ratingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 4,
+  },
+  ratingText: {
+    color: '#fbbf24',
+    fontSize: 11,
+    fontWeight: '600',
   },
 });

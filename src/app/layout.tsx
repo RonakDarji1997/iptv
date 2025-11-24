@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Ronika's IPTV",
-  description: "Secure IPTV streaming platform with live channels, movies, and series",
+  title: "IPTV Backend & Dashboard",
+  description: "Backend API and admin dashboard for IPTV platform",
 };
 
 export default function RootLayout({
