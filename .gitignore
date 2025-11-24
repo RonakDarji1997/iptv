@@ -54,3 +54,4 @@ public/assets/node_modules/
 web-dist/assets/node_modules/
 
 /src/generated/prisma
+snapshot-*.json
