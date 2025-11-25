@@ -83,8 +83,21 @@ export default function SeriesDetailScreen() {
   }, [selectedSeason]);
 
   const loadSeasons = async () => {
+    console.log('[Series Detail] loadSeasons called with:', {
+      seriesId: params.id,
+      providerId: params.providerId,
+      hasJwtToken: !!jwtToken,
+      hasUser: !!user,
+    });
+    
     if (!jwtToken || !user || !params.providerId) {
-      setError('Not authenticated');
+      const missingItems = [];
+      if (!jwtToken) missingItems.push('jwtToken');
+      if (!user) missingItems.push('user');
+      if (!params.providerId) missingItems.push('providerId');
+      
+      console.error('[Series Detail] Missing required items:', missingItems);
+      setError(`Not authenticated or missing: ${missingItems.join(', ')}`);
       setLoading(false);
       return;
     }
@@ -94,12 +107,17 @@ export default function SeriesDetailScreen() {
       setError('');
       DebugLogger.seasonsLoading(params.id);
       const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
+      const seasonsUrl = `${apiUrl}/api/providers/${params.providerId}/series/${params.id}/seasons`;
       
-      const response = await fetch(`${apiUrl}/api/providers/${params.providerId}/series/${params.id}/seasons`, {
+      console.log('[Series Detail] Fetching seasons from:', seasonsUrl);
+      
+      const response = await fetch(seasonsUrl, {
         headers: {
           'Authorization': `Bearer ${jwtToken}`,
         },
       });
+      
+      console.log('[Series Detail] Seasons API response status:', response.status);
       
       if (!response.ok) {
         throw new Error('Failed to load seasons');

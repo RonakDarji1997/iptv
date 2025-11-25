@@ -48,6 +48,18 @@ export default function SetupProviderScreen() {
       return;
     }
 
+    // Validate URL format
+    if (url.trim().startsWith('00:') || url.trim().match(/^[0-9A-Fa-f:]+$/)) {
+      setError('URL field should contain the portal URL (not MAC address)');
+      return;
+    }
+
+    // Validate name is not a URL
+    if (name.trim().startsWith('http://') || name.trim().startsWith('https://')) {
+      setError('Name field should be a friendly name (not the URL)');
+      return;
+    }
+
     if (selectedType === 'STALKER' && !mac.trim()) {
       setError('MAC address is required for Stalker Portal');
       return;
@@ -83,7 +95,7 @@ export default function SetupProviderScreen() {
           name: name.trim(),
           type: selectedType,
           url: finalUrl,
-          mac: selectedType === 'STALKER' ? mac.trim() : undefined,
+          stalkerMac: selectedType === 'STALKER' ? mac.trim() : undefined,
         }),
       });
 
@@ -155,9 +167,10 @@ export default function SetupProviderScreen() {
         {/* Provider Details Form */}
         <View style={styles.section}>
           <Text style={styles.label}>Provider Name</Text>
+          <Text style={styles.helperText}>Give your provider a friendly name (e.g., "Glow TV")</Text>
           <TextInput
             style={styles.input}
-            placeholder="e.g., My IPTV Service"
+            placeholder="e.g., Glow TV, My IPTV Service"
             placeholderTextColor="#6b7280"
             value={name}
             onChangeText={setName}
@@ -168,9 +181,10 @@ export default function SetupProviderScreen() {
 
         <View style={styles.section}>
           <Text style={styles.label}>Portal URL</Text>
+          <Text style={styles.helperText}>Enter the portal URL (e.g., http://glotv.me)</Text>
           <TextInput
             style={styles.input}
-            placeholder="http://example.com/stalker_portal/"
+            placeholder="http://glotv.me"
             placeholderTextColor="#6b7280"
             value={url}
             onChangeText={setUrl}

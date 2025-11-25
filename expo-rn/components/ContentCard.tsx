@@ -1,5 +1,5 @@
 import { View, Text, Image, StyleSheet, Pressable, Platform } from 'react-native';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 interface ContentCardProps {
@@ -26,6 +26,7 @@ interface ContentCardProps {
   width?: number;
   height?: number;
   portalUrl?: string;
+  shouldLoad?: boolean;
 }
 
 export default function ContentCard({
@@ -35,10 +36,20 @@ export default function ContentCard({
   width = 160,
   height = 240,
   portalUrl,
+  shouldLoad = false,
 }: ContentCardProps) {
   const [imageError, setImageError] = useState(false);
+  const [shouldLoadImage, setShouldLoadImage] = useState(false);
+  const viewRef = useRef<View>(null);
   const scale = useSharedValue(1);
   const opacity = useSharedValue(1);
+
+  // Load image when shouldLoad becomes true
+  useEffect(() => {
+    if (shouldLoad && !shouldLoadImage) {
+      setShouldLoadImage(true);
+    }
+  }, [shouldLoad, shouldLoadImage]);
 
   // Only enable hover effects on web (desktop / browser) — don't show on mobile/touch
   const isHoverEnabled = Platform.OS === 'web';
@@ -115,7 +126,7 @@ export default function ContentCard({
   }));
 
   return (
-    <Animated.View style={[animatedStyle, { width, height }]}>
+    <Animated.View ref={viewRef} style={[animatedStyle, { width, height }]}>
       <Pressable
         style={({ pressed }) => [
           styles.container,
@@ -128,12 +139,16 @@ export default function ContentCard({
         onHoverOut={isHoverEnabled ? handleHoverOut : undefined}
       >
         <View style={styles.imageContainer}>
-          <Image
-            source={{ uri: imageUrl }}
-            style={styles.image}
-            resizeMode="cover"
-            onError={() => setImageError(true)}
-          />
+          {shouldLoadImage ? (
+            <Image
+              source={{ uri: imageUrl }}
+              style={styles.image}
+              resizeMode="cover"
+              onError={() => setImageError(true)}
+            />
+          ) : (
+            <View style={[styles.image, styles.imagePlaceholder]} />
+          )}
           <View style={styles.gradient} />
         
         {/* Badges */}
@@ -197,6 +212,9 @@ const styles = StyleSheet.create({
   image: {
     width: '100%',
     height: '100%',
+  },
+  imagePlaceholder: {
+    backgroundColor: '#27272a',
   },
   gradient: {
     position: 'absolute',

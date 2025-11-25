@@ -88,7 +88,12 @@ export async function GET(
 
     // Initialize client with credentials
     const client = new StalkerClient(provider.url, bearer, adid);
-    Object.assign(client, { token: '', mac });
+    Object.assign(client, { mac });
+
+    // Perform fresh handshake to get valid token
+    console.log('[Movie File] Performing fresh handshake...');
+    await client.handshake();
+    console.log('[Movie File] ✅ Fresh handshake successful');
 
     // Get movie file info using the Stalker portal's external ID
     const fileInfo = await client.getMovieInfo(movie.externalId);

@@ -31,11 +31,10 @@ interface Category {
 
 export default function MoviesScreen() {
   const router = useRouter();
-  const { user, selectedProfile } = useAuthStore();
+  const { user, selectedProfile, selectedProviderIds } = useAuthStore();
   const { snapshot: cachedSnapshot, setSnapshot } = useSnapshotStore();
 
   const [categories, setCategories] = useState<Category[]>([]);
-  const [providerId, setProviderId] = useState<string | null>(null);
   const [movies, setMovies] = useState<Movie[]>([]);
   const [categorizedMovies, setCategorizedMovies] = useState<{ [key: string]: Movie[] }>({});
   const [loading, setLoading] = useState(true);
@@ -90,54 +89,76 @@ export default function MoviesScreen() {
       return;
     }
 
+    if (selectedProviderIds.length === 0) {
+      setError('No provider selected');
+      setLoading(false);
+      return;
+    }
+
     try {
       setError('');
       if (!forceRefresh) setLoading(true);
 
       const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
       
-      // Get user's provider
-      const providersResp = await fetch(`${apiUrl}/api/providers?userId=${user.id}`);
-      const providersData = await providersResp.json();
-      
-      if (!providersData.providers || providersData.providers.length === 0) {
-        setError('No provider configured');
-        setLoading(false);
-        return;
-      }
-
-      const provider = providersData.providers[0];
-      setProviderId(provider.id);
-
-      // Fetch compressed snapshot
+      // Fetch snapshots for all selected providers
       const profileParam = selectedProfile?.id ? `?profileId=${selectedProfile.id}` : '';
-      const snapshotResp = await fetch(`${apiUrl}/api/providers/${provider.id}/snapshot${profileParam}`, {
-        headers: {
-          'Accept-Encoding': 'gzip',
-        },
-      });
+      const snapshotPromises = selectedProviderIds.map(providerId =>
+        fetch(`${apiUrl}/api/providers/${providerId}/snapshot${profileParam}`, {
+          headers: { 'Accept-Encoding': 'gzip' },
+        }).then(r => r.ok ? r.json() : null)
+      );
 
-      if (!snapshotResp.ok) {
-        throw new Error('Failed to load content');
+      const snapshots = (await Promise.all(snapshotPromises)).filter(Boolean);
+
+      if (snapshots.length === 0) {
+        throw new Error('Failed to load content from selected providers');
       }
 
-      const snapshot = await snapshotResp.json();
+      // Merge snapshots
+      const mergedSnapshot = {
+        categories: [],
+        movies: [],
+        series: [],
+        channels: [],
+        provider: snapshots[0].provider, // Keep first provider's info for compatibility
+      };
 
-      // Cache the snapshot in store
-      setSnapshot(snapshot);
+      // Merge categories (deduplicate by name)
+      const categoryMap = new Map();
+      snapshots.forEach(snapshot => {
+        snapshot.categories.forEach((cat: any) => {
+          if (!categoryMap.has(cat.name)) {
+            categoryMap.set(cat.name, cat);
+          }
+        });
+      });
+      mergedSnapshot.categories = Array.from(categoryMap.values());
 
-      // Extract movie categories (categories that contain movies)
-      const movieCategories = snapshot.categories.filter(
+      // Merge movies (deduplicate by id)
+      const movieMap = new Map();
+      snapshots.forEach(snapshot => {
+        (snapshot.movies || []).forEach((movie: any) => {
+          if (!movieMap.has(movie.id)) {
+            movieMap.set(movie.id, movie);
+          }
+        });
+      });
+      mergedSnapshot.movies = Array.from(movieMap.values());
+
+      // Cache the merged snapshot
+      setSnapshot(mergedSnapshot);
+
+      // Extract movie categories
+      const movieCategories = mergedSnapshot.categories.filter(
         (cat: any) => cat.hasMovies === true
       );
 
       // make sure adult categories appear last
       setCategories(orderCategoriesWithAdultLast(movieCategories));
-
-      // Set all movies
-      setMovies(snapshot.movies || []);
+      setMovies(mergedSnapshot.movies);
       
-      console.log(`[Movies] Loaded ${snapshot.movies?.length || 0} movies, ${movieCategories.length} categories`);
+      console.log(`[Movies] Loaded ${mergedSnapshot.movies.length} movies from ${snapshots.length} providers, ${movieCategories.length} categories`);
     } catch (err) {
       console.error('Load snapshot error:', err);
       setError(err instanceof Error ? err.message : 'Failed to load movies');
@@ -161,6 +182,24 @@ export default function MoviesScreen() {
   };
 
   const handleMoviePress = (item: Movie) => {
+    // Use providerId embedded in movie from merge, fallback to first selected
+    const providerId = (item as any).providerId || selectedProviderIds[0];
+    
+    console.log('[Movies] Clicking movie:', {
+      movieId: item.id,
+      movieName: item.name,
+      providerId,
+      embeddedProviderId: (item as any).providerId,
+      fallbackProviderId: selectedProviderIds[0],
+      hasProviderId: !!providerId,
+    });
+    
+    if (!providerId) {
+      console.error('[Movies] ERROR: No providerId set!');
+      setError('Provider not selected. Please select a provider from dashboard.');
+      return;
+    }
+    
     router.push({
       pathname: '/watch/[id]',
       params: {
@@ -168,7 +207,7 @@ export default function MoviesScreen() {
         type: 'vod',
         title: item.name,
         screenshot: item.poster || '',
-        providerId: providerId || '',
+        providerId,
       },
     });
   };
@@ -200,7 +239,6 @@ export default function MoviesScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Category Rows */}
       <ScrollView
         style={styles.scrollView}
         refreshControl={

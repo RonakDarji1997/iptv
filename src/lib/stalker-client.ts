@@ -4,6 +4,40 @@ interface StalkerResponse<T> {
     js: T;
 }
 
+/**
+ * Follow HTTP redirects to discover actual portal URL
+ * Many portals use redirect URLs (e.g., glotv.me → play.zee5.live)
+ */
+export async function discoverPortalUrl(url: string): Promise<string> {
+    try {
+        console.log(`[DiscoverURL] 📍 Checking URL: ${url}`);
+        const response = await fetch(url, {
+            method: 'HEAD',
+            redirect: 'manual'
+        });
+        
+        console.log(`[DiscoverURL] 📊 Response status: ${response.status}`);
+        console.log(`[DiscoverURL] 📋 Response headers:`, Object.fromEntries(response.headers.entries()));
+        
+        // Check for redirect
+        if (response.status === 301 || response.status === 302) {
+            const location = response.headers.get('location');
+            if (location) {
+                console.log(`[DiscoverURL] 🔀 Redirect detected: ${url} → ${location}`);
+                // Recursively follow redirects
+                return discoverPortalUrl(location);
+            }
+        }
+        
+        console.log(`[DiscoverURL] ✅ Final portal URL: ${url}`);
+        return url;
+    } catch (error) {
+        console.error(`[DiscoverURL] ❌ Error checking redirects:`, error);
+        console.warn(`[DiscoverURL] ⚠️ Using original URL: ${url}`);
+        return url;
+    }
+}
+
 export interface EpgProgram {
     id: string;
     ch_id: string;
@@ -27,15 +61,17 @@ export class StalkerClient {
     private token: string | null = null;
     private bearer: string;
     private adid: string;
+    private sn: string;  // Serial number
 
     constructor(credentials: StalkerCredentials);
-    constructor(url: string, bearer: string, adid: string);
-    constructor(credentialsOrUrl: StalkerCredentials | string, bearer?: string, adid?: string) {
+    constructor(url: string, bearer: string, adid: string, sn?: string);
+    constructor(credentialsOrUrl: StalkerCredentials | string, bearer?: string, adid?: string, sn?: string) {
         if (typeof credentialsOrUrl === 'string') {
-            // New signature: (url, bearer, adid)
+            // New signature: (url, bearer, adid, sn)
             this.baseUrl = credentialsOrUrl.endsWith('/') ? credentialsOrUrl : `${credentialsOrUrl}/`;
             this.bearer = bearer || '';
             this.adid = adid || '';
+            this.sn = sn || '058357N656529';  // Default serial number
             this.mac = ''; // Will be set during handshake
         } else {
             // Old signature: (credentials)
@@ -43,6 +79,7 @@ export class StalkerClient {
             this.mac = credentialsOrUrl.mac;
             this.bearer = '';
             this.adid = '';
+            this.sn = '058357N656529';  // Default serial number
         }
     }
 
@@ -67,6 +104,7 @@ export class StalkerClient {
             forwardParams.append('type', 'stb');
         }
         forwardParams.append('action', action);
+        forwardParams.append('JsHttpRequest', '1-xml');
         
         // Append other params
         Object.entries(params).forEach(([key, value]) => {
@@ -79,26 +117,46 @@ export class StalkerClient {
             finalUrl += '/';
         }
         finalUrl = `${finalUrl}server/load.php?${forwardParams.toString()}`;
+        console.log(`[StalkerClient] 📡 Request URL: ${finalUrl}`);
 
         // Get credentials from instance or environment (prefer instance, then server-side vars, fallback to public)
         const bearer = this.bearer || process.env.STALKER_BEARER || process.env.NEXT_PUBLIC_STALKER_BEARER || '';
         const adid = this.adid || process.env.STALKER_ADID || process.env.NEXT_PUBLIC_STALKER_ADID || '';
 
+        // MAC address MUST be lowercase in cookie (Stalker portal requirement)
+        // DO NOT include st= token in cookie - it causes authorization failures
+        const cookie = `mac=${this.mac.toLowerCase()}; timezone=America/Toronto; adid=${adid}`;
+        console.log(`[StalkerClient] 🍪 Cookie: ${cookie}`);
+        
         const headers: HeadersInit = {
             'User-Agent': 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
             'X-User-Agent': 'Model: MAG270; Link: WiFi',
             'Referer': this.baseUrl + 'c/',
-            'Authorization': `Bearer ${bearer}`,
             'Accept-Encoding': 'gzip',
-            'Cookie': `mac=${this.mac.toLowerCase()}; timezone=America/Toronto; adid=${adid};${this.token ? ` st=${this.token};` : ''}`,
+            'Connection': 'keep-alive',
+            'Cookie': cookie,
         };
+        
+        // Use bearer token for Authorization (NOT handshake token)
+        // Only add Authorization header for non-handshake requests
+        if (action !== 'handshake' && bearer) {
+            headers['Authorization'] = `Bearer ${bearer}`;
+            console.log(`[StalkerClient] 🔑 Authorization header: Bearer ${bearer}`);
+        } else {
+            console.log(`[StalkerClient] 🔑 No Authorization header (handshake or no bearer)`);
+        }
 
         try {
+            console.log(`[StalkerClient] ⏳ Sending ${action} request...`);
+            console.log(`[StalkerClient] 📤 Request headers:`, headers);
             const response = await fetch(finalUrl, { method: 'GET', headers });
+            console.log(`[StalkerClient] 📥 Response status: ${response.status} ${response.statusText}`);
+            console.log(`[StalkerClient] 📥 Response headers:`, Object.fromEntries(response.headers.entries()));
             
             if (!response.ok) {
                 const errorText = await response.text();
-                console.error(`[StalkerClient] Direct request failed: ${response.status} ${response.statusText}`);
+                console.error(`[StalkerClient] ❌ Request failed: ${response.status} ${response.statusText}`);
+                console.error(`[StalkerClient] ❌ Error body: ${errorText}`);
                 
                 // Handle rate limiting with retry
                 if (response.status === 429) {
@@ -108,12 +166,23 @@ export class StalkerClient {
                 throw new Error(`Portal request failed: ${response.status}`);
             }
 
+            // Check if response is JSON before parsing
+            const contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+                const textBody = await response.text();
+                console.error(`[StalkerClient] ❌ Non-JSON response: ${textBody}`);
+                throw new Error(`Expected JSON response but got: ${textBody.substring(0, 100)}`);
+            }
+
             const data = await response.json();
+            console.log(`[StalkerClient] 📦 Response data:`, data);
             
             if (data && data.js) {
+                console.log(`[StalkerClient] ✅ Extracted JS payload:`, data.js);
                 return data.js as T;
             }
             
+            console.log(`[StalkerClient] ✅ Returning raw data (no JS wrapper)`);
             return data as T;
         } catch (error) {
             console.error('[StalkerClient] Direct request error:', error);
@@ -210,10 +279,19 @@ export class StalkerClient {
         }
         
         try {
-            const response = await this.request<{ token: string }>('handshake');
-            this.token = response.token;
+            console.log('[StalkerClient] Sending handshake request (NO Authorization header):', { 
+                mac: this.mac, 
+                adid: this.adid,
+                url: this.baseUrl 
+            });
+            const handshakeResponse = await this.request<{ token: string; random: string }>('handshake');
+            this.token = handshakeResponse.token;
+            console.log('[StalkerClient] ✅ Handshake successful! Token:', this.token);
+
+            // Note: get_profile is NOT called here anymore as it causes "Device conflict" errors
+            // The token from handshake is sufficient for most operations
         } catch (error) {
-            console.error('Handshake failed', error);
+            console.error('[StalkerClient] ❌ Handshake request failed:', error);
             throw new StalkerError('Failed to connect to portal');
         }
     }
@@ -446,18 +524,19 @@ export class StalkerClient {
     }
 
     async getProfile(mac?: string): Promise<any> {
-        // type=stb&action=get_profile
-        // Returns { js: { id, name, login, stb_id, ... } }
+        // Use account_info/get_main_info instead of stb/get_profile
+        // type=account_info&action=get_main_info
+        // Returns { js: { fname, phone, mac, end_date, tariff_plan, ... } }
         if (mac) {
             this.mac = mac;
         }
         
         try {
-            const response = await this.request<any>('get_profile');
-            // The portal sometimes wraps data under `js` — request() already returns the resolved js or raw
+            const response = await this.request<any>('get_main_info', { type: 'account_info' });
+            console.log('[StalkerClient] ✅ Profile (main_info) retrieved:', response);
             return response || null;
         } catch (error) {
-            console.error('[StalkerClient] getProfile error:', error);
+            console.error('[StalkerClient] ❌ getProfile error:', error);
             throw error;
         }
     }

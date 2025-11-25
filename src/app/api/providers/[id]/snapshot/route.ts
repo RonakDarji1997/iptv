@@ -226,11 +226,23 @@ export async function GET(
     const acceptEncoding = request.headers.get('accept-encoding') || '';
     const supportsGzip = acceptEncoding.includes('gzip');
     
+    // Get provider info for metadata
+    const provider = await prisma.provider.findUnique({
+      where: { id: providerId },
+      select: { id: true, name: true, url: true, type: true },
+    });
+
     // Create response object
     const responseData = {
       snapshotId: snapshot.id,
       createdAt: snapshot.createdAt,
       profileFiltered: !!activeProfile,
+      provider: provider ? {
+        id: provider.id,
+        name: provider.name,
+        url: provider.url,
+        type: provider.type,
+      } : null,
       ...data,
     };
 

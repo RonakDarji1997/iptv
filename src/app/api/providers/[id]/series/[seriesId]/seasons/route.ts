@@ -81,16 +81,20 @@ export async function GET(
         return NextResponse.json({ error: 'Provider not found' }, { status: 404 });
       }
 
-      // Initialize Stalker client with stored token
+      // Initialize Stalker client
       const client = new StalkerClient(
         provider.url,
         provider.stalkerBearer || '',
         provider.stalkerAdid || ''
       );
       
-      // Use stored token and MAC
-      Object.assign(client, { token: provider.stalkerToken || '', mac: provider.stalkerMac || '' });
-      console.log(`[OnDemand] Using stored token for MAC: ${provider.stalkerMac}`);
+      // Set MAC
+      Object.assign(client, { mac: provider.stalkerMac || '' });
+      
+      // Perform fresh handshake
+      console.log('[Series Seasons] Performing fresh handshake...');
+      await client.handshake();
+      console.log('[Series Seasons] ✅ Fresh handshake successful');
 
       try {
         // Fetch seasons from Stalker API

@@ -33,11 +33,10 @@ interface Category {
 
 export default function SeriesScreen() {
   const router = useRouter();
-  const { user, selectedProfile } = useAuthStore();
+  const { user, selectedProfile, selectedProviderIds } = useAuthStore();
   const { snapshot: cachedSnapshot, setSnapshot } = useSnapshotStore();
 
   const [categories, setCategories] = useState<Category[]>([]);
-  const [providerId, setProviderId] = useState<string | null>(null);
   const [series, setSeries] = useState<Series[]>([]);
   const [categorizedSeries, setCategorizedSeries] = useState<{ [key: string]: Series[] }>({});
   const [loading, setLoading] = useState(true);
@@ -92,54 +91,76 @@ export default function SeriesScreen() {
       return;
     }
 
+    if (selectedProviderIds.length === 0) {
+      setError('No provider selected');
+      setLoading(false);
+      return;
+    }
+
     try {
       setError('');
       if (!forceRefresh) setLoading(true);
 
       const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
       
-      // Get user's provider
-      const providersResp = await fetch(`${apiUrl}/api/providers?userId=${user.id}`);
-      const providersData = await providersResp.json();
-      
-      if (!providersData.providers || providersData.providers.length === 0) {
-        setError('No provider configured');
-        setLoading(false);
-        return;
-      }
-
-      const provider = providersData.providers[0];
-      setProviderId(provider.id);
-
-      // Fetch compressed snapshot
+      // Fetch snapshots for all selected providers
       const profileParam = selectedProfile?.id ? `?profileId=${selectedProfile.id}` : '';
-      const snapshotResp = await fetch(`${apiUrl}/api/providers/${provider.id}/snapshot${profileParam}`, {
-        headers: {
-          'Accept-Encoding': 'gzip',
-        },
-      });
+      const snapshotPromises = selectedProviderIds.map(providerId =>
+        fetch(`${apiUrl}/api/providers/${providerId}/snapshot${profileParam}`, {
+          headers: { 'Accept-Encoding': 'gzip' },
+        }).then(r => r.ok ? r.json() : null)
+      );
 
-      if (!snapshotResp.ok) {
-        throw new Error('Failed to load content');
+      const snapshots = (await Promise.all(snapshotPromises)).filter(Boolean);
+
+      if (snapshots.length === 0) {
+        throw new Error('Failed to load content from selected providers');
       }
 
-      const snapshot = await snapshotResp.json();
+      // Merge snapshots
+      const mergedSnapshot = {
+        categories: [],
+        movies: [],
+        series: [],
+        channels: [],
+        provider: snapshots[0].provider,
+      };
 
-      // Cache the snapshot in store
-      setSnapshot(snapshot);
+      // Merge categories (deduplicate by name)
+      const categoryMap = new Map();
+      snapshots.forEach(snapshot => {
+        snapshot.categories.forEach((cat: any) => {
+          if (!categoryMap.has(cat.name)) {
+            categoryMap.set(cat.name, cat);
+          }
+        });
+      });
+      mergedSnapshot.categories = Array.from(categoryMap.values());
 
-      // Extract series categories (categories that contain series)
-      const seriesCategories = snapshot.categories.filter(
+      // Merge series (deduplicate by id)
+      const seriesMap = new Map();
+      snapshots.forEach(snapshot => {
+        (snapshot.series || []).forEach((s: any) => {
+          if (!seriesMap.has(s.id)) {
+            seriesMap.set(s.id, s);
+          }
+        });
+      });
+      mergedSnapshot.series = Array.from(seriesMap.values());
+
+      // Cache the merged snapshot
+      setSnapshot(mergedSnapshot);
+
+      // Extract series categories
+      const seriesCategories = mergedSnapshot.categories.filter(
         (cat: { hasSeries?: boolean }) => cat.hasSeries === true
       );
 
       // make sure adult categories appear last
       setCategories(orderCategoriesWithAdultLast(seriesCategories));
-
-      // Set all series
-      setSeries(snapshot.series || []);
+      setSeries(mergedSnapshot.series);
       
-      console.log(`[Series] Loaded ${snapshot.series?.length || 0} series, ${seriesCategories.length} categories`);
+      console.log(`[Series] Loaded ${mergedSnapshot.series.length} series from ${snapshots.length} providers, ${seriesCategories.length} categories`);
     } catch (err) {
       console.error('Load snapshot error:', err);
       setError(err instanceof Error ? err.message : 'Failed to load series');
@@ -163,13 +184,31 @@ export default function SeriesScreen() {
   };
 
   const handleSeriesPress = (item: Series) => {
+    // Use providerId embedded in series from merge, fallback to first selected
+    const providerId = (item as any).providerId || selectedProviderIds[0];
+    
+    console.log('[Series] Clicking series:', {
+      seriesId: item.id,
+      seriesName: item.name,
+      providerId,
+      embeddedProviderId: (item as any).providerId,
+      fallbackProviderId: selectedProviderIds[0],
+      hasProviderId: !!providerId,
+    });
+    
+    if (!providerId) {
+      console.error('[Series] ERROR: No providerId set!');
+      setError('Provider not selected. Please select a provider from dashboard.');
+      return;
+    }
+    
     router.push({
       pathname: '/series/[id]',
       params: {
         id: item.id,
         name: item.name,
         poster: item.poster || '',
-        providerId: providerId || '',
+        providerId,
       },
     });
   };
@@ -201,7 +240,6 @@ export default function SeriesScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Category Rows */}
       <ScrollView
         style={styles.scrollView}
         refreshControl={

@@ -68,7 +68,12 @@ export async function GET(
 
     // Initialize client with credentials
     const client = new StalkerClient(provider.url, bearer, adid);
-    Object.assign(client, { token: '', mac });
+    Object.assign(client, { mac });
+
+    // Perform fresh handshake
+    console.log('[Series Episodes] Performing fresh handshake...');
+    await client.handshake();
+    console.log('[Series Episodes] ✅ Fresh handshake successful');
 
     // Get episodes
     const result = await client.getSeriesEpisodes(seriesId, seasonId);

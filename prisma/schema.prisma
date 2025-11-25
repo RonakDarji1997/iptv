@@ -47,6 +47,7 @@ model Provider {
   stalkerToken   String?  // From handshake, encrypted
   stalkerAdid    String?
   stalkerStbId   String?
+  stalkerSn      String?  // Serial number for device identification
   
   // Xtream-specific fields
   xtreamUsername String?  // Encrypted

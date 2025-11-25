@@ -40,6 +40,9 @@ interface AuthState {
     selectedProfile: Profile | null;
     availableProfiles: Profile[];
     
+    // Provider Selection (can select multiple)
+    selectedProviderIds: string[];
+    
     // Provider Status
     hasProvider: boolean | null;
     
@@ -56,6 +59,7 @@ interface AuthState {
     setUser: (user: User, jwtToken: string) => void;
     setProfiles: (profiles: Profile[]) => void;
     setSelectedProfile: (profile: Profile) => void;
+    setSelectedProviderIds: (providerIds: string[]) => void;
     setHasProvider: (hasProvider: boolean) => void;
     
     // Helper function to filter snapshot based on active profile
@@ -78,6 +82,7 @@ export const useAuthStore = create<AuthState>()(
             user: null,
             selectedProfile: null,
             availableProfiles: [],
+            selectedProviderIds: [],
             hasProvider: null,
             
             // Legacy State
@@ -102,6 +107,10 @@ export const useAuthStore = create<AuthState>()(
             
             setSelectedProfile: (profile) => set({ 
                 selectedProfile: profile 
+            }),
+            
+            setSelectedProviderIds: (providerIds) => set({ 
+                selectedProviderIds: providerIds 
             }),
             
             setHasProvider: (hasProvider) => set({ 

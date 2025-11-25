@@ -113,26 +113,15 @@ export default function VideoPlayer({ uri, autoPlay = true, title, onBack, start
           autoPlay={autoPlay}
           controls
           style={{
-            position: 'absolute',
-            inset: 0,
             width: '100%',
             height: '100%',
             objectFit: 'contain',
             background: '#000',
-            display: 'block'
+            display: 'block',
+            maxWidth: '100%',
+            maxHeight: '100%'
           }}
         />
-        {/* Top bar with title and back button */}
-        <View style={[styles.overlay, { paddingTop: insets.top }]} pointerEvents="box-none">
-          <View style={styles.topBar}>
-            {onBack && (
-              <Pressable style={[styles.iconButton, styles.backButton]} onPress={onBack}>
-                <Text style={styles.iconText}>←</Text>
-              </Pressable>
-            )}
-            {title && <Text style={styles.title} numberOfLines={1}>{title}</Text>}
-          </View>
-        </View>
       </View>
     );
   }
@@ -217,12 +206,11 @@ export default function VideoPlayer({ uri, autoPlay = true, title, onBack, start
 
 const styles = StyleSheet.create({
   webContainer: {
-    position: 'fixed',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    position: 'relative',
+    width: '100%',
+    height: '100%',
     backgroundColor: '#000',
+    overflow: 'hidden',
   },
   nativeRoot: {
     flex: 1,

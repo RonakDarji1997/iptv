@@ -108,8 +108,22 @@ export default function WatchScreen() {
   };
 
   const loadStream = async () => {
+    console.log('[Watch] loadStream called with params:', {
+      id: params.id,
+      type: params.type,
+      providerId: params.providerId,
+      hasJwtToken: !!jwtToken,
+      hasUser: !!user,
+    });
+    
     if (!jwtToken || !user || !params.providerId) {
-      setError('Not authenticated');
+      const missingItems = [];
+      if (!jwtToken) missingItems.push('jwtToken');
+      if (!user) missingItems.push('user');
+      if (!params.providerId) missingItems.push('providerId');
+      
+      console.error('[Watch] Missing required items:', missingItems);
+      setError(`Not authenticated or missing: ${missingItems.join(', ')}`);
       setLoading(false);
       return;
     }
@@ -175,11 +189,16 @@ export default function WatchScreen() {
         } else if (contentType === 'vod' && params.id) {
           console.log('[WATCH DEBUG] ⚠️ Entering VOD branch');
           // For movies: get file info using movie_id
-          const fileInfoResp = await fetch(`${apiUrl}/api/providers/${params.providerId}/movies/${params.id}/file`, {
+          const fileUrl = `${apiUrl}/api/providers/${params.providerId}/movies/${params.id}/file`;
+          console.log('[Watch] Fetching movie file info from:', fileUrl);
+          
+          const fileInfoResp = await fetch(fileUrl, {
             headers: {
               'Authorization': `Bearer ${jwtToken}`,
             },
           });
+          
+          console.log('[Watch] File info response status:', fileInfoResp.status);
           
           if (!fileInfoResp.ok) {
             throw new Error('Failed to get file info');
@@ -214,7 +233,14 @@ export default function WatchScreen() {
         const streamType = contentType === 'series' ? 'series' : 'vod';
         DebugLogger.callingCreateLink(cmd, streamType);
         
-        const streamResp = await fetch(`${apiUrl}/api/providers/${params.providerId}/stream`, {
+        const streamUrl = `${apiUrl}/api/providers/${params.providerId}/stream`;
+        console.log('[Watch] Calling stream API:', streamUrl, {
+          cmd,
+          contentType: streamType,
+          providerId: params.providerId,
+        });
+        
+        const streamResp = await fetch(streamUrl, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${jwtToken}`,
@@ -226,6 +252,8 @@ export default function WatchScreen() {
             episodeNumber: params.episodeNumber,
           }),
         });
+        
+        console.log('[Watch] Stream API response status:', streamResp.status);
         
         if (!streamResp.ok) {
           const errorData = await streamResp.json();

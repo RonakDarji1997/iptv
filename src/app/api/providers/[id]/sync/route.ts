@@ -56,7 +56,20 @@ export async function POST(
 
     // Initialize Stalker client
     const client = new StalkerClient(provider.url, bearer, adid);
-    Object.assign(client, { token: token || '', mac });
+    Object.assign(client, { mac });
+
+    // Perform fresh handshake to get a new token (tokens expire quickly)
+    console.log(`[Sync] Performing fresh handshake for provider ${providerId}...`);
+    try {
+      await client.handshake();
+      console.log(`[Sync] ✅ Fresh handshake successful`);
+    } catch (error) {
+      console.error(`[Sync] ❌ Handshake failed:`, error);
+      return NextResponse.json({ 
+        error: 'Failed to authenticate with provider', 
+        details: error instanceof Error ? error.message : 'Unknown error' 
+      }, { status: 401 });
+    }
 
     // Get sync mode from query parameter (default: auto)
     const { searchParams } = new URL(request.url);
@@ -268,11 +281,14 @@ async function syncChannelContent(
           let logoUrl: string | null = null;
           if (channel.logo) {
             if (channel.logo.startsWith('http://') || channel.logo.startsWith('https://')) {
+              // Already a full URL
               logoUrl = channel.logo;
             } else if (channel.logo.startsWith('/')) {
+              // Absolute path
               logoUrl = `${baseUrl}${channel.logo}`;
             } else {
-              logoUrl = `${baseUrl}/${channel.logo}`;
+              // Relative filename (e.g., "5624.png") - build Stalker logo path
+              logoUrl = `${baseUrl}/misc/logos/320/${channel.logo}`;
             }
           }
 
@@ -432,8 +448,10 @@ async function syncVodContent(providerId: string, providerUrl: string, client: S
       let hasMore = true;
       let categoryItemCount = 0;
       let consecutiveEmptyPages = 0;
+      let consecutivePagesWithNoNewItems = 0;
       const maxConsecutiveEmpty = 3;
-      const batchSize = 50; // Process 50 pages at a time for speed
+      const maxPagesWithNoNewItems = isIncremental ? 5 : 999999; // In incremental mode, stop after 5 pages with no new items
+      const batchSize = isIncremental ? 5 : 50; // Smaller batches for incremental (just check recent content)
       
       // Fetch pages in batches for this category
       while (hasMore) {
@@ -637,18 +655,32 @@ async function syncVodContent(providerId: string, providerUrl: string, client: S
             newItemsCount += pageNew;
             skippedItemsCount += pageSkipped;
           
-            console.log(`[Sync] Category ${categoryName} page ${currentPage}: ${result.data.length} items | Movies: ${pageMovies}, Series: ${pageSeries}, New: ${pageNew}`);
-          } // End batch item loop
+            // INCREMENTAL MODE: Early termination if no new items found
+            if (isIncremental) {
+              if (pageNew === 0) {
+                consecutivePagesWithNoNewItems++;
+                if (consecutivePagesWithNoNewItems >= maxPagesWithNoNewItems) {
+                  console.log(`[Sync] INCREMENTAL: Category ${categoryName} - ${consecutivePagesWithNoNewItems} consecutive pages with no new items. Stopping early.`);
+                  hasMore = false;
+                  break;
+                }
+              } else {
+                consecutivePagesWithNoNewItems = 0; // Reset if we find new items
+              }
+            }
           
-          // Update job progress after each batch
-          await prisma.syncJob.update({
-            where: { id: jobId },
-            data: {
-              processedItems: totalProcessed,
-              moviesCount: totalMoviesCount,
-              seriesCount: totalSeriesCount,
-            },
-          });
+            console.log(`[Sync] Category ${categoryName} page ${currentPage}: ${result.data.length} items | Movies: ${pageMovies}, Series: ${pageSeries}, New: ${pageNew}`);
+            
+            // Update job progress after EACH PAGE for real-time UI feedback
+            await prisma.syncJob.update({
+              where: { id: jobId },
+              data: {
+                processedItems: totalProcessed,
+                moviesCount: totalMoviesCount,
+                seriesCount: totalSeriesCount,
+              },
+            });
+          } // End batch item loop
           
           // Move to next batch
           if (batchHasData) {
@@ -700,6 +732,7 @@ async function syncVodContent(providerId: string, providerUrl: string, client: S
           duration: true,
           isHd: true,
           highQuality: true,
+          censored: true,
           cmd: true,
           categoryId: true,
           addedAt: true,

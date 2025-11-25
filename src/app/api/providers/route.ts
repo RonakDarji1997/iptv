@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { encrypt, decrypt, safeDecrypt } from '@/lib/crypto';
 import { generateMAC, isValidMAC, normalizeMAC } from '@/lib/mac-generator';
-import { StalkerClient } from '@/lib/stalker-client';
+import { StalkerClient, discoverPortalUrl } from '@/lib/stalker-client';
 
 /**
  * GET /api/providers
@@ -98,40 +98,78 @@ export async function POST(request: NextRequest) {
 
     // Generate or validate MAC for Stalker
     let finalMac = stalkerMac;
+    let finalBearer = stalkerBearer;
+    
     if (type === 'STALKER') {
-      if (!stalkerBearer) {
-        return NextResponse.json({ error: 'stalkerBearer is required for Stalker providers' }, { status: 400 });
-      }
-
       if (finalMac) {
         if (!isValidMAC(finalMac)) {
           return NextResponse.json({ error: 'Invalid MAC address format' }, { status: 400 });
         }
-        finalMac = normalizeMAC(finalMac);
+        // Keep original MAC case - don't normalize
+        console.log('[Provider] Using MAC address:', finalMac);
       } else {
         // Generate MAG-style MAC
         finalMac = generateMAC();
+        console.log('[Provider] Generated MAC address:', finalMac);
+      }
+      
+      // If no Bearer provided, use MAC as Bearer (standard Stalker portals)
+      if (!finalBearer) {
+        console.log('[Provider] No Bearer provided, using MAC as Bearer (standard Stalker)');
+        finalBearer = finalMac;
       }
     }
 
     // Perform handshake for Stalker to get token
     let token = null;
     let stbId = null;
+    let finalUrl = url;
+    
     if (type === 'STALKER') {
+      // Discover actual portal URL (follow redirects)
+      console.log('[Provider] Discovering actual portal URL...');
+      const actualUrl = await discoverPortalUrl(url);
+      if (actualUrl !== url) {
+        console.log(`[Provider] 🔀 URL changed after redirect: ${url} → ${actualUrl}`);
+        finalUrl = actualUrl; // Use the redirected URL for all requests
+      } else {
+        console.log('[Provider] ✅ No redirect, using original URL');
+        finalUrl = url;
+      }
+      
+      console.log('[Provider] Starting handshake:', { url: finalUrl, mac: finalMac, adid: stalkerAdid });
+      const client = new StalkerClient(finalUrl, finalBearer, stalkerAdid || '');
+      
       try {
-        const client = new StalkerClient(url, stalkerBearer, stalkerAdid || '');
         await client.handshake(finalMac!);
         token = client.getToken();
         
-        // Get profile to extract stb_id
-        const profile = await client.getProfile(finalMac!);
-        stbId = profile.stb_id || null;
+        if (!token) {
+          throw new Error('Handshake succeeded but no token received');
+        }
+        
+        console.log('[Provider] ✅ Handshake successful! Token:', token);
+        
+        // Use the handshake token as the permanent bearer token
+        // This token will be stored in DB and used for all future requests
+        finalBearer = token;
+        console.log('[Provider] Using handshake token as permanent bearer token');
       } catch (error: unknown) {
-        console.error('Handshake failed:', error);
+        console.error('[Provider] ❌ Handshake failed:', error);
         return NextResponse.json(
           { error: 'Failed to handshake with provider', details: error instanceof Error ? error.message : 'Unknown error' },
-          { status: 500 }
+          { status: 400 }
         );
+      }
+      
+      // Get profile (main info) - optional, some portals don't support this
+      try {
+        const profile = await client.getProfile(finalMac!);
+        console.log('[Provider] ✅ Profile retrieved:', profile);
+      } catch (profileError) {
+        console.warn('[Provider] ⚠️ Profile retrieval failed (portal may not support account_info endpoint):', 
+          profileError instanceof Error ? profileError.message : 'Unknown error');
+        // Don't fail provider creation - profile is optional
       }
     }
 
@@ -145,20 +183,20 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Create provider in database
+    // Create provider in database (only after successful handshake for Stalker)
     const provider = await prisma.provider.create({
       data: {
         userId,
         type,
         name,
-        url,
+        url: finalUrl, // Use the discovered URL (after redirects)
         stalkerMac: finalMac,
-        stalkerBearer: stalkerBearer ? encrypt(stalkerBearer) : null,
-        stalkerToken: token ? encrypt(token) : null,
+        stalkerBearer: finalBearer || null,
+        stalkerToken: token || null,
         stalkerAdid: stalkerAdid || null,
         stalkerStbId: stbId,
-        xtreamUsername: xtreamUsername ? encrypt(xtreamUsername) : null,
-        xtreamPassword: xtreamPassword ? encrypt(xtreamPassword) : null,
+        xtreamUsername: xtreamUsername || null,
+        xtreamPassword: xtreamPassword || null,
         m3uUrl,
         isActive: true,
       },
@@ -168,7 +206,7 @@ export async function POST(request: NextRequest) {
       success: true,
       provider: {
         ...provider,
-        stalkerBearer: stalkerBearer,
+        stalkerBearer: finalBearer,
         stalkerToken: token,
         xtreamUsername,
         xtreamPassword,

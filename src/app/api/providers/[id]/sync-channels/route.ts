@@ -187,11 +187,11 @@ async function syncChannelContent(providerId: string, providerUrl: string, clien
                   // Already a full URL
                   logoUrl = channel.logo;
                 } else if (channel.logo.startsWith('/')) {
-                  // Relative path starting with /
+                  // Absolute path
                   logoUrl = `${baseUrl}${channel.logo}`;
                 } else {
-                  // Relative path without leading /
-                  logoUrl = `${baseUrl}/${channel.logo}`;
+                  // Relative filename (e.g., "5624.png") - build Stalker logo path
+                  logoUrl = `${baseUrl}/misc/logos/320/${channel.logo}`;
                 }
               }
               

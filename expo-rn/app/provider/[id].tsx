@@ -44,7 +44,7 @@ export default function ProviderDetailScreen() {
   const router = useRouter();
   const { id: providerId } = useLocalSearchParams<{ id: string }>();
   const { jwtToken, selectedProfile } = useAuthStore();
-  const { setSnapshot } = useSnapshotStore();
+  const { setSnapshot, isStale } = useSnapshotStore();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -54,7 +54,7 @@ export default function ProviderDetailScreen() {
   const [provider, setProvider] = useState<Provider | null>(null);
   const [stats, setStats] = useState<Stats>({ channels: 0, movies: 0, series: 0 });
 
-  const fetchProviderData = useCallback(async () => {
+  const fetchProviderData = useCallback(async (forceRefresh = false) => {
     if (!providerId || !jwtToken) return;
 
     try {
@@ -85,24 +85,33 @@ export default function ProviderDetailScreen() {
         });
       }
 
-      // Fetch and cache snapshot for Movies/Series tabs
-      console.log('[ProviderDetail] Fetching snapshot to cache...');
-      const profileParam = selectedProfile?.id ? `?profileId=${selectedProfile.id}` : '';
-      const snapshotResp = await fetch(`${apiUrl}/api/providers/${providerId}/snapshot${profileParam}`, {
-        headers: { 
-          Authorization: `Bearer ${jwtToken}`,
-          'Accept-Encoding': 'gzip',
-        },
-      });
+      // Fetch and cache snapshot for Movies/Series tabs (with staleness check)
+      const shouldRefreshSnapshot = forceRefresh || isStale(30); // Refresh if >30 minutes old or forced
       
-      if (snapshotResp.ok) {
-        const snapshot = await snapshotResp.json();
-        setSnapshot(snapshot);
-        console.log('[ProviderDetail] Snapshot cached:', {
-          channels: snapshot.channels?.length || 0,
-          movies: snapshot.movies?.length || 0,
-          series: snapshot.series?.length || 0,
+      if (shouldRefreshSnapshot) {
+        console.log('[ProviderDetail] Fetching fresh snapshot...', { 
+          reason: forceRefresh ? 'forced' : 'stale cache (>30 min)' 
         });
+        const profileParam = selectedProfile?.id ? `?profileId=${selectedProfile.id}` : '';
+        const snapshotResp = await fetch(`${apiUrl}/api/providers/${providerId}/snapshot${profileParam}`, {
+          headers: { 
+            Authorization: `Bearer ${jwtToken}`,
+            'Accept-Encoding': 'gzip',
+          }, 
+        });
+        
+        if (snapshotResp.ok) {
+          const snapshot = await snapshotResp.json();
+          setSnapshot(snapshot);
+          console.log('[ProviderDetail] Fresh snapshot cached:', {
+            channels: snapshot.channels?.length || 0,
+            movies: snapshot.movies?.length || 0,
+            series: snapshot.series?.length || 0,
+            generatedAt: snapshot.generatedAt,
+          });
+        }
+      } else {
+        console.log('[ProviderDetail] Using cached snapshot (still fresh)');
       }
     } catch (error) {
       console.error('[ProviderDetail] Error fetching data:', error);
@@ -110,7 +119,7 @@ export default function ProviderDetailScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [providerId, jwtToken, setSnapshot]);
+  }, [providerId, jwtToken, setSnapshot, isStale, selectedProfile?.id]);
 
   const startSyncPolling = useCallback(() => {
     if (!providerId || !jwtToken) return;
@@ -132,7 +141,7 @@ export default function ProviderDetailScreen() {
         
         if (status.activeJob) {
           const progress = status.activeJob.totalItems > 0
-            ? Math.round((status.activeJob.processedItems / status.activeJob.totalItems) * 100)
+            ? Math.min(100, Math.round((status.activeJob.processedItems / status.activeJob.totalItems) * 100))
             : 0;
           
           setSyncProgress({
@@ -342,17 +351,22 @@ export default function ProviderDetailScreen() {
           {/* Live Progress */}
           {syncing && syncProgress && (
             <View style={styles.progressContainer}>
+              {provider.lastSync === null && (
+                <View style={styles.firstSyncBanner}>
+                  <MaterialIcons name="info" size={20} color="#3b82f6" />
+                  <Text style={styles.firstSyncText}>
+                    First-time setup in progress. We're building your personalized playlist - this only happens once!
+                  </Text>
+                </View>
+              )}
               <View style={styles.progressBar}>
                 <View style={[styles.progressFill, { width: `${syncProgress.progress}%` }]} />
               </View>
               <Text style={styles.progressText}>
-                {syncProgress.progress}% - {syncProgress.processedItems.toLocaleString()}/
-                {syncProgress.totalItems.toLocaleString()} items
+                {syncProgress.progress}%{syncProgress.progress === 100 && syncProgress.processedItems > syncProgress.totalItems ? ' - Discovering even more content for you!' : ''}
               </Text>
               <Text style={styles.progressDetails}>
-                Movies: {syncProgress.moviesCount.toLocaleString()} | Series:{' '}
-                {syncProgress.seriesCount.toLocaleString()} | Channels:{' '}
-                {syncProgress.channelsCount.toLocaleString()}
+                Movies: {syncProgress.moviesCount.toLocaleString()} | Series: {syncProgress.seriesCount.toLocaleString()}
               </Text>
             </View>
           )}
@@ -362,7 +376,7 @@ export default function ProviderDetailScreen() {
       {/* Quick Actions */}
       <View style={styles.actionsSection}>
         <Text style={styles.sectionTitle}>Browse Content</Text>
-        <Pressable style={styles.actionCard} onPress={() => router.push('/live')}>
+        <Pressable style={[styles.actionCard, syncing && styles.actionCardDisabled]} onPress={() => !syncing && router.push('/live')} disabled={syncing}>
           <MaterialIcons name="live-tv" size={24} color="#ef4444" />
           <View style={styles.actionContent}>
             <Text style={styles.actionTitle}>Live Channels</Text>
@@ -370,7 +384,7 @@ export default function ProviderDetailScreen() {
           </View>
           <MaterialIcons name="chevron-right" size={24} color="#71717a" />
         </Pressable>
-        <Pressable style={styles.actionCard} onPress={() => router.push('/movies')}>
+        <Pressable style={[styles.actionCard, syncing && styles.actionCardDisabled]} onPress={() => !syncing && router.push('/movies')} disabled={syncing}>
           <MaterialIcons name="movie" size={24} color="#ef4444" />
           <View style={styles.actionContent}>
             <Text style={styles.actionTitle}>Movies</Text>
@@ -378,7 +392,7 @@ export default function ProviderDetailScreen() {
           </View>
           <MaterialIcons name="chevron-right" size={24} color="#71717a" />
         </Pressable>
-        <Pressable style={styles.actionCard} onPress={() => router.push('/series')}>
+        <Pressable style={[styles.actionCard, syncing && styles.actionCardDisabled]} onPress={() => !syncing && router.push('/series')} disabled={syncing}>
           <MaterialIcons name="tv" size={24} color="#ef4444" />
           <View style={styles.actionContent}>
             <Text style={styles.actionTitle}>TV Series</Text>
@@ -577,6 +591,24 @@ const styles = StyleSheet.create({
   actionSubtitle: {
     fontSize: 12,
     color: '#71717a',
+  },
+  actionCardDisabled: {
+    opacity: 0.5,
+  },
+  firstSyncBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#1e3a8a',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  firstSyncText: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 13,
+    lineHeight: 18,
   },
   errorText: {
     color: '#fff',

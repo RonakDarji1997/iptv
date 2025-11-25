@@ -82,6 +82,7 @@ export async function POST(
       }
 
       const adid = provider.stalkerAdid || '';
+      const sn = provider.stalkerSn || undefined;
       const mac = provider.stalkerMac;
 
       if (!mac) {
@@ -98,17 +99,30 @@ export async function POST(
         hasBearer: !!bearer,
         hasToken: !!token,
         adid: adid || 'empty',
+        sn: sn || 'default',
         cmd,
         contentType,
       });
 
-      // Initialize client with credentials and token
-      const client = new StalkerClient(provider.url, bearer, adid);
-      Object.assign(client, { token: token || '', mac });
+      // Initialize client with credentials (pass serial number)
+      const client = new StalkerClient(provider.url, bearer, adid, sn);
+      Object.assign(client, { mac });
 
-      // Get stream URL
+      // Get stream URL - try with stored bearer first, fallback to handshake if auth fails
       console.log('[Stream] Calling getStreamUrl with:', { cmd, contentType, episodeNumber });
-      streamUrl = await client.getStreamUrl(cmd, contentType, episodeNumber);
+      try {
+        streamUrl = await client.getStreamUrl(cmd, contentType, episodeNumber);
+      } catch (error: any) {
+        // If authorization failed, do fresh handshake and retry
+        if (error.message && error.message.includes('Authorization failed')) {
+          console.log('[Stream] ⚠️ Authorization failed with stored bearer, trying fresh handshake...');
+          await client.handshake();
+          console.log('[Stream] ✅ Handshake successful, retrying getStreamUrl...');
+          streamUrl = await client.getStreamUrl(cmd, contentType, episodeNumber);
+        } else {
+          throw error;
+        }
+      }
       
       console.log('[Stream] Generated stream URL:', streamUrl);
     } else if (provider.type === 'XTREAM') {
