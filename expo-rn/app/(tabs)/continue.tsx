@@ -15,12 +15,13 @@ import { WatchHistoryManager, WatchHistoryItem } from '@/lib/watch-history';
 
 export default function ContinueWatchingScreen() {
   const router = useRouter();
-  const { portalUrl } = useAuthStore();
+  const { portalUrl, selectedProviderIds, user } = useAuthStore();
   const { width: screenWidth } = useWindowDimensions();
 
   const [watchHistory, setWatchHistory] = useState<WatchHistoryItem[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<'series' | 'movies'>('series');
+  const [providerPortalUrl, setProviderPortalUrl] = useState<string>('');
 
   // Calculate card size - responsive columns
   const getNumColumns = () => {
@@ -43,6 +44,21 @@ export default function ContinueWatchingScreen() {
   const loadHistory = async () => {
     const history = await WatchHistoryManager.getContinueWatching();
     setWatchHistory(history);
+    
+    // Load portal URL for selected provider
+    if (user && selectedProviderIds.length > 0) {
+      try {
+        const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
+        const response = await fetch(`${apiUrl}/api/providers?userId=${user.id}`);
+        const data = await response.json();
+        const provider = data.providers?.find((p: any) => p.id === selectedProviderIds[0]);
+        if (provider?.url) {
+          setProviderPortalUrl(provider.url);
+        }
+      } catch (error) {
+        console.error('Error loading provider portal URL:', error);
+      }
+    }
   };
 
   // Separate movies and series
@@ -66,6 +82,14 @@ export default function ContinueWatchingScreen() {
   };
 
   const handleItemPress = (item: WatchHistoryItem) => {
+    // Use providerId from item if available, otherwise use selected provider
+    const providerId = item.providerId || (selectedProviderIds.length > 0 ? selectedProviderIds[0] : '');
+    
+    if (!providerId) {
+      console.warn('No provider ID available for playback');
+      return;
+    }
+
     if (item.type === 'series') {
       router.push({
         pathname: '/watch/[id]',
@@ -80,6 +104,7 @@ export default function ContinueWatchingScreen() {
           episodeId: item.episodeId || '',
           episodeNumber: item.episodeNumber || '',
           resumeFrom: item.currentTime.toString(),
+          providerId: providerId,
         },
       });
     } else if (item.type === 'movie') {
@@ -92,15 +117,21 @@ export default function ContinueWatchingScreen() {
           title: item.title,
           screenshot: item.screenshot,
           resumeFrom: item.currentTime.toString(),
+          providerId: providerId,
         },
       });
     }
   };
 
   const getImageUrl = (screenshot: string) => {
-    if (!screenshot || !portalUrl) return undefined;
+    if (!screenshot) return undefined;
     if (screenshot.startsWith('http')) return screenshot;
-    const cleanUrl = portalUrl.replace(/\/stalker_portal\/?$/, '');
+    
+    // Use provider portal URL if available, otherwise fall back to auth store portalUrl
+    const baseUrl = providerPortalUrl || portalUrl;
+    if (!baseUrl) return undefined;
+    
+    const cleanUrl = baseUrl.replace(/\/stalker_portal\/?$/, '');
     return `${cleanUrl}${screenshot}`;
   };
 

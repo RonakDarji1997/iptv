@@ -33,16 +33,28 @@ export default function DashboardScreen() {
   const [providers, setProviders] = useState<Provider[]>([]);
 
   const fetchProviders = async () => {
-    if (!user?.id || !jwtToken) return;
+    if (!user?.id || !jwtToken) {
+      console.log('[Dashboard] Missing user or token, cannot fetch providers');
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
 
     try {
       const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
+      console.log('[Dashboard] Fetching providers for user:', user.id);
 
       const providersResp = await fetch(`${apiUrl}/api/providers?userId=${user.id}`, {
         headers: { Authorization: `Bearer ${jwtToken}` },
       });
+      
+      if (!providersResp.ok) {
+        throw new Error(`HTTP ${providersResp.status}: ${providersResp.statusText}`);
+      }
+      
       const providersData = await providersResp.json();
       const providersList = providersData.providers || [];
+      console.log('[Dashboard] Fetched providers:', providersList.length);
       setProviders(providersList);
       
       // Auto-select first provider if none selected
@@ -61,6 +73,15 @@ export default function DashboardScreen() {
   useEffect(() => {
     fetchProviders();
   }, [user?.id]);
+
+  // Load snapshots when selected providers change
+  useEffect(() => {
+    if (selectedProviderIds.length > 0) {
+      console.log('[Dashboard] Selected providers changed, loading snapshots...');
+      mergeSnapshots(selectedProviderIds);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProviderIds]);
 
   const handleRefresh = () => {
     setRefreshing(true);
@@ -147,9 +168,10 @@ export default function DashboardScreen() {
       });
       mergedSnapshot.channels = Array.from(channelMap.values());
 
-      // Update cached snapshot
-      setSnapshot(mergedSnapshot);
-      console.log(`[Dashboard] Merged ${snapshots.length} snapshots:`, {
+      // Update cached snapshot with provider ID (use first selected provider)
+      const primaryProviderId = selectedProviderIds[0] || '';
+      setSnapshot(mergedSnapshot, primaryProviderId);
+      console.log(`[Dashboard] Merged ${snapshots.length} snapshots for provider ${primaryProviderId}:`, {
         categories: mergedSnapshot.categories.length,
         movies: mergedSnapshot.movies.length,
         series: mergedSnapshot.series.length,

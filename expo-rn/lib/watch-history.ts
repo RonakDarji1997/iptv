@@ -10,6 +10,7 @@ export interface WatchHistoryItem {
   title: string;
   screenshot: string;
   cmd?: string; // Stalker cmd parameter like "/media/file_3044228.mpg"
+  providerId?: string; // Provider ID for API calls and playback
   
   // Series specific
   seasonId?: string;

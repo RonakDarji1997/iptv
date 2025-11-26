@@ -32,7 +32,7 @@ interface Category {
 export default function MoviesScreen() {
   const router = useRouter();
   const { user, selectedProfile, selectedProviderIds } = useAuthStore();
-  const { snapshot: cachedSnapshot, setSnapshot } = useSnapshotStore();
+  const { snapshot: cachedSnapshot, setSnapshot, isForProvider } = useSnapshotStore();
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [movies, setMovies] = useState<Movie[]>([]);
@@ -43,7 +43,7 @@ export default function MoviesScreen() {
 
   useEffect(() => {
     // Dashboard already fetched and cached snapshot, just use it
-    if (cachedSnapshot && cachedSnapshot.movies) {
+    if (cachedSnapshot) {
       console.log('[Movies] Using cached snapshot from dashboard');
       loadFromCache();
     } else {
@@ -69,6 +69,14 @@ export default function MoviesScreen() {
 
   const loadFromCache = () => {
     if (!cachedSnapshot) return;
+    
+    // Check if cached snapshot is for the current provider
+    const currentProviderId = selectedProviderIds[0];
+    if (currentProviderId && !isForProvider(currentProviderId)) {
+      console.log(`[Movies] Cached snapshot is for different provider, refreshing...`);
+      loadSnapshot(true);
+      return;
+    }
     
     const movieCategories = cachedSnapshot.categories.filter(
       (cat: any) => cat.hasMovies === true
@@ -147,7 +155,8 @@ export default function MoviesScreen() {
       mergedSnapshot.movies = Array.from(movieMap.values());
 
       // Cache the merged snapshot
-      setSnapshot(mergedSnapshot);
+      const primaryProviderId = selectedProviderIds[0] || '';
+      setSnapshot(mergedSnapshot, primaryProviderId);
 
       // Extract movie categories
       const movieCategories = mergedSnapshot.categories.filter(

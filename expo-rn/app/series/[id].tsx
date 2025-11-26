@@ -8,7 +8,7 @@ import {
   Platform,
   Image,
 } from 'react-native';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
 import { Picker } from '@react-native-picker/picker';
@@ -30,6 +30,7 @@ export default function SeriesDetailScreen() {
     providerId?: string;
   }>();
   const { jwtToken, user, portalUrl } = useAuthStore();
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const [seriesInfo, setSeriesInfo] = useState<any>({
     name: params.title,
@@ -48,6 +49,8 @@ export default function SeriesDetailScreen() {
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
   const [error, setError] = useState('');
   const [episodeProgress, setEpisodeProgress] = useState<Map<string, WatchHistoryItem>>(new Map());
+  const [isLoadingBackground, setIsLoadingBackground] = useState(false);
+  const [pollCount, setPollCount] = useState(0);
 
   const loadWatchHistory = async () => {
     const history = await WatchHistoryManager.getContinueWatching();
@@ -160,8 +163,26 @@ export default function SeriesDetailScreen() {
           firstSeason.seasonNumber || 'N/A'
         );
         setSelectedSeason(firstSeason.id);
-        // Set episodes from the first season
-        setEpisodes(firstSeason.episodes || []);
+        
+        // Sort and set episodes from the first season
+        if (firstSeason.episodes && firstSeason.episodes.length > 0) {
+          const sortedEpisodes = [...firstSeason.episodes].sort((a: any, b: any) => {
+            const numA = parseInt(a.episodeNumber) || 0;
+            const numB = parseInt(b.episodeNumber) || 0;
+            return numA - numB;
+          });
+          console.log(`[Series Detail] Initial load: Setting ${sortedEpisodes.length} episodes to state`);
+          console.log(`[Series Detail] First episode:`, sortedEpisodes[0]);
+          setEpisodes(sortedEpisodes);
+          console.log(`[Series Detail] Episodes state set successfully`);
+        } else {
+          // If episodes are empty, start polling for background loading
+          console.log('[Series Detail] No episodes yet, starting background polling');
+          console.log('[Series Detail] First season data:', firstSeason);
+          setEpisodes([]);
+          setIsLoadingBackground(true);
+          startPollingForEpisodes();
+        }
       }
     } catch (err) {
       console.error('Load seasons error:', err);
@@ -171,6 +192,110 @@ export default function SeriesDetailScreen() {
       setLoading(false);
     }
   };
+
+  const startPollingForEpisodes = () => {
+    // Clear any existing interval
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
+    
+    let pollAttempts = 0;
+    console.log('[Series Detail] Starting polling for episodes...');
+    
+    // Poll every 2 seconds for up to 30 seconds
+    pollIntervalRef.current = setInterval(async () => {
+      pollAttempts++;
+      setPollCount(pollAttempts);
+      
+      if (pollAttempts >= 15) { // 15 polls * 2 seconds = 30 seconds
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+        }
+        setIsLoadingBackground(false);
+        setPollCount(0);
+        console.log('[Series Detail] Stopped polling after 30 seconds');
+        return;
+      }
+
+      try {
+        const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
+        const seasonsUrl = `${apiUrl}/api/providers/${params.providerId}/series/${params.id}/seasons`;
+        
+        console.log(`[Series Detail] Poll #${pollAttempts}: Fetching from ${seasonsUrl}`);
+        
+        const response = await fetch(seasonsUrl, {
+          headers: {
+            'Authorization': `Bearer ${jwtToken}`,
+          },
+        });
+        
+        if (response.ok) {
+          const { seasons: seasonsData } = await response.json();
+          const filteredSeasons = seasonsData.filter((season: any) => {
+            const name = (season.name || '').toUpperCase();
+            return !name.includes('ADULT') && !name.includes('CELEBRITY');
+          });
+          
+          // Check if ANY season has episodes loaded
+          const totalEpisodes = filteredSeasons.reduce((sum: number, season: any) => 
+            sum + (season.episodes?.length || 0), 0
+          );
+          
+          console.log(`[Series Detail] Poll #${pollAttempts}: Found ${totalEpisodes} total episodes across ${filteredSeasons.length} seasons`);
+          
+          if (totalEpisodes > 0) {
+            console.log(`[Series Detail] Episodes found! Updating UI...`);
+            
+            // Update seasons first
+            setSeasons(filteredSeasons);
+            
+            // Find the currently selected season in the new data (use first season if none selected)
+            const currentSeason = filteredSeasons.find((s: any) => s.id === selectedSeason) || filteredSeasons[0];
+            
+            console.log(`[Series Detail] Current season has ${currentSeason?.episodes?.length || 0} episodes`);
+            
+            if (currentSeason && currentSeason.episodes && currentSeason.episodes.length > 0) {
+              // Sort and update episodes immediately
+              const sortedEpisodes = [...currentSeason.episodes].sort((a: any, b: any) => {
+                const numA = parseInt(a.episodeNumber) || 0;
+                const numB = parseInt(b.episodeNumber) || 0;
+                return numA - numB;
+              });
+              
+              console.log(`[Series Detail] ✅ Setting ${sortedEpisodes.length} episodes to state NOW`);
+              setEpisodes(sortedEpisodes);
+              
+              // Stop polling
+              if (pollIntervalRef.current) {
+                clearInterval(pollIntervalRef.current);
+                pollIntervalRef.current = null;
+              }
+              setIsLoadingBackground(false);
+              setPollCount(0);
+              console.log(`[Series Detail] ✅ Polling stopped successfully`);
+            } else {
+              console.log(`[Series Detail] ⚠️ Current season has no episodes, continuing to poll...`);
+            }
+          }
+        } else {
+          console.warn(`[Series Detail] Poll #${pollAttempts}: API returned status ${response.status}`);
+        }
+      } catch (err) {
+        console.error(`[Series Detail] Poll #${pollAttempts} error:`, err);
+      }
+    }, 2000);
+  };
+  
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+  }, []);
 
   const loadEpisodes = async () => {
     if (!selectedSeason) return;
@@ -378,12 +503,31 @@ export default function SeriesDetailScreen() {
       <View style={styles.episodesContainer}>
         <Text style={styles.episodesTitle}>Episodes</Text>
         
+        {/* Debug info - remove after testing */}
+        {__DEV__ && (
+          <Text style={{ color: '#888', fontSize: 10, marginBottom: 8 }}>
+            Debug: {episodes.length} episodes, loading: {loadingEpisodes ? 'yes' : 'no'}, 
+            background: {isLoadingBackground ? 'yes' : 'no'}, season: {selectedSeason}
+          </Text>
+        )}
+        
+        {isLoadingBackground && (
+          <View style={styles.backgroundLoadingBanner}>
+            <ActivityIndicator size="small" color="#ef4444" />
+            <Text style={styles.backgroundLoadingText}>
+              Loading episodes in background... (Poll: {pollCount}/15)
+            </Text>
+          </View>
+        )}
+        
         {loadingEpisodes ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="small" color="#ef4444" />
           </View>
         ) : episodes.length === 0 ? (
-          <Text style={styles.noEpisodes}>No episodes found</Text>
+          <Text style={styles.noEpisodes}>
+            {isLoadingBackground ? 'Episodes loading, please wait...' : 'No episodes found'}
+          </Text>
         ) : (
           episodes.map((episode, index) => {
             const progress = episodeProgress.get(episode.id);
@@ -648,6 +792,19 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     marginTop: 16,
+  },
+  backgroundLoadingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 12,
+    backgroundColor: '#27272a',
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  backgroundLoadingText: {
+    color: '#a1a1aa',
+    fontSize: 14,
   },
   errorText: {
     color: '#ef4444',

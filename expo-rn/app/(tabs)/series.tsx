@@ -34,7 +34,7 @@ interface Category {
 export default function SeriesScreen() {
   const router = useRouter();
   const { user, selectedProfile, selectedProviderIds } = useAuthStore();
-  const { snapshot: cachedSnapshot, setSnapshot } = useSnapshotStore();
+  const { snapshot: cachedSnapshot, setSnapshot, isForProvider } = useSnapshotStore();
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [series, setSeries] = useState<Series[]>([]);
@@ -45,7 +45,7 @@ export default function SeriesScreen() {
 
   useEffect(() => {
     // Dashboard already fetched and cached snapshot, just use it
-    if (cachedSnapshot && cachedSnapshot.series) {
+    if (cachedSnapshot) {
       console.log('[Series] Using cached snapshot from dashboard');
       loadFromCache();
     } else {
@@ -71,6 +71,14 @@ export default function SeriesScreen() {
 
   const loadFromCache = () => {
     if (!cachedSnapshot) return;
+    
+    // Check if cached snapshot is for the current provider
+    const currentProviderId = selectedProviderIds[0];
+    if (currentProviderId && !isForProvider(currentProviderId)) {
+      console.log(`[Series] Cached snapshot is for different provider, refreshing...`);
+      loadSnapshot(true);
+      return;
+    }
     
     const seriesCategories = cachedSnapshot.categories.filter(
       (cat: { hasSeries?: boolean }) => cat.hasSeries === true
@@ -149,7 +157,8 @@ export default function SeriesScreen() {
       mergedSnapshot.series = Array.from(seriesMap.values());
 
       // Cache the merged snapshot
-      setSnapshot(mergedSnapshot);
+      const primaryProviderId = selectedProviderIds[0] || '';
+      setSnapshot(mergedSnapshot, primaryProviderId);
 
       // Extract series categories
       const seriesCategories = mergedSnapshot.categories.filter(

@@ -33,7 +33,7 @@ export default function CategoryDetailScreen() {
   const params = useLocalSearchParams();
   const { snapshot: cachedSnapshot } = useSnapshotStore();
   const { width: screenWidth } = useWindowDimensions();
-  const { user } = useAuthStore();
+  const { user, selectedProviderIds } = useAuthStore();
 
   const categoryId = params.id as string;
   const categoryName = params.name as string;
@@ -41,6 +41,7 @@ export default function CategoryDetailScreen() {
 
   const [items, setItems] = useState<ContentItem[]>([]);
   const [providerId, setProviderId] = useState<string | null>(null);
+  const [portalUrl, setPortalUrl] = useState<string>('');
   const [loading, setLoading] = useState(true);
 
   // Calculate card size based on screen width
@@ -67,12 +68,33 @@ export default function CategoryDetailScreen() {
   }, [categoryId, contentType]);
 
   const loadCategoryItems = async () => {
-    if (!cachedSnapshot) {
-      setLoading(false);
-      return;
-    }
-
     try {
+      // Get provider ID from selected providers
+      if (!user || selectedProviderIds.length === 0) {
+        setLoading(false);
+        return;
+      }
+
+      // Use the first selected provider
+      const selectedProviderId = selectedProviderIds[0];
+      setProviderId(selectedProviderId);
+
+      // Get provider details for portal URL
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
+      const providersResp = await fetch(`${apiUrl}/api/providers?userId=${user.id}`);
+      const providersData = await providersResp.json();
+      
+      const provider = providersData.providers?.find((p: any) => p.id === selectedProviderId);
+      if (provider) {
+        setPortalUrl(provider.url || '');
+      }
+
+      // Now load items from the snapshot for this provider
+      if (!cachedSnapshot) {
+        setLoading(false);
+        return;
+      }
+
       let categoryItems: ContentItem[] = [];
 
       if (contentType === 'vod') {
@@ -89,17 +111,8 @@ export default function CategoryDetailScreen() {
         ) || [];
       }
 
+      console.log(`[Category] Loaded ${categoryItems.length} items for category ${categoryName} (${contentType})`);
       setItems(categoryItems);
-
-      // Get provider ID
-      if (user) {
-        const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:2005';
-        const providersResp = await fetch(`${apiUrl}/api/providers?userId=${user.id}`);
-        const providersData = await providersResp.json();
-        if (providersData.providers && providersData.providers.length > 0) {
-          setProviderId(providersData.providers[0].id);
-        }
-      }
     } catch (err) {
       console.error('Error loading category items:', err);
     } finally {
@@ -108,12 +121,19 @@ export default function CategoryDetailScreen() {
   };
 
   const handleItemPress = (item: ContentItem) => {
+    if (!providerId) {
+      console.warn('No provider ID available');
+      return;
+    }
+
     if (contentType === 'series') {
       router.push({
         pathname: '/series/[id]',
         params: {
           id: item.id,
           title: item.name,
+          screenshot: item.poster || item.screenshot || item.screenshot_uri || '',
+          providerId: providerId,
         },
       });
     } else {
@@ -124,7 +144,7 @@ export default function CategoryDetailScreen() {
           type: contentType === 'itv' ? 'live' : 'vod',
           title: item.name,
           screenshot: item.poster || item.screenshot || item.screenshot_uri || '',
-          providerId: providerId || '',
+          providerId: providerId,
           cmd: item.cmd || '',
           number: item.number || '',
         },
@@ -179,6 +199,8 @@ export default function CategoryDetailScreen() {
             contentType={contentType}
             width={cardWidth}
             height={cardHeight}
+            portalUrl={portalUrl}
+            shouldLoad={true}
           />
         )}
         ListEmptyComponent={

@@ -10,7 +10,7 @@ import {
   useWindowDimensions,
   Platform,
 } from 'react-native';
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/lib/store';
 import { useSnapshotStore } from '@/lib/snapshot-store';
@@ -18,8 +18,8 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 export default function SearchScreen() {
   const router = useRouter();
-  const { snapshot: cachedSnapshot, setSnapshot } = useSnapshotStore();
-  const { user, selectedProfile } = useAuthStore();
+  const { snapshot: cachedSnapshot, setSnapshot, isForProvider } = useSnapshotStore();
+  const { user, selectedProfile, selectedProviderIds } = useAuthStore();
   const { width: screenWidth } = useWindowDimensions();
 
   const [query, setQuery] = useState('');
@@ -28,8 +28,11 @@ export default function SearchScreen() {
   const [error, setError] = useState('');
   const [providerId, setProviderId] = useState<string>('');
   const [isSearching, setIsSearching] = useState(false);
+  const initialLoadDone = useRef(false);
+  const [searchResults, setSearchResults] = useState<{ channels: any[], movies: any[], series: any[] }>({ channels: [], movies: [], series: [] });
+  const searchAbortRef = useRef<boolean>(false);
 
-  // Debounce search query for performance (100ms for instant feel)
+  // Debounce search query for performance (300ms for better input responsiveness)
   useEffect(() => {
     if (query !== debouncedQuery) {
       setIsSearching(true);
@@ -38,7 +41,7 @@ export default function SearchScreen() {
     const timer = setTimeout(() => {
       setDebouncedQuery(query);
       setIsSearching(false);
-    }, 100); // 100ms debounce - fast and smooth
+    }, 300); // 300ms debounce - lets user finish typing
 
     return () => clearTimeout(timer);
   }, [query, debouncedQuery]);
@@ -46,6 +49,14 @@ export default function SearchScreen() {
   // Load snapshot when component mounts or profile changes
   useEffect(() => {
     if (cachedSnapshot) {
+      // Check if cached snapshot is for the current provider
+      const currentProviderId = selectedProviderIds[0];
+      if (currentProviderId && !isForProvider(currentProviderId)) {
+        console.log('[Search] Cached snapshot is for different provider, refreshing...');
+        loadSnapshot();
+        return;
+      }
+      
       console.log('[Search] Using cached snapshot');
       // Extract providerId from snapshot metadata
       if (cachedSnapshot.metadata?.providerId) {
@@ -59,11 +70,14 @@ export default function SearchScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cachedSnapshot]);
 
-  // Reload snapshot when profile changes
+  // Reload snapshot when profile changes (but not on initial mount)
   useEffect(() => {
-    if (selectedProfile) {
+    if (selectedProfile && initialLoadDone.current) {
       console.log('[Search] Profile changed, reloading snapshot...');
       loadSnapshot();
+    }
+    if (selectedProfile) {
+      initialLoadDone.current = true;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProfile?.id]);
@@ -105,7 +119,7 @@ export default function SearchScreen() {
       }
 
       const snapshot = await snapshotResp.json();
-      setSnapshot(snapshot);
+      setSnapshot(snapshot, provider.id);
       setLoading(false);
 
       console.log(`[Search] Loaded snapshot with profile ${selectedProfile?.id || 'default'}`);
@@ -149,83 +163,136 @@ export default function SearchScreen() {
     return imageUrl;
   }, [portalUrl, cardWidth, cardHeight]);
 
-  // Search in cached snapshot data (instant, no API calls)
-  const searchResults = useMemo(() => {
+  // Progressive search - shows results as they're found
+  useEffect(() => {
     if (!debouncedQuery.trim() || debouncedQuery.trim().length < 2) {
-      return { channels: [], movies: [], series: [] };
+      setSearchResults({ channels: [], movies: [], series: [] });
+      return;
     }
 
     if (!cachedSnapshot) {
-      return { channels: [], movies: [], series: [] };
+      setSearchResults({ channels: [], movies: [], series: [] });
+      return;
     }
 
     const searchTerm = debouncedQuery.toLowerCase().trim();
-    const channels: any[] = [];
-    const movies: any[] = [];
-    const series: any[] = [];
+    searchAbortRef.current = false;
+    
+    // Start with empty results
+    const results = { channels: [] as any[], movies: [] as any[], series: [] as any[] };
 
-    // Optimized search - prioritize name matches for speed
-    // Search in channels (fastest - typically smallest dataset)
-    if (cachedSnapshot.channels) {
-      for (const channel of cachedSnapshot.channels) {
-        if (channel.name?.toLowerCase().includes(searchTerm) ||
-            channel.number?.toString().includes(searchTerm)) {
-          channels.push(channel);
+    // Helper to batch update UI (every 25 items to reduce re-renders)
+    const updateResults = () => {
+      if (!searchAbortRef.current) {
+        setSearchResults({ 
+          channels: [...results.channels], 
+          movies: [...results.movies], 
+          series: [...results.series] 
+        });
+      }
+    };
+
+    // Process search in chunks to keep UI responsive
+    const processInChunks = async () => {
+      const CHUNK_SIZE = 100; // Process 100 items at a time
+      const BATCH_UPDATE = 50; // Update UI every 50 matches
+      let matchCount = 0;
+
+      // Search channels first
+      if (cachedSnapshot.channels && !searchAbortRef.current) {
+        const channels = cachedSnapshot.channels;
+        for (let i = 0; i < channels.length; i += CHUNK_SIZE) {
+          if (searchAbortRef.current) break;
+          
+          await new Promise(resolve => setTimeout(resolve, 0)); // Yield to UI
+          
+          const chunk = channels.slice(i, i + CHUNK_SIZE);
+          for (const channel of chunk) {
+            if (searchAbortRef.current) break;
+            
+            if (channel.name?.toLowerCase().includes(searchTerm) ||
+                channel.number?.toString().includes(searchTerm)) {
+              results.channels.push(channel);
+              matchCount++;
+              if (matchCount % BATCH_UPDATE === 0) updateResults();
+            }
+          }
+        }
+        updateResults(); // Update after channels complete
+      }
+
+      // Search movies
+      if (cachedSnapshot.movies && !searchAbortRef.current) {
+        const movies = cachedSnapshot.movies;
+        for (let i = 0; i < movies.length; i += CHUNK_SIZE) {
+          if (searchAbortRef.current) break;
+          
+          await new Promise(resolve => setTimeout(resolve, 0)); // Yield to UI
+          
+          const chunk = movies.slice(i, i + CHUNK_SIZE);
+          for (const movie of chunk) {
+            if (searchAbortRef.current) break;
+            
+            if (movie.censored === '1' || movie.censored === 1 || movie.censored === true) {
+              continue;
+            }
+            
+            if (movie.name?.toLowerCase().includes(searchTerm) ||
+                movie.o_name?.toLowerCase().includes(searchTerm) ||
+                movie.description?.toLowerCase().includes(searchTerm) ||
+                movie.actors?.toLowerCase().includes(searchTerm) ||
+                movie.director?.toLowerCase().includes(searchTerm)) {
+              results.movies.push(movie);
+              matchCount++;
+              if (matchCount % BATCH_UPDATE === 0) updateResults();
+            }
+          }
+        }
+        updateResults(); // Update after movies complete
+      }
+
+      // Search series
+      if (cachedSnapshot.series && !searchAbortRef.current) {
+        const series = cachedSnapshot.series;
+        for (let i = 0; i < series.length; i += CHUNK_SIZE) {
+          if (searchAbortRef.current) break;
+          
+          await new Promise(resolve => setTimeout(resolve, 0)); // Yield to UI
+          
+          const chunk = series.slice(i, i + CHUNK_SIZE);
+          for (const seriesItem of chunk) {
+            if (searchAbortRef.current) break;
+            
+            if (seriesItem.censored === '1' || seriesItem.censored === 1 || seriesItem.censored === true) {
+              continue;
+            }
+            
+            if (seriesItem.name?.toLowerCase().includes(searchTerm) ||
+                seriesItem.o_name?.toLowerCase().includes(searchTerm) ||
+                seriesItem.description?.toLowerCase().includes(searchTerm) ||
+                seriesItem.actors?.toLowerCase().includes(searchTerm) ||
+                seriesItem.director?.toLowerCase().includes(searchTerm)) {
+              results.series.push(seriesItem);
+              matchCount++;
+              if (matchCount % BATCH_UPDATE === 0) updateResults();
+            }
+          }
+        }
+        updateResults(); // Final update
+        
+        if (!searchAbortRef.current) {
+          const total = results.channels.length + results.movies.length + results.series.length;
+          console.log(`[Search] Found ${total} results (${results.channels.length} channels, ${results.movies.length} movies, ${results.series.length} series) for "${searchTerm}"`);
         }
       }
-    }
+    };
 
-    // Search in movies (exclude censored, prioritize name)
-    if (cachedSnapshot.movies) {
-      for (const movie of cachedSnapshot.movies) {
-        // Skip censored content early
-        if (movie.censored === '1' || movie.censored === 1 || movie.censored === true) {
-          continue;
-        }
-        
-        // Check name first (most common match)
-        if (movie.name?.toLowerCase().includes(searchTerm)) {
-          movies.push(movie);
-          continue;
-        }
-        
-        // Then check other fields
-        if (movie.o_name?.toLowerCase().includes(searchTerm) ||
-            movie.description?.toLowerCase().includes(searchTerm) ||
-            movie.actors?.toLowerCase().includes(searchTerm) ||
-            movie.director?.toLowerCase().includes(searchTerm)) {
-          movies.push(movie);
-        }
-      }
-    }
+    processInChunks();
 
-    // Search in series (exclude censored, prioritize name)
-    if (cachedSnapshot.series) {
-      for (const seriesItem of cachedSnapshot.series) {
-        // Skip censored content early
-        if (seriesItem.censored === '1' || seriesItem.censored === 1 || seriesItem.censored === true) {
-          continue;
-        }
-        
-        // Check name first (most common match)
-        if (seriesItem.name?.toLowerCase().includes(searchTerm)) {
-          series.push(seriesItem);
-          continue;
-        }
-        
-        // Then check other fields
-        if (seriesItem.o_name?.toLowerCase().includes(searchTerm) ||
-            seriesItem.description?.toLowerCase().includes(searchTerm) ||
-            seriesItem.actors?.toLowerCase().includes(searchTerm) ||
-            seriesItem.director?.toLowerCase().includes(searchTerm)) {
-          series.push(seriesItem);
-        }
-      }
-    }
-
-    const total = channels.length + movies.length + series.length;
-    console.log(`[Search] Found ${total} results (${channels.length} channels, ${movies.length} movies, ${series.length} series) for "${searchTerm}"`);
-    return { channels, movies, series };
+    // Cleanup: abort search if query changes
+    return () => {
+      searchAbortRef.current = true;
+    };
   }, [debouncedQuery, cachedSnapshot]);
 
   const handleSearch = (searchQuery: string) => {

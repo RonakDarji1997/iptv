@@ -262,7 +262,15 @@ export default function WatchScreen() {
         
         const streamData = await streamResp.json();
         DebugLogger.streamUrlReceived(streamData.streamUrl);
-        setStreamUrl(streamData.streamUrl);
+        
+        // Add JWT token to proxied URLs
+        let url = streamData.streamUrl;
+        if (url.includes('/stream-proxy')) {
+          const separator = url.includes('?') ? '&' : '?';
+          url = `${url}${separator}token=${jwtToken}`;
+        }
+        
+        setStreamUrl(url);
       } else if (contentType === 'itv') {
         // For live channels, use cmd directly
         const streamResp = await fetch(`${apiUrl}/api/providers/${params.providerId}/stream`, {
@@ -283,7 +291,15 @@ export default function WatchScreen() {
         }
         
         const streamData = await streamResp.json();
-        setStreamUrl(streamData.streamUrl);
+        
+        // Add JWT token to proxied URLs
+        let url = streamData.streamUrl;
+        if (url.includes('/stream-proxy')) {
+          const separator = url.includes('?') ? '&' : '?';
+          url = `${url}${separator}token=${jwtToken}`;
+        }
+        
+        setStreamUrl(url);
       }
     } catch (err) {
       console.error('Stream loading error:', err);

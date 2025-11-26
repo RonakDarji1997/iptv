@@ -9,7 +9,7 @@ import {
   Dimensions,
   useWindowDimensions,
 } from 'react-native';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuthStore } from '@/lib/store';
 import { useSnapshotStore } from '@/lib/snapshot-store';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -52,7 +52,7 @@ const SCREEN_HEIGHT = Dimensions.get('window').height;
 
 export default function LiveScreen() {
   const { user, selectedProfile, selectedProviderIds, jwtToken } = useAuthStore();
-  const { snapshot: cachedSnapshot, setSnapshot } = useSnapshotStore();
+  const { snapshot: cachedSnapshot, setSnapshot, isForProvider } = useSnapshotStore();
   const { width: windowWidth } = useWindowDimensions();
   const isMobile = windowWidth < 768;
 
@@ -66,13 +66,14 @@ export default function LiveScreen() {
   // Preview player state
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
+  const [streamLoading, setStreamLoading] = useState(false);
   const [currentEpg, setCurrentEpg] = useState<{ current_program: EpgProgram | null; next_program: EpgProgram | null } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   
   // EPG grid state
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [channelEpgs, setChannelEpgs] = useState<{ [channelId: string]: EpgProgram[] }>({});
-  const [epgLoading, setEpgLoading] = useState(false);
+  const epgCacheRef = useRef<{ [channelId: string]: { data: EpgProgram[], timestamp: number } }>({});
 
   useEffect(() => {
     // Dashboard already fetched and cached snapshot, just use it
@@ -91,13 +92,8 @@ export default function LiveScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channels, categories]);
 
-  useEffect(() => {
-    // Load EPG data for visible channels when category changes
-    if (selectedCategory && categorizedChannels[selectedCategory]) {
-      loadEpgForChannels(categorizedChannels[selectedCategory]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCategory, categorizedChannels]);
+  // Removed automatic EPG loading on category change
+  // EPG is now only loaded when a channel is clicked
 
   useEffect(() => {
     // Set default category if not set
@@ -113,6 +109,14 @@ export default function LiveScreen() {
 
   const loadFromCache = () => {
     if (!cachedSnapshot) return;
+    
+    // Check if cached snapshot is for the current provider
+    const currentProviderId = selectedProviderIds[0];
+    if (currentProviderId && !isForProvider(currentProviderId)) {
+      console.log(`[Live] Cached snapshot is for different provider, refreshing...`);
+      loadSnapshot(true);
+      return;
+    }
     
     const channelCategories = cachedSnapshot.categories.filter(
       (cat: Category) => cat.type === 'CHANNEL'
@@ -194,8 +198,9 @@ export default function LiveScreen() {
       });
       mergedSnapshot.channels = Array.from(channelMap.values());
 
-      // Cache the merged snapshot
-      setSnapshot(mergedSnapshot);
+      // Cache the merged snapshot with provider ID
+      const primaryProviderId = selectedProviderIds[0] || '';
+      setSnapshot(mergedSnapshot, primaryProviderId);
 
       const channelCategories = mergedSnapshot.categories.filter(
         (cat: Category) => cat.type === 'CHANNEL'
@@ -227,59 +232,56 @@ export default function LiveScreen() {
     setCategorizedChannels(organized);
   };
 
-  const loadEpgForChannels = async (channels: Channel[]) => {
-    if (!selectedProviderIds[0] || epgLoading) return;
+  // Load EPG only when channel is clicked
+  const loadChannelEpg = async (channel: Channel) => {
+    if (!selectedProviderIds[0]) return;
     
-    setEpgLoading(true);
-    const providerId = selectedProviderIds[0];
-    const newEpgs: { [channelId: string]: EpgProgram[] } = {};
+    const providerId = channel.providerId || selectedProviderIds[0];
+    const EPG_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+    const now = Date.now();
+    
+    // Check cache first
+    const cached = epgCacheRef.current[channel.id];
+    if (cached && (now - cached.timestamp) < EPG_CACHE_DURATION) {
+      console.log(`[Live] Using cached EPG for channel: ${channel.name}`);
+      return; // Already have valid cached data
+    }
     
     try {
-      // Load EPG for up to 10 channels at a time in batches
-      const batchSize = 10;
-      const channelsToLoad = channels.slice(0, 30); // Load up to 30 channels
+      console.log(`[Live] Loading EPG for single channel: ${channel.name}`);
       
-      for (let i = 0; i < channelsToLoad.length; i += batchSize) {
-        const batch = channelsToLoad.slice(i, i + batchSize);
+      const response = await fetch(`${API_URL}/api/providers/${providerId}/epg`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${jwtToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ channelId: channel.id }),
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        const programs: EpgProgram[] = data.epg?.programs || [];
         
-        await Promise.all(batch.map(async (channel) => {
-          try {
-            const response = await fetch(`${API_URL}/api/providers/${providerId}/epg`, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${jwtToken}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ channelId: channel.id }),
-            });
-            
-            if (response.ok) {
-              const data = await response.json();
-              // Use all programs from the response
-              const programs: EpgProgram[] = data.epg?.programs || [];
-              
-              // Fallback to current + next if programs array is empty
-              if (programs.length === 0) {
-                if (data.epg?.current_program) programs.push(data.epg.current_program);
-                if (data.epg?.next_program) programs.push(data.epg.next_program);
-              }
-              
-              if (programs.length > 0) {
-                newEpgs[channel.id] = programs;
-              }
-            }
-          } catch (err) {
-            console.error(`Failed to load EPG for channel ${channel.name}:`, err);
-          }
-        }));
+        // Fallback to current + next if programs array is empty
+        if (programs.length === 0) {
+          if (data.epg?.current_program) programs.push(data.epg.current_program);
+          if (data.epg?.next_program) programs.push(data.epg.next_program);
+        }
         
-        // Update EPG data after each batch for progressive loading
-        setChannelEpgs(prev => ({ ...prev, ...newEpgs }));
+        if (programs.length > 0) {
+          // Cache the data
+          epgCacheRef.current[channel.id] = {
+            data: programs,
+            timestamp: now
+          };
+          
+          setChannelEpgs(prev => ({ ...prev, [channel.id]: programs }));
+          console.log(`[Live] Loaded ${programs.length} EPG programs for ${channel.name}`);
+        }
       }
     } catch (err) {
-      console.error('Failed to load EPGs:', err);
-    } finally {
-      setEpgLoading(false);
+      console.error(`[Live] Failed to load EPG for ${channel.name}:`, err);
     }
   };
 
@@ -292,49 +294,66 @@ export default function LiveScreen() {
     }
 
     try {
+      // Set channel immediately for instant UI feedback
       setSelectedChannel(channel);
+      setStreamUrl(null); // Clear previous stream
+      setCurrentEpg(null); // Clear previous EPG
+      setStreamLoading(true); // Show loading state
       
-      // Get stream URL
-      const streamResponse = await fetch(`${API_URL}/api/providers/${providerId}/stream`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${jwtToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          cmd: channel.cmd,
-          contentType: 'itv',
+      // Fetch stream and EPG in parallel
+      const [streamResponse, epgResponse] = await Promise.all([
+        fetch(`${API_URL}/api/providers/${providerId}/stream`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${jwtToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            cmd: channel.cmd,
+            contentType: 'itv',
+          }),
         }),
-      });
+        fetch(`${API_URL}/api/providers/${providerId}/epg`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${jwtToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            channelId: channel.id,
+          }),
+        })
+      ]);
 
+      // Update stream URL - add JWT token as query parameter for video player
       if (streamResponse.ok) {
         const streamData = await streamResponse.json();
-        setStreamUrl(streamData.streamUrl);
+        let url = streamData.streamUrl;
+        
+        // If it's a proxied URL, add JWT token
+        if (url.includes('/stream-proxy')) {
+          const separator = url.includes('?') ? '&' : '?';
+          url = `${url}${separator}token=${jwtToken}`;
+        }
+        
+        setStreamUrl(url);
       }
 
-      // Load EPG for this channel
-      const epgResponse = await fetch(`${API_URL}/api/providers/${providerId}/epg`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${jwtToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          channelId: channel.id,
-        }),
-      });
-
+      // Update EPG
       if (epgResponse.ok) {
         const epgData = await epgResponse.json();
         setCurrentEpg(epgData.epg);
       }
     } catch (err) {
       console.error('Load channel error:', err);
+    } finally {
+      setStreamLoading(false); // Hide loading state
     }
   };
 
   const handleChannelPress = (channel: Channel) => {
     loadChannelStream(channel);
+    loadChannelEpg(channel); // Load EPG for this channel
   };
 
   const handleRefresh = async () => {
@@ -406,7 +425,7 @@ export default function LiveScreen() {
     ? categorizedChannels[selectedCategory] || []
     : [];
   
-  // Helper function to generate time slots (30-minute intervals for 6 hours)
+  // Helper function to generate time slots (30-minute intervals for 72 hours)
   const generateTimeSlots = () => {
     const slots = [];
     const now = new Date();
@@ -414,7 +433,7 @@ export default function LiveScreen() {
     startTime.setHours(startTime.getHours() - 1); // Start 1 hour before
     startTime.setMinutes(0, 0, 0);
     
-    for (let i = 0; i < 16; i++) { // 8 hours of slots
+    for (let i = 0; i < 146; i++) { // 73 hours of slots (30-min intervals)
       const slotTime = new Date(startTime.getTime() + i * 30 * 60 * 1000);
       slots.push(slotTime);
     }
@@ -486,7 +505,12 @@ export default function LiveScreen() {
       <View style={isMobile ? styles.topSectionMobile : styles.topSection}>
         {/* Left: Video Preview (60% desktop, 100% mobile) */}
         <View style={isMobile ? styles.previewContainerMobile : styles.previewContainer}>
-          {selectedChannel && streamUrl ? (
+          {streamLoading ? (
+            <View style={styles.noPreview}>
+              <ActivityIndicator size="large" color="#ef4444" />
+              <Text style={styles.noPreviewText}>Loading stream...</Text>
+            </View>
+          ) : selectedChannel && streamUrl ? (
             <View style={styles.playerWrapper}>
               <VideoPlayer
                 uri={streamUrl}
@@ -520,9 +544,9 @@ export default function LiveScreen() {
               {currentEpg?.current_program && (
                 <View style={styles.programCard}>
                   <Text style={styles.programLabel}>NOW PLAYING</Text>
-                  <Text style={styles.programTitle}>{currentEpg.current_program.name}</Text>
+                  <Text style={styles.programTitle}>{currentEpg.current_program.name || 'No Title'}</Text>
                   <Text style={styles.programTime}>
-                    {currentEpg.current_program.t_time} - {currentEpg.current_program.t_time_to}
+                    {currentEpg.current_program.t_time || ''} - {currentEpg.current_program.t_time_to || ''}
                   </Text>
                   {currentEpg.current_program.descr && (
                     <Text style={styles.programDesc} numberOfLines={4}>
@@ -535,9 +559,9 @@ export default function LiveScreen() {
               {currentEpg?.next_program && (
                 <View style={[styles.programCard, styles.nextProgramCard]}>
                   <Text style={styles.programLabel}>UP NEXT</Text>
-                  <Text style={styles.programTitle}>{currentEpg.next_program.name}</Text>
+                  <Text style={styles.programTitle}>{currentEpg.next_program.name || 'No Title'}</Text>
                   <Text style={styles.programTime}>
-                    {currentEpg.next_program.t_time} - {currentEpg.next_program.t_time_to}
+                    {currentEpg.next_program.t_time || ''} - {currentEpg.next_program.t_time_to || ''}
                   </Text>
                 </View>
               )}
@@ -674,10 +698,10 @@ export default function LiveScreen() {
                           {program ? (
                             <View style={styles.epgProgramCard}>
                               <Text style={styles.epgProgramTitle} numberOfLines={1}>
-                                {program.name}
+                                {program.name || 'No Title'}
                               </Text>
                               <Text style={styles.epgProgramTime} numberOfLines={1}>
-                                {program.t_time}
+                                {program.t_time || ''}
                               </Text>
                             </View>
                           ) : (
@@ -701,13 +725,6 @@ export default function LiveScreen() {
               </View>
             );
           })}
-          
-          {epgLoading && (
-            <View style={styles.epgLoadingOverlay}>
-              <ActivityIndicator size="large" color="#ef4444" />
-              <Text style={styles.epgLoadingText}>Loading EPG data...</Text>
-            </View>
-          )}
           
           <View style={{ height: 40 }} />
         </ScrollView>

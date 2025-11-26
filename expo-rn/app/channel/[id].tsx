@@ -120,7 +120,15 @@ export default function ChannelDetailScreen() {
       }
 
       const streamData = await streamResponse.json();
-      setStreamUrl(streamData.streamUrl);
+      
+      // Add JWT token to proxied URLs
+      let url = streamData.streamUrl;
+      if (url.includes('/stream-proxy')) {
+        const separator = url.includes('?') ? '&' : '?';
+        url = `${url}${separator}token=${jwtToken}`;
+      }
+      
+      setStreamUrl(url);
     } catch (err) {
       console.error('Channel data loading error:', err);
       setError(err instanceof Error ? err.message : 'Failed to load channel');

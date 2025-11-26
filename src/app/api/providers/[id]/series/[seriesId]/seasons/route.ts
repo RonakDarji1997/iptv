@@ -106,30 +106,32 @@ export async function GET(
           console.log(`[OnDemand] No seasons found for series ${series.name} (externalId: ${series.externalId})`);
         }
         
-        // Save each season and its episodes to DB
-        for (const seasonData of seasonsData) {
-          const season = await prisma.season.upsert({
-            where: {
-              seriesId_externalId: {
-                seriesId: seriesId,
-                externalId: seasonData.id,
-              },
-            },
-            create: {
-              seriesId: seriesId,
-              externalId: seasonData.id,
-              seasonNumber: parseInt(seasonData.season_number) || 0,
-              name: seasonData.name || `Season ${seasonData.season_number}`,
-            },
-            update: {
-              seasonNumber: parseInt(seasonData.season_number) || 0,
-              name: seasonData.name || `Season ${seasonData.season_number}`,
-            },
-          });
+        // Save each season and its episodes to DB - process in background
+        const processSeasonsInBackground = async () => {
+          for (const seasonData of seasonsData) {
+            try {
+              const season = await prisma.season.upsert({
+                where: {
+                  seriesId_externalId: {
+                    seriesId: seriesId,
+                    externalId: seasonData.id,
+                  },
+                },
+                create: {
+                  seriesId: seriesId,
+                  externalId: seasonData.id,
+                  seasonNumber: parseInt(seasonData.season_number) || 0,
+                  name: seasonData.name || `Season ${seasonData.season_number}`,
+                },
+                update: {
+                  seasonNumber: parseInt(seasonData.season_number) || 0,
+                  name: seasonData.name || `Season ${seasonData.season_number}`,
+                },
+              });
 
-          // Fetch episodes for this season with pagination
-          console.log(`[OnDemand] Fetching episodes for season ${seasonData.season_number} (seasonId: ${seasonData.id})`);
-          try {
+              // Fetch episodes for this season with pagination
+              console.log(`[OnDemand] Fetching episodes for season ${seasonData.season_number} (seasonId: ${seasonData.id})`);
+              try {
             let allEpisodes: any[] = [];
             let currentPage = 1;
             let hasMorePages = true;
@@ -207,30 +209,35 @@ export async function GET(
                 },
               });
             }
-          } catch (episodeError) {
-            console.error(`[OnDemand] Error fetching episodes for season ${seasonData.season_number}:`, episodeError);
-            // Continue with next season even if episodes fail
+              } catch (episodeError) {
+                console.error(`[OnDemand] Error fetching episodes for season ${seasonData.season_number}:`, episodeError);
+                // Continue with next season even if episodes fail
+              }
+            } catch (seasonError) {
+              console.error(`[OnDemand] Error processing season ${seasonData.season_number}:`, seasonError);
+            }
           }
-        }
+          console.log(`[OnDemand] Background processing complete: ${seasonsData.length} seasons for series ${series.name}`);
+        };
 
-        console.log(`[OnDemand] Saved ${seasonsData.length} seasons for series ${series.name}`);
-
-        // Re-fetch from DB to get the saved data
-        seasons = await prisma.season.findMany({
-          where: {
-            seriesId: seriesId,
-          },
-          include: {
-            episodes: {
-              orderBy: {
-                episodeNumber: 'asc',
-              },
-            },
-          },
-          orderBy: {
-            seasonNumber: 'desc',
-          },
+        // Start background processing (don't await)
+        processSeasonsInBackground().catch(err => {
+          console.error(`[OnDemand] Background processing error:`, err);
         });
+
+        console.log(`[OnDemand] Returning ${seasonsData.length} seasons immediately (episodes loading in background)`);
+
+        // Return seasons immediately with empty episodes (they'll be loaded in background)
+        seasons = seasonsData.map((seasonData: any) => ({
+          id: seasonData.id, // Use external ID temporarily
+          seriesId: seriesId,
+          externalId: seasonData.id,
+          seasonNumber: parseInt(seasonData.season_number) || 0,
+          name: seasonData.name || `Season ${seasonData.season_number}`,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          episodes: [], // Episodes will be loaded in background
+        }));
       } catch (error) {
         console.error('[OnDemand] Error fetching from Stalker API:', error);
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -246,6 +253,8 @@ export async function GET(
           error: `Failed to fetch seasons: ${errorMessage}`,
         });
       }
+    } else {
+      console.log(`[OnDemand] Found ${seasons.length} seasons in database for series ${series.name}`);
     }
 
     // Return seasons with episodes from database

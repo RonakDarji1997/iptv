@@ -104,27 +104,13 @@ export async function POST(
         contentType,
       });
 
-      // Initialize client with credentials (pass serial number)
-      const client = new StalkerClient(provider.url, bearer, adid, sn);
-      Object.assign(client, { mac });
-
-      // Get stream URL - try with stored bearer first, fallback to handshake if auth fails
-      console.log('[Stream] Calling getStreamUrl with:', { cmd, contentType, episodeNumber });
-      try {
-        streamUrl = await client.getStreamUrl(cmd, contentType, episodeNumber);
-      } catch (error: any) {
-        // If authorization failed, do fresh handshake and retry
-        if (error.message && error.message.includes('Authorization failed')) {
-          console.log('[Stream] ⚠️ Authorization failed with stored bearer, trying fresh handshake...');
-          await client.handshake();
-          console.log('[Stream] ✅ Handshake successful, retrying getStreamUrl...');
-          streamUrl = await client.getStreamUrl(cmd, contentType, episodeNumber);
-        } else {
-          throw error;
-        }
-      }
+      // Return a proxy URL that will regenerate fresh stream URL on each request
+      // This avoids token expiration issues
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:2005';
+      const proxiedUrl = `${baseUrl}/api/providers/${id}/stream-proxy?cmd=${encodeURIComponent(cmd)}&type=${contentType}${episodeNumber ? `&episode=${episodeNumber}` : ''}`;
+      console.log('[Stream] Returning proxied stream URL:', proxiedUrl);
       
-      console.log('[Stream] Generated stream URL:', streamUrl);
+      streamUrl = proxiedUrl;
     } else if (provider.type === 'XTREAM') {
       // TODO: Implement Xtream URL generation
       // For now, use cmd as direct URL
