@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- New Live TV UI matching the screenshot design -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/live_tv_container"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0f1419"
+    android:visibility="gone">
+
+    <!-- Player Area (can expand to full screen) -->
+    <FrameLayout
+        android:id="@+id/live_player_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000">
+
+        <androidx.media3.ui.PlayerView
+            android:id="@+id/live_player_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            app:controller_layout_id="@layout/custom_player_controls"
+            app:show_timeout="5000"
+            app:auto_show="true" />
+
+        <!-- Channel Info Overlay (right side) -->
+        <LinearLayout
+            android:id="@+id/channel_info_overlay"
+            android:layout_width="300dp"
+            android:layout_height="match_parent"
+            android:layout_gravity="end"
+            android:orientation="vertical"
+            android:background="#cc1f2833"
+            android:padding="20dp"
+            android:visibility="gone">
+
+            <!-- Channel Number and Name -->
+            <TextView
+                android:id="@+id/channel_number"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="001"
+                android:textColor="#fbbf24"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/channel_name"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Russia Today"
+                android:textColor="#ffffff"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:layout_marginTop="4dp" />
+
+            <!-- EPG Timeline -->
+            <TextView
+                android:id="@+id/epg_header"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="EPG Timeline"
+                android:textColor="#99ffffff"
+                android:textSize="14sp"
+                android:layout_marginTop="20dp"
+                android:layout_marginBottom="8dp" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/epg_timeline_recycler"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:maxHeight="200dp"
+                android:clipToPadding="false" />
+
+        </LinearLayout>
+
+    </FrameLayout>
+
+    <!-- Categories and Channels Container (can be hidden for fullscreen) -->
+    <LinearLayout
+        android:id="@+id/live_ui_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="@android:color/transparent">
+        
+        <!-- Spacer to push content to bottom (55% for player, 45% for content) -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="0.55" />
+        
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="0.45"
+            android:orientation="vertical"
+            android:background="#0f1419"
+            android:paddingTop="16dp">
+
+        <!-- Category Slider (Horizontal) -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/live_categories_recycler"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
+            android:clipToPadding="false"
+            android:focusable="true"
+            android:descendantFocusability="afterDescendants" />
+
+        <!-- Channel Grid -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/live_channels_recycler"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:layout_marginTop="16dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
+            android:paddingBottom="16dp"
+            android:clipToPadding="false" />
+
+        <!-- Empty State Message -->
+        <TextView
+            android:id="@+id/live_empty_state"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:text="Select a category to see channels"
+            android:textColor="#66ffffff"
+            android:textSize="18sp"
+            android:gravity="center"
+            android:visibility="gone" />
+
+        <!-- Loading Indicator -->
+        <ProgressBar
+            android:id="@+id/live_loading_indicator"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:visibility="gone" />
+
+        </LinearLayout>
+        
+    </LinearLayout>
+
+</FrameLayout>

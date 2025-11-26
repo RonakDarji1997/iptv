@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="600dp"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="32dp"
+    android:background="@drawable/dialog_background"
+    android:gravity="center">
+
+    <!-- DEPRECATED: Background sync was removed. This layout is kept for history but is unused. -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Background sync removed — this dialog is unused"
+        android:textColor="#cccccc"
+        android:textSize="16sp"
+        android:gravity="center" />
+
+    <!-- Title -->
+    <TextView
+        android:id="@+id/sync_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Syncing Data..."
+        android:textColor="#ffffff"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:layout_marginTop="16dp" />
+
+    <!-- Progress Bar -->
+    <ProgressBar
+        android:id="@+id/sync_progress_bar"
+        style="@android:style/Widget.ProgressBar.Horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="12dp"
+        android:layout_marginTop="24dp"
+        android:progressTint="#fbbf24"
+        android:progressBackgroundTint="#33ffffff"
+        android:max="100"
+        android:progress="0" />
+
+    <!-- Percentage -->
+    <TextView
+        android:id="@+id/sync_percentage"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="0%"
+        android:textColor="#fbbf24"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_marginTop="8dp" />
+
+    <!-- Status Message -->
+    <TextView
+        android:id="@+id/sync_message"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Preparing sync..."
+        android:textColor="#cccccc"
+        android:textSize="16sp"
+        android:gravity="center"
+        android:layout_marginTop="16dp" />
+
+    <!-- Item Counts -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginTop="24dp"
+        android:padding="16dp"
+        android:background="#1a1a1a">
+
+        <TextView
+            android:id="@+id/sync_categories_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Categories: Loading..."
+            android:textColor="#999999"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/sync_channels_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Channels: Loading..."
+            android:textColor="#999999"
+            android:textSize="14sp"
+            android:layout_marginTop="8dp" />
+
+        <TextView
+            android:id="@+id/sync_movies_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Movies: Loading..."
+            android:textColor="#999999"
+            android:textSize="14sp"
+            android:layout_marginTop="8dp" />
+
+        <TextView
+            android:id="@+id/sync_series_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Series: Loading..."
+            android:textColor="#999999"
+            android:textSize="14sp"
+            android:layout_marginTop="8dp" />
+
+    </LinearLayout>
+
+    <!-- Cancel button hidden — this dialog is deprecated -->
+    <View
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone" />
+
+</LinearLayout>

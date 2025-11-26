@@ -13,6 +13,7 @@ object ApiClient {
     // Stalker portal credentials
     var macAddress: String = "00:1A:79:XX:XX:XX"
     var portalUrl: String = "http://example.com/stalker_portal/server/load.php"
+    var bearerToken: String = ""
     
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
         level = HttpLoggingInterceptor.Level.BODY

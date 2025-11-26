@@ -18,6 +18,8 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -38,6 +40,8 @@ import com.ronika.iptvnative.models.Channel
 import com.ronika.iptvnative.models.Movie
 import com.ronika.iptvnative.models.Series
 import kotlinx.coroutines.launch
+import com.ronika.iptvnative.managers.NavigationManager
+import com.ronika.iptvnative.controllers.SidebarController
 
 class MainActivity : ComponentActivity() {
     
@@ -47,6 +51,15 @@ class MainActivity : ComponentActivity() {
     private lateinit var moviesTab: android.widget.ImageView
     private lateinit var showsTab: android.widget.ImageView
     private lateinit var sidebarContainer: LinearLayout
+    // --- sidebar labels and profile name ---
+    private lateinit var searchText: TextView
+    private lateinit var tvText: TextView
+    private lateinit var moviesText: TextView
+    private lateinit var showsText: TextView
+    private lateinit var profileNameText: TextView
+
+    private lateinit var navigationManager: NavigationManager
+    private var liveTVManager: LiveTVManager? = null
     
     // UI Components - Sidebar
     private lateinit var categorySidebar: LinearLayout
@@ -87,6 +100,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var movieDetailsHeaderGrid: LinearLayout
     private lateinit var detailPosterGrid: ImageView
     private lateinit var detailPosterTextGrid: TextView
+    
+    // Broadcast receiver for UI reload
+    private lateinit var reloadReceiver: android.content.BroadcastReceiver
     private lateinit var detailTitleGrid: TextView
     private lateinit var detailYearGrid: TextView
     private lateinit var detailDurationGrid: TextView
@@ -152,6 +168,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var categoryAdapter: CategoryAdapter
     private lateinit var channelAdapter: ChannelAdapter
     private lateinit var channelRowAdapter: ChannelRowAdapter
+    private lateinit var movieCategoryRowAdapter: MovieCategoryRowAdapter
+    
+    // Netflix-style movie rows RecyclerView
+    private lateinit var movieRowsRecycler: RecyclerView
     
     // State
     private var selectedTab = "TV"
@@ -173,13 +193,24 @@ class MainActivity : ComponentActivity() {
         setContentView(R.layout.activity_main)
         
         // Set API credentials with actual values
+        // Using direct IP to bypass DNS issues (tv.stream4k.cc -> 172.66.167.27)
         ApiClient.setCredentials(
             mac = "00:1A:79:17:F4:F5",
-            portal = "http://tv.stream4k.cc/stalker_portal/"
+            portal = "http://172.66.167.27/stalker_portal/server/load.php"
         )
         
         // Initialize views (must be done first)
         initializeViews()
+        
+        // Initialize user and database
+        initializeUser()
+        
+        // Setup modern back press handling
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                handleBackButton()
+            }
+        })
         
         // Check if we're launching for series episode playback
         val playType = intent.getStringExtra("PLAY_TYPE")
@@ -191,12 +222,11 @@ class MainActivity : ComponentActivity() {
         // Setup adapters
         setupAdapters()
         
-        // Setup listeners
+        // Setup listeners (keep logic outside of MainActivity for clarity)
         setupTabListeners()
-        setupFocusListeners()
         
-        // Load initial data
-        loadCategories()
+        // Load initial TV tab (selectedTab already defaults to "TV")
+        switchTab("TV")
         
         // Set initial focus
         tvTab.requestFocus()
@@ -391,6 +421,13 @@ class MainActivity : ComponentActivity() {
         
         // Sidebar
         categorySidebar = findViewById(R.id.category_sidebar)
+        val sidebarDivider = findViewById<View>(R.id.sidebar_divider)
+        // labels for expand/collapse
+        searchText = findViewById(R.id.search_text)
+        tvText = findViewById(R.id.tv_text)
+        moviesText = findViewById(R.id.movies_text)
+        showsText = findViewById(R.id.shows_text)
+        profileNameText = findViewById(R.id.profile_name)
         categoryHeaderText = findViewById(R.id.category_header_text)
         categoriesRecycler = findViewById(R.id.categories_recycler)
         
@@ -403,6 +440,7 @@ class MainActivity : ComponentActivity() {
         contentTitle = findViewById(R.id.content_title)
         contentSubtitle = findViewById(R.id.content_subtitle)
         contentRecycler = findViewById(R.id.content_recycler)
+        movieRowsRecycler = findViewById(R.id.movie_rows_recycler)
         emptyStateMessage = findViewById(R.id.empty_state_message)
         loadingIndicator = findViewById(R.id.loading_indicator)
         
@@ -455,6 +493,90 @@ class MainActivity : ComponentActivity() {
         
         // Initialize players
         setupPlayers()
+
+        // Initialize navigation manager (handles expand/collapse and styles)
+        val sidebarFrame = findViewById<View>(R.id.sidebar_frame)
+        navigationManager = NavigationManager(
+            tvTab,
+            moviesTab,
+            showsTab,
+            sidebarFrame,
+            sidebarContainer,
+            categorySidebar,
+            sidebarDivider,
+            searchText,
+            tvText,
+            moviesText,
+            showsText,
+            profileNameText
+        )
+
+        // Create SidebarController to keep MainActivity slim and move focus wiring
+        val sidebarController = SidebarController(
+            sidebarContainer,
+            searchButton,
+            tvTab,
+            moviesTab,
+            showsTab,
+            searchText,
+            tvText,
+            moviesText,
+            showsText,
+            profileNameText,
+            navigationManager
+        )
+        sidebarController.setup()
+
+        // Register a small developer ADB-only hot-reload broadcast so we can quickly
+        // apply UI state changes without reinstalling the whole app during dev.
+        // Example (from host):
+        // adb shell am broadcast -a com.ronika.iptvnative.RELOAD_UI --ez expand true
+        // keep a reference so we can invoke controller APIs (like icon sizing)
+        val sidebarControllerRef = sidebarController
+
+        reloadReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+                val expand = intent?.getBooleanExtra("expand", false) ?: false
+                val collapsedDp = intent?.getIntExtra("collapsedDp", -1) ?: -1
+                val expandedDp = intent?.getIntExtra("expandedDp", -1) ?: -1
+                val categoryWidth = intent?.getIntExtra("categoryWidth", -1) ?: -1
+                val iconSize = intent?.getIntExtra("iconSize", -1) ?: -1
+                val fadeColor = intent?.getStringExtra("fadeColor")
+                val spacing = intent?.getIntExtra("spacing", -1) ?: -1
+                val sidebarBg = intent?.getStringExtra("sidebarBg")
+                val activeStyle = intent?.getStringExtra("activeStyle")
+
+                if (collapsedDp > 0 || expandedDp > 0 || categoryWidth > 0) {
+                    navigationManager.updateSizes(
+                        collapsedDp = if (collapsedDp > 0) collapsedDp else null,
+                        expandedDp = if (expandedDp > 0) expandedDp else null,
+                        categoryWidthDp = if (categoryWidth > 0) categoryWidth else null
+                    )
+                }
+                if (iconSize > 0) {
+                    sidebarControllerRef.updateIconSize(iconSize)
+                }
+                if (fadeColor != null) {
+                    navigationManager.updateSidebarFade(fadeColor)
+                }
+                if (spacing > 0) {
+                    sidebarControllerRef.updateSidebarSpacing(spacing)
+                }
+                if (sidebarBg != null) {
+                    navigationManager.updateSidebarBackground(sidebarBg)
+                }
+                if (activeStyle != null) {
+                    navigationManager.updateActiveItemStyle(activeStyle)
+                }
+                if (expand) navigationManager.expandSidebar()
+                else navigationManager.collapseSidebar()
+            }
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(reloadReceiver, android.content.IntentFilter("com.ronika.iptvnative.RELOAD_UI"), android.content.Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(reloadReceiver, android.content.IntentFilter("com.ronika.iptvnative.RELOAD_UI"))
+        }
         
         // Setup preview container focus behavior
         playerPreviewContainer.setOnFocusChangeListener { _, hasFocus ->
@@ -971,7 +1093,7 @@ class MainActivity : ComponentActivity() {
             }
         )
         
-        // Channel grid adapter for Movies/Series
+        // Channel grid adapter for Movies/Series (legacy - kept for Series)
         channelAdapter = ChannelAdapter(
             onChannelSelected = { channel ->
                 onChannelSelected(channel)
@@ -983,6 +1105,37 @@ class MainActivity : ComponentActivity() {
                 }
             }
         )
+        
+        // Netflix-style Movie Category Row Adapter
+        movieCategoryRowAdapter = MovieCategoryRowAdapter(
+            onMovieClick = { movie ->
+                // Play movie
+                val channel = Channel(
+                    id = movie.id,
+                    name = movie.name,
+                    number = "",
+                    logo = movie.getImageUrl() ?: "",
+                    cmd = movie.cmd ?: "",
+                    genreId = movie.categoryId
+                )
+                onChannelSelected(channel)
+            },
+            onViewAllClick = { categoryId, categoryTitle ->
+                // Open category detail screen
+                android.util.Log.d("MainActivity", "View All clicked for category: $categoryTitle")
+                // TODO: Open CategoryDetailActivity
+            }
+        )
+        
+        // Setup movie rows recycler
+        movieRowsRecycler.apply {
+            layoutManager = LinearLayoutManager(this@MainActivity)
+            adapter = movieCategoryRowAdapter
+            setHasFixedSize(false)
+            isFocusable = false // Let children handle focus
+            descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+            android.util.Log.d("MainActivity", "movieRowsRecycler setup complete with adapter and layoutManager")
+        }
         
         // Will switch adapter based on selected tab
         setupContentAdapter()
@@ -1103,55 +1256,72 @@ class MainActivity : ComponentActivity() {
     private fun setupFocusListeners() {
         searchButton.setOnFocusChangeListener { view, hasFocus ->
             if (hasFocus) {
-                view.setBackgroundResource(R.drawable.tab_selected)
+                view.setBackgroundResource(R.drawable.nav_item_focused)
+                navigationManager.expandSidebar()
                 searchButton.setColorFilter(android.graphics.Color.BLACK)
             } else {
                 view.setBackgroundResource(R.drawable.nav_item_normal)
                 searchButton.setColorFilter(android.graphics.Color.WHITE)
+                // collapse after a short delay if nothing inside sidebar is focused
+                sidebarContainer.postDelayed({
+                    if (!isAnySidebarFocused()) navigationManager.collapseSidebar()
+                }, 200)
             }
         }
         
         tvTab.setOnFocusChangeListener { view, hasFocus ->
             if (hasFocus) {
                 hoverTab = "TV"
-                view.setBackgroundResource(R.drawable.tab_selected)
+                view.setBackgroundResource(R.drawable.nav_item_focused)
                 // Black icon on white background
                 tvTab.setColorFilter(android.graphics.Color.BLACK)
+                navigationManager.expandSidebar()
                 updateDebugDisplay()
             } else {
                 applySelectedStyle(view, "TV")
+                sidebarContainer.postDelayed({
+                    if (!isAnySidebarFocused()) navigationManager.collapseSidebar()
+                }, 200)
             }
         }
         
         moviesTab.setOnFocusChangeListener { view, hasFocus ->
             if (hasFocus) {
                 hoverTab = "MOVIES"
-                view.setBackgroundResource(R.drawable.tab_selected)
+                view.setBackgroundResource(R.drawable.nav_item_focused)
                 // Black icon on white background
                 moviesTab.setColorFilter(android.graphics.Color.BLACK)
+                navigationManager.expandSidebar()
                 updateDebugDisplay()
             } else {
                 applySelectedStyle(view, "MOVIES")
+                sidebarContainer.postDelayed({
+                    if (!isAnySidebarFocused()) navigationManager.collapseSidebar()
+                }, 200)
             }
         }
         
         showsTab.setOnFocusChangeListener { view, hasFocus ->
             if (hasFocus) {
                 hoverTab = "SHOWS"
-                view.setBackgroundResource(R.drawable.tab_selected)
+                view.setBackgroundResource(R.drawable.nav_item_focused)
                 // Black icon on white background
                 showsTab.setColorFilter(android.graphics.Color.BLACK)
+                navigationManager.expandSidebar()
                 updateDebugDisplay()
             } else {
                 applySelectedStyle(view, "SHOWS")
+                sidebarContainer.postDelayed({
+                    if (!isAnySidebarFocused()) navigationManager.collapseSidebar()
+                }, 200)
             }
         }
     }
     
     private fun applySelectedStyle(view: View, tab: String) {
         val imageView = view as android.widget.ImageView
-        if (tab == selectedTab) {
-            view.setBackgroundResource(R.drawable.tab_selected)
+            if (tab == selectedTab) {
+            view.setBackgroundResource(R.drawable.nav_item_selected)
             // Black icon on white background for selected tab
             imageView.setColorFilter(android.graphics.Color.BLACK)
         } else {
@@ -1159,6 +1329,10 @@ class MainActivity : ComponentActivity() {
             // White icon on dark background for normal tabs
             imageView.setColorFilter(android.graphics.Color.WHITE)
         }
+    }
+
+    private fun isAnySidebarFocused(): Boolean {
+        return searchButton.hasFocus() || tvTab.hasFocus() || moviesTab.hasFocus() || showsTab.hasFocus()
     }
     
     private fun switchTab(tab: String) {
@@ -1168,6 +1342,7 @@ class MainActivity : ComponentActivity() {
         // Stop live player if switching away from TV tab
         if (selectedTab == "TV" && tab != "TV") {
             android.util.Log.d("MainActivity", "Switching from TV to $tab - stopping live player")
+            liveTVManager?.cleanup()
             livePlayer?.apply {
                 stop()
                 clearMediaItems()
@@ -1201,20 +1376,61 @@ class MainActivity : ComponentActivity() {
             categoryAdapter.setActivePosition(-1)
         }
         
-        // For Movies/Shows: Hide main sidebar after selection, show categories
-        if (tab == "MOVIES" || tab == "SHOWS") {
-            sidebarContainer.visibility = View.GONE
-            categorySidebar.visibility = View.VISIBLE
-        } else {
-            // For TV: Start with fullscreen view (both sidebars hidden)
-            // This will be set correctly after loadCategories() auto-selects first category
-            sidebarContainer.visibility = View.GONE
+        // Handle TV tab with new LiveTVManager
+        if (tab == "TV") {
+            // Hide entire sidebar frame for full-screen Live TV
+            findViewById<FrameLayout>(R.id.sidebar_frame)?.visibility = View.GONE
             categorySidebar.visibility = View.GONE
+            
+            // Show new Live TV UI and initialize manager if needed
+            val liveTVContainer = findViewById<FrameLayout>(R.id.live_tv_container)
+            liveTVContainer.visibility = View.VISIBLE
+            
+            // Hide main content area (the parent LinearLayout)
+            findViewById<LinearLayout>(R.id.main_content_area)?.visibility = View.GONE
+            
+            // Initialize LiveTVManager if not already created
+            if (liveTVManager == null) {
+                liveTVManager = LiveTVManager(this)
+            }
+            
+            // Load categories and channels
+            liveTVManager?.loadCategories()
+            
+        } else {
+            // Hide Live TV UI
+            findViewById<FrameLayout>(R.id.live_tv_container)?.visibility = View.GONE
+            
+            // Show main content area (the parent LinearLayout)
+            findViewById<LinearLayout>(R.id.main_content_area)?.visibility = View.VISIBLE
+            
+            if (tab == "MOVIES") {
+                // For Movies: Hide sidebar completely for full width
+                findViewById<FrameLayout>(R.id.sidebar_frame)?.visibility = View.GONE
+                sidebarContainer.visibility = View.GONE
+                categorySidebar.visibility = View.GONE
+                
+                // Show content area children
+                findViewById<LinearLayout>(R.id.player_preview_container)?.visibility = View.GONE
+                findViewById<LinearLayout>(R.id.content_header)?.visibility = View.GONE
+                findViewById<FrameLayout>(R.id.content_list_container)?.visibility = View.VISIBLE
+            } else {
+                // For Shows: Show sidebar frame and categories
+                findViewById<FrameLayout>(R.id.sidebar_frame)?.visibility = View.VISIBLE
+                sidebarContainer.visibility = View.GONE
+                categorySidebar.visibility = View.VISIBLE
+                
+                // Show old content area children
+                findViewById<LinearLayout>(R.id.player_preview_container)?.visibility = View.VISIBLE
+                findViewById<LinearLayout>(R.id.content_header)?.visibility = View.VISIBLE
+                findViewById<FrameLayout>(R.id.content_list_container)?.visibility = View.VISIBLE
+            }
+            
+            setupContentAdapter() // Switch between row/grid adapter
+            loadCategories()
         }
         
         updateTabStyles()
-        setupContentAdapter() // Switch between row/grid adapter
-        loadCategories()
         updateDebugDisplay()
     }
     
@@ -1279,32 +1495,51 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     "MOVIES" -> {
+                        android.util.Log.d("MainActivity", "=== MOVIES TAB SELECTED ===")
+                        
+                        // Stop Live TV player
+                        liveTVManager?.cleanup()
+                        livePlayer?.apply {
+                            stop()
+                            clearMediaItems()
+                        }
+                        
                         // Hide player/preview container and "All Playlists" header for movies
                         playerPreviewContainer.visibility = View.GONE
                         categoryHeaderText.visibility = View.GONE
                         movieDetailsHeaderGrid.visibility = View.GONE
                         movieDetailsHeader.visibility = View.GONE
+                        contentRecycler.visibility = View.GONE
+                        emptyStateMessage.visibility = View.GONE
+                        
+                        // Show Netflix-style movie rows
+                        android.util.Log.d("MainActivity", "Setting movieRowsRecycler to VISIBLE")
+                        movieRowsRecycler.visibility = View.VISIBLE
+                        contentRecycler.visibility = View.GONE
+                        
+                        // Debug parent hierarchy
+                        var parent = movieRowsRecycler.parent as? View
+                        var level = 1
+                        while (parent != null && level < 5) {
+                            android.util.Log.d("MainActivity", "Parent $level: ${parent.javaClass.simpleName} - visibility: ${parent.visibility}, width: ${parent.width}, height: ${parent.height}, measuredWidth: ${parent.measuredWidth}, measuredHeight: ${parent.measuredHeight}")
+                            parent = parent.parent as? View
+                            level++
+                        }
                         
                         val response = ApiClient.apiService.getMovieCategories(
                             ApiClient.getCredentials()
                         )
+                        android.util.Log.d("MainActivity", "Got ${response.categories.size} movie categories")
+                        
                         // Filter out non-numeric category IDs
                         categories = response.categories
                             .filter { it.id.toIntOrNull() != null }
-                            .map { Genre(it.id, it.title, it.name) }
-                        categoryAdapter.setCategories(categories)
+                            .map { Genre(it.id, it.title, it.name, it.alias, it.censored) }
                         
-                        // DON'T auto-select - show empty state and focus on first category
-                        if (categories.isNotEmpty()) {
-                            contentRecycler.visibility = View.GONE
-                            emptyStateMessage.visibility = View.VISIBLE
-                            emptyStateMessage.text = "Select a category to see movies"
-                            // Focus on first category with white bar but don't select
-                            categoriesRecycler.requestFocus()
-                            categoriesRecycler.post {
-                                categoriesRecycler.getChildAt(0)?.requestFocus()
-                            }
-                        }
+                        android.util.Log.d("MainActivity", "Filtered to ${categories.size} movie categories")
+                        
+                        // Load movies for each category (Netflix-style)
+                        loadMovieRows(categories)
                     }
                     "SHOWS" -> {
                         // Hide player/preview container and "All Playlists" header for series
@@ -1318,7 +1553,7 @@ class MainActivity : ComponentActivity() {
                         // Filter out non-numeric category IDs
                         categories = response.categories
                             .filter { it.id.toIntOrNull() != null }
-                            .map { Genre(it.id, it.title, it.name) }
+                            .map { Genre(it.id, it.title, it.name, it.alias, it.censored) }
                         categoryAdapter.setCategories(categories)
                         
                         // DON'T auto-select - show empty state and focus on first category
@@ -1341,6 +1576,69 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.e("MainActivity", "Error loading categories: ${e.message}", e)
                 e.printStackTrace()
                 loadingIndicator.visibility = View.GONE
+            }
+        }
+    }
+    
+    private fun loadMovieRows(categories: List<Genre>) {
+        android.util.Log.d("MainActivity", "loadMovieRows - Loading movies for ${categories.size} categories")
+        
+        // Clear existing rows immediately
+        movieCategoryRowAdapter.setCategoryRows(emptyList())
+        
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                // Load movies for each category and update UI immediately
+                for (category in categories.take(10)) { // Load first 10 categories
+                    android.util.Log.d("MainActivity", "Loading movies for category: ${category.title ?: category.name}")
+                    try {
+                        val moviesResponse = ApiClient.apiService.getMovies(
+                            MoviesRequest(
+                                mac = ApiClient.macAddress,
+                                url = ApiClient.portalUrl,
+                                category = category.id,
+                                page = 1
+                            )
+                        )
+                        
+                        android.util.Log.d("MainActivity", "Got ${moviesResponse.items.data.size} movies for ${category.title ?: category.name}")
+                        
+                        if (moviesResponse.items.data.isNotEmpty()) {
+                            val newRow = MovieCategoryRowAdapter.CategoryRow(
+                                categoryId = category.id,
+                                categoryTitle = (category.title ?: category.name) ?: "Unknown",
+                                movies = moviesResponse.items.data.take(25) // Max 25 movies per row
+                            )
+                            
+                            // Add row to adapter immediately on main thread
+                            withContext(Dispatchers.Main) {
+                                val isFirstRow = movieCategoryRowAdapter.itemCount == 0
+                                movieCategoryRowAdapter.addCategoryRow(newRow)
+                                android.util.Log.d("MainActivity", "Added category row: ${category.title ?: category.name}")
+                                android.util.Log.d("MainActivity", "RecyclerView state - visibility: ${movieRowsRecycler.visibility}, width: ${movieRowsRecycler.width}, height: ${movieRowsRecycler.height}, childCount: ${movieRowsRecycler.childCount}")
+                                
+                                // Focus first category title immediately after first row is added
+                                if (isFirstRow) {
+                                    movieRowsRecycler.postDelayed({
+                                        val firstRow = movieRowsRecycler.getChildAt(0)
+                                        if (firstRow != null) {
+                                            val categoryTitle = firstRow.findViewById<TextView>(R.id.category_title)
+                                            categoryTitle?.requestFocus()
+                                            android.util.Log.d("MainActivity", "Auto-focused first category title")
+                                        }
+                                    }, 100)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "Error loading movies for category ${category.title}: ${e.message}")
+                    }
+                }
+                
+                android.util.Log.d("MainActivity", "Finished loading movie rows")
+                
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Error loading movie rows: ${e.message}", e)
             }
         }
     }
@@ -2312,33 +2610,145 @@ class MainActivity : ComponentActivity() {
         return String.format("%02d:%02d", hour, minute)
     }
     
+    private fun handleBackButton() {
+        android.util.Log.d("MainActivity", "===== handleBackButton CALLED =====")
+        android.util.Log.d("MainActivity", "handleBackButton - selectedTab: $selectedTab")
+        
+        val isInFullscreen = if (selectedTab == "TV") {
+            liveTVManager?.isInFullscreen() ?: false
+        } else {
+            isFullscreen
+        }
+        
+        android.util.Log.d("MainActivity", "handleBackButton - isInFullscreen: $isInFullscreen")
+        
+        // In video fullscreen - exit to preview/content view
+        if (isInFullscreen) {
+            if (selectedTab == "TV") {
+                // Exit Live TV fullscreen - go back to channel list
+                liveTVManager?.exitFullscreen()
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    findViewById<RecyclerView>(R.id.live_channels_recycler)?.requestFocus()
+                }, 150)
+            } else {
+                // Exit movie fullscreen view
+                exitMovieFullscreen()
+            }
+            return
+        }
+        
+        // In Live TV channel list view - go back to main sidebar (keep player running)
+        if (selectedTab == "TV") {
+            val liveTVContainer = findViewById<FrameLayout>(R.id.live_tv_container)
+            val sidebarFrame = findViewById<FrameLayout>(R.id.sidebar_frame)
+            val liveUIContainer = findViewById<LinearLayout>(R.id.live_ui_container)
+            
+            android.util.Log.d("MainActivity", "handleBackButton - Checking Live TV conditions:")
+            android.util.Log.d("MainActivity", "  liveTVContainer visible: ${liveTVContainer?.visibility == View.VISIBLE} (value=${liveTVContainer?.visibility})")
+            android.util.Log.d("MainActivity", "  sidebarFrame gone: ${sidebarFrame?.visibility == View.GONE} (value=${sidebarFrame?.visibility}, GONE=${View.GONE})")
+            android.util.Log.d("MainActivity", "  liveUIContainer visible: ${liveUIContainer?.visibility == View.VISIBLE} (value=${liveUIContainer?.visibility})")
+            
+            if (liveTVContainer?.visibility == View.VISIBLE && 
+                sidebarFrame?.visibility == View.GONE &&
+                liveUIContainer?.visibility == View.VISIBLE) {
+                android.util.Log.d("MainActivity", "✓ Showing main sidebar from Live TV")
+                // Keep Live TV container visible (player keeps running)
+                sidebarFrame.visibility = View.VISIBLE
+                sidebarContainer.visibility = View.VISIBLE
+                
+                // Hide ALL other UI elements - only show main sidebar over Live TV
+                categorySidebar.visibility = View.GONE
+                findViewById<View>(R.id.sidebar_divider)?.visibility = View.GONE
+                findViewById<LinearLayout>(R.id.player_preview_container)?.visibility = View.GONE
+                findViewById<LinearLayout>(R.id.content_header)?.visibility = View.GONE
+                findViewById<FrameLayout>(R.id.content_list_container)?.visibility = View.GONE
+                
+                // Get the parent LinearLayout that contains sidebar, category, and content
+                val mainContentLayout = sidebarFrame.parent as? android.widget.LinearLayout
+                
+                // Make ALL backgrounds transparent so Live TV shows through
+                mainContentLayout?.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                sidebarFrame.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                categorySidebar.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                
+                // Make root FrameLayout background transparent too
+                val rootLayout = mainContentLayout?.parent as? android.widget.FrameLayout
+                rootLayout?.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                
+                // Make Live TV UI container background transparent too
+                findViewById<LinearLayout>(R.id.live_ui_container)?.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                
+                // Hide all children except sidebar_frame
+                mainContentLayout?.let { parent ->
+                    for (i in 0 until parent.childCount) {
+                        val child = parent.getChildAt(i)
+                        if (child.id != R.id.sidebar_frame) {
+                            child.visibility = View.GONE
+                        }
+                    }
+                }
+                
+                // Bring the entire main content layout to front so sidebar appears on top of Live TV
+                mainContentLayout?.bringToFront()
+                mainContentLayout?.requestLayout()
+                
+                android.util.Log.d("MainActivity", "Set visibilities and brought sidebar to front - sidebarFrame: ${sidebarFrame.visibility}, sidebarContainer: ${sidebarContainer.visibility}")
+                sidebarContainer.requestFocus()
+                return
+            }
+        }
+        
+        // If on main sidebar, exit app
+        val sidebarFrame = findViewById<FrameLayout>(R.id.sidebar_frame)
+        if (sidebarContainer.visibility == View.VISIBLE && sidebarFrame?.visibility == View.VISIBLE) {
+            android.util.Log.d("MainActivity", "Exiting app from main sidebar")
+            finish()
+            return
+        }
+        
+        // Default: exit app (shouldn't reach here normally)
+        finish()
+    }
+    
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         android.util.Log.d("MainActivity", "Key pressed: $keyCode")
         
         // Show player controls on any key press when in fullscreen
-        if (isFullscreen && playerView.player != null) {
+        val isInFullscreen = if (selectedTab == "TV") {
+            liveTVManager?.isInFullscreen() ?: false
+        } else {
+            isFullscreen
+        }
+        
+        if (isInFullscreen && playerView.player != null) {
             playerView.showController()
         }
         
-        // Handle BACK button
-        if (keyCode == KeyEvent.KEYCODE_BACK) {
-            // Check if we're on main navigation (sidebar visible, not in fullscreen)
-            if (!isFullscreen && sidebarContainer.visibility == View.VISIBLE && categorySidebar.visibility == View.VISIBLE) {
-                // Show exit confirmation dialog
-                showExitConfirmationDialog()
+        // BACK button is now handled by OnBackPressedCallback in onCreate
+        // (removed old BACK button handling logic from here)
+        
+        // Handle custom player controls in fullscreen
+        if (keyCode == KeyEvent.KEYCODE_BACK && false) {  // Disabled - using OnBackPressedCallback instead
+            android.util.Log.d("MainActivity", "BACK pressed - selectedTab: $selectedTab, sidebarContainer visible: ${sidebarContainer.visibility == View.VISIBLE}")
+            
+            // If on main sidebar, exit app by calling finish()
+            val sidebarFrame = findViewById<FrameLayout>(R.id.sidebar_frame)
+            if (sidebarContainer.visibility == View.VISIBLE && sidebarFrame?.visibility == View.VISIBLE) {
+                android.util.Log.d("MainActivity", "Exiting app from main sidebar")
+                // On main navigation - exit app
+                finish()
                 return true
             }
             
             // In video fullscreen - exit to preview/content view
-            if (isFullscreen) {
+            if (isInFullscreen) {
                 if (selectedTab == "TV") {
-                    // Exit to preview + channel view (keep sidebars hidden)
-                    toggleFullscreen()
-                    // Ensure sidebars stay hidden
-                    sidebarContainer.visibility = View.GONE
-                    categorySidebar.visibility = View.GONE
-                    // Focus on preview
-                    playerPreviewContainer.requestFocus()
+                    // Exit Live TV fullscreen - go back to channel list (not category sidebar)
+                    liveTVManager?.exitFullscreen()
+                    // Focus on channels list after a short delay to ensure UI is updated
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        findViewById<RecyclerView>(R.id.live_channels_recycler)?.requestFocus()
+                    }, 150)
                 } else {
                     // Exit movie fullscreen view
                     exitMovieFullscreen()
@@ -2346,7 +2756,33 @@ class MainActivity : ComponentActivity() {
                 return true
             }
             
-            // In content view (TV/Movies/Shows) with both sidebars hidden - show categories
+            // In Live TV channel list view - go back to main sidebar (keep player running)
+            if (selectedTab == "TV") {
+                val liveTVContainer = findViewById<FrameLayout>(R.id.live_tv_container)
+                val sidebarFrame = findViewById<FrameLayout>(R.id.sidebar_frame)
+                val liveUIContainer = findViewById<LinearLayout>(R.id.live_ui_container)
+                
+                android.util.Log.d("MainActivity", "BACK from Live TV - liveTVContainer visible: ${liveTVContainer?.visibility == View.VISIBLE}, sidebarFrame gone: ${sidebarFrame?.visibility == View.GONE}, liveUIContainer visible: ${liveUIContainer?.visibility == View.VISIBLE}")
+                
+                // If in Live TV mode (sidebar hidden), go back to main navigation
+                if (liveTVContainer?.visibility == View.VISIBLE && 
+                    sidebarFrame?.visibility == View.GONE &&
+                    liveUIContainer?.visibility == View.VISIBLE) {
+                    android.util.Log.d("MainActivity", "Showing main sidebar from Live TV")
+                    // Keep Live TV container visible (player keeps running)
+                    // Just show main sidebar on top
+                    sidebarFrame.visibility = View.VISIBLE
+                    sidebarContainer.visibility = View.VISIBLE
+                    categorySidebar.visibility = View.GONE
+                    
+                    // Focus on the main navigation sidebar
+                    sidebarContainer.requestFocus()
+                    
+                    return true
+                }
+            }
+            
+            // In content view (Movies/Shows) with both sidebars hidden - show categories
             if (categorySidebar.visibility == View.GONE && 
                 sidebarContainer.visibility == View.GONE) {
                 // Show categories sidebar
@@ -2401,13 +2837,13 @@ class MainActivity : ComponentActivity() {
         }
         
         // Handle custom player controls in fullscreen
-        if (isFullscreen) {
+        if (isInFullscreen) {
             when (keyCode) {
-                // UP key - focus restart button
+                // UP key - next channel in Live TV, focus restart button in VOD
                 KeyEvent.KEYCODE_DPAD_UP -> {
                     if (selectedTab == "TV") {
-                        // Live TV: channel navigation
-                        playPreviousChannel()
+                        // Live TV: UP goes to next channel
+                        liveTVManager?.playNextChannel()
                         return true
                     } else {
                         // VOD: focus restart button
@@ -2417,10 +2853,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 
-                // DOWN key - channel navigation for Live TV
+                // DOWN key - previous channel in Live TV
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
                     if (selectedTab == "TV") {
-                        playNextChannel()
+                        // Live TV: DOWN goes to previous channel
+                        liveTVManager?.playPreviousChannel()
                         return true
                     }
                 }
@@ -2837,12 +3274,65 @@ class MainActivity : ComponentActivity() {
     
     override fun onDestroy() {
         super.onDestroy()
+        // Unregister broadcast receiver to prevent leak
+        try {
+            unregisterReceiver(reloadReceiver)
+        } catch (e: IllegalArgumentException) {
+            // Receiver was not registered, ignore
+        }
+        liveTVManager?.cleanup()
+        liveTVManager = null
         livePlayer?.release()
         livePlayer = null
         vodPlayer?.release()
         vodPlayer = null
     }
     
+    // ===== SYNC & USER INITIALIZATION =====
+    
+    private fun initializeUser() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val db = com.ronika.iptvnative.database.AppDatabase.getDatabase(this@MainActivity)
+                val userDao = db.userDao()
+                
+                var user = userDao.getUser()
+                
+                if (user == null) {
+                    // Create user with hardcoded credentials
+                    // Using direct IP to bypass DNS (tv.stream4k.cc -> 172.66.167.27)
+                    user = com.ronika.iptvnative.database.entities.UserEntity(
+                        username = "ronak",
+                        email = "ronakdarji1997@gmail.com",
+                        portalUrl = "http://172.66.167.27/stalker_portal/server/load.php",
+                        mac = "00:1a:79:17:f4:f5",
+                        bearerToken = "1E75E91204660B7A876055CE8830130E",
+                        tokenExpiry = System.currentTimeMillis() + (365L * 24 * 60 * 60 * 1000) // 1 year
+                    )
+                    userDao.insertUser(user)
+                    
+                    // Set ApiClient credentials
+                    com.ronika.iptvnative.api.ApiClient.portalUrl = user.portalUrl
+                    com.ronika.iptvnative.api.ApiClient.macAddress = user.mac
+                    com.ronika.iptvnative.api.ApiClient.bearerToken = user.bearerToken
+                    
+                    android.util.Log.d("MainActivity", "User initialized: ${user.username}")
+                } else {
+                    // Use existing user
+                    com.ronika.iptvnative.api.ApiClient.portalUrl = user.portalUrl
+                    com.ronika.iptvnative.api.ApiClient.macAddress = user.mac
+                    com.ronika.iptvnative.api.ApiClient.bearerToken = user.bearerToken
+                    
+                    android.util.Log.d("MainActivity", "Using existing user: ${user.username}")
+                }
+                
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Error initializing user: ${e.message}", e)
+            }
+        }
+    }
+    
+
     private fun showExitConfirmationDialog() {
         AlertDialog.Builder(this)
             .setTitle("Exit BeamTV?")

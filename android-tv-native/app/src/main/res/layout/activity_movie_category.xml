@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0f1419">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <!-- Header -->
+        <TextView
+            android:id="@+id/category_title_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Category Movies"
+            android:textColor="#ffffff"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:padding="40dp"
+            android:paddingBottom="20dp" />
+
+        <!-- Movies Grid -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/movies_grid_recycler"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:paddingStart="40dp"
+            android:paddingEnd="40dp"
+            android:paddingBottom="20dp"
+            android:clipToPadding="false" />
+
+    </LinearLayout>
+
+    <!-- Loading Indicator -->
+    <ProgressBar
+        android:id="@+id/loading_indicator"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:indeterminateTint="#fbbf24"
+        android:visibility="gone" />
+
+</FrameLayout>

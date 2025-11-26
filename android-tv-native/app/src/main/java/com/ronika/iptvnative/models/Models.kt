@@ -2,11 +2,13 @@ package com.ronika.iptvnative.models
 
 import com.google.gson.annotations.SerializedName
 
-// Genre (for Live TV categories)
+// Genre (for Live TV categories and VOD categories - shared model)
 data class Genre(
     @SerializedName("id") val id: String,
     @SerializedName("title") val title: String?,
-    @SerializedName("name") val name: String?
+    @SerializedName("name") val name: String?,
+    @SerializedName("alias") val alias: String?,
+    @SerializedName("censored") val censored: Int?
 ) {
     fun getDisplayName(): String = title ?: name ?: "Unknown"
 }
@@ -15,7 +17,9 @@ data class Genre(
 data class Category(
     @SerializedName("id") val id: String,
     @SerializedName("title") val title: String?,
-    @SerializedName("name") val name: String?
+    @SerializedName("name") val name: String?,
+    @SerializedName("alias") val alias: String?,
+    @SerializedName("censored") val censored: Int?
 ) {
     fun getDisplayName(): String = title ?: name ?: "Unknown"
 }
@@ -50,7 +54,9 @@ data class Movie(
     @SerializedName("country") val country: String?,
     @SerializedName("genres_str") val genresStr: String?,
     @SerializedName("o_name") val originalName: String?,
-    @SerializedName("time") val duration: String?
+    @SerializedName("time") val duration: String?,
+    @SerializedName("has_files") val totalEpisodes: String?,
+    @SerializedName("is_series") val isSeries: String?
 ) {
     fun getImageUrl(): String? = screenshotUri ?: screenshot ?: coverBig ?: cover ?: poster
 }
@@ -102,7 +108,9 @@ data class ItemsResponse(
 
 data class ItemsData(
     @SerializedName("data") val data: List<Movie>, // Will be used for both movies and series
-    @SerializedName("total") val total: Int
+    @SerializedName("total") val total: Int,
+    @SerializedName("total_items") val totalItems: String?,
+    @SerializedName("max_page_items") val maxPageItems: Int?
 )
 
 // Movie/Series info response

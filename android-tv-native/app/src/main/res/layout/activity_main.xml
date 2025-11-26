@@ -11,82 +11,219 @@
     android:layout_height="match_parent"
     android:orientation="horizontal">
 
-    <!-- Left Icon Sidebar -->
-    <LinearLayout
-        android:id="@+id/sidebar_container"
-        android:layout_width="80dp"
+    <!-- Left Icon Sidebar (collapsed by default) -->
+    <FrameLayout
+        android:id="@+id/sidebar_frame"
+        android:layout_width="72dp"
+        android:layout_height="match_parent">
+        <LinearLayout
+            android:id="@+id/sidebar_container"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:background="#CC1a2027"
+            android:gravity="center_vertical">
+            <!-- Profile (icon + name shown when expanded) -->
+            <LinearLayout
+                android:id="@+id/profile_box"
+                android:layout_width="match_parent"
+                android:layout_height="80dp"
+                android:orientation="horizontal"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="12dp">
+                <ImageView
+                    android:id="@+id/profile_avatar"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:src="@drawable/ic_profile_placeholder"
+                    android:scaleType="centerCrop"
+                    android:background="@drawable/nav_item_normal"
+                    android:focusable="false"
+                    android:contentDescription="Profile avatar" />
+                <TextView
+                    android:id="@+id/profile_name"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Ronak"
+                    android:textColor="#ffffff"
+                    android:textSize="14sp"
+                    android:paddingStart="14dp"
+                    android:visibility="gone"
+                    android:ellipsize="end"
+                    android:maxLines="1" />
+            </LinearLayout>
+            <!-- Compact icon-only rows. Each row has icon + label (label hidden when collapsed) -->
+            <!-- Sync Row -->
+
+            <!-- Search Row -->
+            <LinearLayout
+                android:id="@+id/row_search"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:orientation="horizontal"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="20dp">
+                <ImageView
+                    android:id="@+id/search_button"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:src="@drawable/ic_search"
+                    android:padding="6dp"
+                    android:scaleType="centerInside"
+                    android:background="@drawable/nav_item_normal"
+                    android:focusable="true"
+                    android:clickable="true"
+                    android:nextFocusUp="@+id/tab_shows"
+                    android:nextFocusDown="@+id/tab_tv" />
+                <TextView
+                    android:id="@+id/search_text"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Search"
+                    android:textColor="#ffffff"
+                    android:textSize="14sp"
+                    android:paddingStart="14dp"
+                    android:visibility="gone"
+                    android:ellipsize="end"
+                    android:maxLines="1" />
+            </LinearLayout>
+            <!-- TV Row -->
+            <LinearLayout
+                android:id="@+id/row_tv"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:orientation="horizontal"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="16dp">
+                <ImageView
+                    android:id="@+id/tab_tv"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:src="@drawable/ic_live_tv"
+                    android:padding="6dp"
+                    android:scaleType="centerInside"
+                    android:background="@drawable/nav_item_normal"
+                    android:focusable="true"
+                    android:clickable="true"
+                    android:nextFocusUp="@+id/search_button"
+                    android:nextFocusDown="@+id/tab_movies" />
+                <TextView
+                    android:id="@+id/tv_text"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Live TV"
+                    android:textColor="#ffffff"
+                    android:textSize="14sp"
+                    android:paddingStart="14dp"
+                    android:visibility="gone"
+                    android:ellipsize="end"
+                    android:maxLines="1" />
+            </LinearLayout>
+            <!-- Movies Row -->
+            <LinearLayout
+                android:id="@+id/row_movies"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:orientation="horizontal"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="16dp">
+                <ImageView
+                    android:id="@+id/tab_movies"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:src="@drawable/ic_movies"
+                    android:padding="6dp"
+                    android:scaleType="centerInside"
+                    android:background="@drawable/nav_item_normal"
+                    android:focusable="true"
+                    android:clickable="true"
+                    android:nextFocusUp="@+id/tab_tv"
+                    android:nextFocusDown="@+id/tab_shows" />
+                <TextView
+                    android:id="@+id/movies_text"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Movies"
+                    android:textColor="#ffffff"
+                    android:textSize="14sp"
+                    android:paddingStart="14dp"
+                    android:visibility="gone"
+                    android:ellipsize="end"
+                    android:maxLines="1" />
+            </LinearLayout>
+            <!-- Shows Row -->
+            <LinearLayout
+                android:id="@+id/row_shows"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:orientation="horizontal"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:gravity="center_vertical">
+                <ImageView
+                    android:id="@+id/tab_shows"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:src="@drawable/ic_series"
+                    android:padding="6dp"
+                    android:scaleType="centerInside"
+                    android:background="@drawable/nav_item_normal"
+                    android:focusable="true"
+                    android:clickable="true"
+                    android:nextFocusUp="@+id/tab_movies"
+                    android:nextFocusDown="@+id/search_button" />
+                <TextView
+                    android:id="@+id/shows_text"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Series"
+                    android:textColor="#ffffff"
+                    android:textSize="14sp"
+                    android:paddingStart="14dp"
+                    android:visibility="gone"
+                    android:ellipsize="end"
+                    android:maxLines="1" />
+            </LinearLayout>
+        </LinearLayout>
+        <!-- Fade overlay for right edge -->
+        <View
+            android:id="@+id/sidebar_fade_overlay"
+            android:layout_width="16dp"
+            android:layout_height="match_parent"
+            android:layout_gravity="end"
+            android:background="@drawable/sidebar_fade_right"
+            android:tag="sidebar_fade_overlay" />
+    </FrameLayout>
+
+    <!-- Categories Column (hidden until sidebar expands) -->
+    <!-- Divider between sidebar and categories, shows only when expanded -->
+    <View
+        android:id="@+id/sidebar_divider"
+        android:layout_width="12dp"
         android:layout_height="match_parent"
-        android:orientation="vertical"
-        android:background="#1a2027"
-        android:gravity="center_vertical">
+        android:background="@drawable/gradient_fade_left"
+        android:visibility="gone" />
 
-        <!-- Search Icon -->
-        <ImageView
-            android:id="@+id/search_button"
-            android:layout_width="match_parent"
-            android:layout_height="60dp"
-            android:src="@drawable/ic_search"
-            android:padding="18dp"
-            android:scaleType="fitCenter"
-            android:background="@drawable/nav_item_normal"
-            android:focusable="true"
-            android:clickable="true"
-            android:layout_marginBottom="30dp"
-            android:nextFocusDown="@+id/tab_tv" />
-
-        <!-- TV Icon -->
-        <ImageView
-            android:id="@+id/tab_tv"
-            android:layout_width="match_parent"
-            android:layout_height="60dp"
-            android:src="@drawable/ic_live_tv"
-            android:padding="18dp"
-            android:scaleType="fitCenter"
-            android:background="@drawable/nav_item_normal"
-            android:focusable="true"
-            android:clickable="true"
-            android:layout_marginBottom="20dp"
-            android:nextFocusUp="@+id/search_button"
-            android:nextFocusDown="@+id/tab_movies" />
-
-        <!-- Movies Icon -->
-        <ImageView
-            android:id="@+id/tab_movies"
-            android:layout_width="match_parent"
-            android:layout_height="60dp"
-            android:src="@drawable/ic_movies"
-            android:padding="18dp"
-            android:scaleType="fitCenter"
-            android:background="@drawable/nav_item_normal"
-            android:focusable="true"
-            android:clickable="true"
-            android:layout_marginBottom="20dp"
-            android:nextFocusUp="@+id/tab_tv"
-            android:nextFocusDown="@+id/tab_shows" />
-
-        <!-- Shows Icon -->
-        <ImageView
-            android:id="@+id/tab_shows"
-            android:layout_width="match_parent"
-            android:layout_height="60dp"
-            android:src="@drawable/ic_series"
-            android:padding="18dp"
-            android:scaleType="fitCenter"
-            android:background="@drawable/nav_item_normal"
-            android:focusable="true"
-            android:clickable="true"
-            android:nextFocusUp="@+id/tab_movies" />
-
-    </LinearLayout>
-
-    <!-- Categories Column -->
     <LinearLayout
         android:id="@+id/category_sidebar"
-        android:layout_width="280dp"
-        android:layout_height="match_parent"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
         android:orientation="vertical"
         android:background="#1f2833"
-        android:visibility="visible">
+        android:visibility="gone">
 
         <!-- Category Header -->
         <TextView
@@ -100,7 +237,8 @@
             android:paddingStart="16dp"
             android:paddingEnd="16dp"
             android:paddingTop="16dp"
-            android:paddingBottom="12dp" />
+            android:paddingBottom="12dp"
+            android:visibility="gone" />
 
         <!-- Categories List -->
         <androidx.recyclerview.widget.RecyclerView
@@ -114,6 +252,7 @@
 
     <!-- Main Content Area -->
     <LinearLayout
+        android:id="@+id/main_content_area"
         android:layout_width="0dp"
         android:layout_height="match_parent"
         android:layout_weight="1"
@@ -543,6 +682,19 @@
             android:layout_height="0dp"
             android:layout_weight="1">
 
+            <!-- Netflix-style Movie Rows (for Movies/Series) -->
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/movie_rows_recycler"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:paddingTop="20dp"
+                android:paddingBottom="20dp"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:clipToPadding="false"
+                android:visibility="gone" />
+
+            <!-- Original Content Recycler (for grid view - legacy) -->
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/content_recycler"
                 android:layout_width="match_parent"
@@ -596,6 +748,9 @@
 
 </LinearLayout>
 <!-- End Main Content Layout -->
+
+<!-- Live TV Full-Screen Overlay -->
+<include layout="@layout/fragment_live_tv" />
 
 <!-- Movie/Show Details Overlay (shown on fullscreen for 3 seconds) -->
 <LinearLayout

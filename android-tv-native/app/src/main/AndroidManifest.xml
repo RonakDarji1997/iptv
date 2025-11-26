@@ -37,6 +37,18 @@
             android:name=".SearchActivity"
             android:exported="false"
             android:screenOrientation="landscape" />
+            
+        <activity
+            android:name=".MoviesActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme"
+            android:screenOrientation="landscape" />
+            
+        <activity
+            android:name=".MovieCategoryActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme"
+            android:screenOrientation="landscape" />
     </application>
 
 </manifest>

@@ -1,17 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Category background selector: white on focus, blue when selected, gray normally -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Focused state -->
+    <!-- Focused state (white background) -->
     <item android:state_focused="true">
         <shape android:shape="rectangle">
             <solid android:color="#FFFFFF" />
-            <corners android:radius="8dp" />
+            <corners android:radius="24dp" />
         </shape>
     </item>
-    <!-- Normal state -->
+    <!-- Default state (handled by adapter - blue if selected, gray if not) -->
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="#00000000" />
-            <corners android:radius="8dp" />
+            <solid android:color="#4a5568" />
+            <corners android:radius="24dp" />
         </shape>
     </item>
 </selector>
