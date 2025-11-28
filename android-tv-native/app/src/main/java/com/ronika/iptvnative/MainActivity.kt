@@ -4547,13 +4547,20 @@ class MainActivity : ComponentActivity() {
                         lastDisplayedText = newText
                         android.util.Log.d("MainActivity", "📺 Subtitle changed: ${newText ?: "(hidden)"}")
                         runOnUiThread {
+                            android.util.Log.d("MainActivity", "📺 UI Thread: Updating subtitle text to: ${currentSubtitle?.text ?: "null"}")
                             if (currentSubtitle != null) {
-                                liveSubtitleText?.apply {
-                                    text = currentSubtitle.text
-                                    visibility = View.VISIBLE
+                                if (liveSubtitleText != null) {
+                                    liveSubtitleText?.apply {
+                                        text = currentSubtitle.text
+                                        visibility = View.VISIBLE
+                                        android.util.Log.d("MainActivity", "📺 TextView updated: text='${text}', visibility=${visibility}")
+                                    }
+                                } else {
+                                    android.util.Log.e("MainActivity", "❌ liveSubtitleText is null!")
                                 }
                             } else {
                                 liveSubtitleText?.visibility = View.GONE
+                                android.util.Log.d("MainActivity", "📺 No subtitle to show, hiding TextView")
                             }
                         }
                     }

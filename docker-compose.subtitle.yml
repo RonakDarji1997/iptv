@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  whisper-python:
+    build:
+      context: ./android-tv-native/whisper-backend
+      dockerfile: Dockerfile
+    container_name: whisper-python-service
+    restart: unless-stopped
+    ports:
+      - "8771:8771"
+    volumes:
+      - ./android-tv-native/whisper-backend/uploads:/app/uploads
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8771/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  subtitle-server:
+    image: node:18-alpine
+    container_name: stream-subtitle-server
+    restart: unless-stopped
+    working_dir: /app
+    ports:
+      - "8770:8770"
+    volumes:
+      - ./android-tv-native/whisper-backend:/app
+      - /tmp:/tmp
+    environment:
+      - NODE_ENV=production
+      - PORT=8770
+    command: sh -c "npm install && node stream-subtitle-server.js"
+    depends_on:
+      whisper-python:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8770/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  default:
+    name: subtitle-network

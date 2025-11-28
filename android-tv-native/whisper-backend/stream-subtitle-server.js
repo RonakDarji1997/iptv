@@ -407,45 +407,99 @@ async function transcribeAudioFile(audioPath, language) {
  * Stop subtitle generation for a stream
  */
 function stopSubtitleGeneration(streamId) {
+    console.log(`🛑 ===== STOPPING SUBTITLE GENERATION FOR ${streamId} =====`);
+    
     const job = activeJobs.get(streamId);
     if (!job) {
+        // Even if job not found, try to kill any FFmpeg processes for this stream
+        console.log(`⚠️  Job ${streamId} not found in activeJobs, but attempting to kill related processes`);
+        killFfmpegProcesses(streamId);
         return false;
     }
     
-    console.log(`Stopping subtitle generation for stream ${streamId}`);
+    console.log(`🛑 Found active job for ${streamId}, stopping...`);
     
     // Close file watcher
     if (job.chunkWatcher) {
-        try {
-            job.chunkWatcher.close();
-        } catch (e) {
-            // Watcher may already be closed
-        }
+        console.log(`🛑 Closing file watcher for ${streamId}`);
+        job.chunkWatcher.close();
     }
     
     // Kill FFmpeg process
     if (job.ffmpegProcess) {
-        console.log(`🛑 Stopping FFmpeg process for stream ${streamId}`);
+        console.log(`🛑 Killing FFmpeg process for stream ${streamId} (PID: ${job.ffmpegProcess.pid})`);
         job.ffmpegProcess.kill('SIGTERM');
+        
+        // Wait a bit and force kill if still running
+        setTimeout(() => {
+            try {
+                if (job.ffmpegProcess) {
+                    console.log(`🛑 Force killing FFmpeg process for ${streamId}`);
+                    job.ffmpegProcess.kill('SIGKILL');
+                }
+            } catch (e) {
+                console.log(`⚠️  Error force killing process: ${e.message}`);
+            }
+        }, 2000);
+    } else {
+        console.log(`⚠️  No FFmpeg process found for ${streamId}`);
     }
-    // Kill all FFmpeg processes (global)
-    const { exec } = require('child_process');
-    exec('pkill -f ffmpeg', (error, stdout, stderr) => {
-        if (error) {
-            console.log(`Error killing all ffmpeg: ${error.message}`);
-        } else {
-            console.log('🛑 pkill -f ffmpeg executed to kill all FFmpeg processes');
-        }
-    });
+    
+    // Kill any remaining FFmpeg processes for this stream
+    killFfmpegProcesses(streamId);
     
     // Clean up chunk files
-    const chunkFiles = fs.readdirSync(SUBTITLE_DIR).filter(f => f.startsWith(`${streamId}_chunk_`));
-    chunkFiles.forEach(f => fs.unlinkSync(path.join(SUBTITLE_DIR, f)));
+    try {
+        const chunkFiles = fs.readdirSync(SUBTITLE_DIR).filter(f => f.startsWith(`${streamId}_chunk_`));
+        console.log(`🗑️  Deleting ${chunkFiles.length} chunk files for ${streamId}`);
+        chunkFiles.forEach(f => {
+            fs.unlinkSync(path.join(SUBTITLE_DIR, f));
+            console.log(`🗑️  Deleted: ${f}`);
+        });
+    } catch (e) {
+        console.log(`⚠️  Error cleaning up chunk files: ${e.message}`);
+    }
+    
+    // Clean up VTT file
+    try {
+        const vttPath = path.join(SUBTITLE_DIR, `${streamId}.vtt`);
+        if (fs.existsSync(vttPath)) {
+            fs.unlinkSync(vttPath);
+            console.log(`🗑️  Deleted VTT file: ${streamId}.vtt`);
+        }
+    } catch (e) {
+        console.log(`⚠️  Error deleting VTT file: ${e.message}`);
+    }
     
     activeJobs.delete(streamId);
     transcriptionQueues.delete(streamId);
     activeTranscriptions.delete(streamId);
+    
+    console.log(`✅ Successfully stopped subtitle generation for ${streamId}`);
+    console.log(`🧹 Cleaned up: activeJobs=${activeJobs.size}, queues=${transcriptionQueues.size}, transcriptions=${activeTranscriptions.size}`);
+    
     return true;
+}
+
+/**
+ * Kill all FFmpeg processes related to a stream ID
+ */
+function killFfmpegProcesses(streamId) {
+    const { exec } = require('child_process');
+    
+    // Kill FFmpeg processes that have the stream ID in their command line
+    exec(`pkill -f "ffmpeg.*${streamId}"`, (error) => {
+        if (!error) {
+            console.log(`🛑 Killed FFmpeg processes for stream ${streamId}`);
+        }
+    });
+    
+    // Also kill any FFmpeg processes that are outputting to files with this stream ID
+    exec(`pkill -f "${streamId}_chunk_"`, (error) => {
+        if (!error) {
+            console.log(`🛑 Killed FFmpeg processes outputting to ${streamId} chunks`);
+        }
+    });
 }
 
 // ============================================
@@ -474,21 +528,23 @@ app.post('/start-subtitle', async (req, res) => {
         
         // Cancel ALL existing subtitle generation jobs and clean up files
         console.log('🧹 Canceling all existing subtitle jobs...');
-        for (const [existingStreamId, job] of activeJobs.entries()) {
+        for (const [existingStreamId] of activeJobs.entries()) {
             console.log(`🛑 Stopping job: ${existingStreamId}`);
             stopSubtitleGeneration(existingStreamId);
         }
         
         // Delete all old audio files
-        const fs = require('fs');
         const oldFiles = fs.readdirSync(SUBTITLE_DIR).filter(f => f.endsWith('.wav'));
         console.log(`🗑️  Deleting ${oldFiles.length} old audio files...`);
         for (const file of oldFiles) {
-            try {
-                fs.unlinkSync(path.join(SUBTITLE_DIR, file));
-            } catch (err) {
-                // Ignore errors
-            }
+            fs.unlinkSync(path.join(SUBTITLE_DIR, file));
+        }
+        
+        // Delete all old VTT files (cleanup from previous sessions)
+        const oldVttFiles = fs.readdirSync(SUBTITLE_DIR).filter(f => f.endsWith('.vtt'));
+        console.log(`🗑️  Deleting ${oldVttFiles.length} old VTT files...`);
+        for (const file of oldVttFiles) {
+            fs.unlinkSync(path.join(SUBTITLE_DIR, file));
         }
         
         const streamId = await startSubtitleGeneration(streamUrl, language, startPosition || 0);
@@ -548,8 +604,9 @@ app.post('/stop-subtitle', (req, res) => {
             console.log('✅ Stream stopped successfully:', streamId);
             res.json({ message: 'Subtitle generation stopped' });
         } else {
-            console.log('❌ Stream not found:', streamId);
-            res.status(404).json({ error: 'Stream not found' });
+            console.log('⚠️  Stream not found (may already be stopped):', streamId);
+            // Return success even if not found - it's already stopped
+            res.json({ message: 'Subtitle generation already stopped or not found' });
         }
         
     } catch (error) {
