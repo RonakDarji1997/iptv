@@ -367,19 +367,20 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
  * Send audio file to Python Whisper service for transcription
  */
 async function transcribeAudioFile(audioPath, language) {
-    console.log(`Transcribing with native whisper-cli: ${audioPath} (${language})`);
+    console.log(`Transcribing with whisper.cpp: ${audioPath} (${language})`);
 
     return new Promise((resolve, reject) => {
         const modelPath = path.join(__dirname, 'models', 'ggml-tiny.bin');
         const langParam = (language && language !== 'auto') ? language : 'en';
+        // Path to whisper.cpp binary (adjust if needed)
+        const whisperBin = path.join(__dirname, '..', 'whisper.cpp', 'main');
 
-        // Use native whisper-cli
-        const whisperProcess = spawn('whisper-cli', [
+        // whisper.cpp command: main -m <model> -f <audio> -l <lang> -otxt
+        const whisperProcess = spawn(whisperBin, [
             '-m', modelPath,
-            audioPath,
+            '-f', audioPath,
             '-l', langParam,
-            '-nt',
-            '-np'
+            '-otxt'
         ]);
 
         let output = '';
@@ -390,9 +391,9 @@ async function transcribeAudioFile(audioPath, language) {
         const timeout = setTimeout(() => {
             if (!resolved) {
                 resolved = true;
-                console.error(`⏱️  Whisper timeout for ${path.basename(audioPath)}`);
+                console.error(`⏱️  Whisper.cpp timeout for ${path.basename(audioPath)}`);
                 whisperProcess.kill('SIGKILL');
-                reject(new Error('Whisper transcription timeout'));
+                reject(new Error('Whisper.cpp transcription timeout'));
             }
         }, 10000);
 
@@ -409,21 +410,22 @@ async function transcribeAudioFile(audioPath, language) {
             resolved = true;
             clearTimeout(timeout);
             if (code !== 0) {
-                console.error(`whisper-cli error: ${errorOutput}`);
-                reject(new Error(`whisper-cli failed with code ${code}`));
+                console.error(`whisper.cpp error: ${errorOutput}`);
+                reject(new Error(`whisper.cpp failed with code ${code}`));
                 return;
             }
 
-            // Extract transcribed text (remove metadata lines)
-            const lines = output.split('\n').filter(line =>
-                !line.includes('whisper_') &&
-                !line.includes('ggml_') &&
-                !line.includes('system_info') &&
-                !line.includes('main: processing') &&
-                line.trim().length > 0
-            );
-
-            const text = lines.join(' ').trim();
+            // whisper.cpp outputs transcript to <audio>.txt
+            const txtPath = audioPath + '.txt';
+            let text = '';
+            try {
+                if (fs.existsSync(txtPath)) {
+                    text = fs.readFileSync(txtPath, 'utf8').trim();
+                    fs.unlinkSync(txtPath); // Clean up
+                }
+            } catch (err) {
+                console.error(`Failed to read whisper.cpp output: ${err.message}`);
+            }
             console.log(`Transcription result: ${text || '(empty)'}`);
             resolve({ text });
         });
