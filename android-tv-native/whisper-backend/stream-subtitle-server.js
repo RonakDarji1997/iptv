@@ -33,7 +33,7 @@ const subtitleEvents = new EventEmitter();
 // Transcription queue and concurrency control
 const transcriptionQueues = new Map(); // streamId -> array of pending chunks
 const activeTranscriptions = new Map(); // streamId -> count of running transcriptions
-const MAX_CONCURRENT_PER_STREAM = 3;
+const MAX_CONCURRENT_PER_STREAM = 5;
 
 // Ensure subtitle directory exists
 const SUBTITLE_DIR = path.join(__dirname, 'subtitles');
@@ -43,22 +43,22 @@ if (!fs.existsSync(SUBTITLE_DIR)) {
 
 /**
  * Process transcription queue with concurrency control
- * Ensures max 3 whisper-cli processes run simultaneously per stream
+ * Ensures max 5 whisper-cli processes run simultaneously per stream
  */
 async function processTranscriptionQueue(streamId) {
     const queue = transcriptionQueues.get(streamId);
     if (!queue || queue.length === 0) return;
     
-    // Check if already processing
+    // Check if already at max concurrency
     const activeCount = activeTranscriptions.get(streamId) || 0;
-    if (activeCount > 0) return; // Only process one chunk at a time to maintain order
+    if (activeCount >= MAX_CONCURRENT_PER_STREAM) return; // Wait for a slot to free up
     
     // Get next chunk from queue
     const chunkTask = queue.shift();
     if (!chunkTask) return;
     
     // Mark as active
-    activeTranscriptions.set(streamId, 1);
+    activeTranscriptions.set(streamId, activeCount + 1);
     
     // Process chunk sequentially
     try {
@@ -171,7 +171,7 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
     // -ar 16000: 16kHz sample rate (Whisper requirement)
     // -ac 1: mono audio
     // -f segment: output segments
-    // -segment_time 2: 2-second chunks (faster processing)
+    // -segment_time 1: 1-second chunks (faster processing, more timely subtitles)
     // -af silencedetect: Skip silence to avoid processing empty audio
     const ffmpegArgs = [
         '-ss', startPosition.toString(),
@@ -181,9 +181,9 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
         '-acodec', 'pcm_s16le',
         '-ar', '16000',
         '-ac', '1',
-        '-af', 'silencedetect=n=-30dB:d=2',
+        '-af', 'silencedetect=n=-30dB:d=1',
         '-f', 'segment',
-        '-segment_time', '2',
+        '-segment_time', '1',
         '-segment_format', 'wav',
         '-reset_timestamps', '1',
         path.join(SUBTITLE_DIR, `${streamId}_chunk_%03d.wav`)
@@ -209,7 +209,8 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
         lastUpdate: Date.now(),
         startPosition,
         currentTime: startPosition,
-        firstSubtitleReady: false
+        firstSubtitleReady: false,
+        stopped: false
     };
     activeJobs.set(streamId, jobInfo);
     
@@ -235,6 +236,12 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
         
         console.log(`📋 Queued chunk: ${chunkPath}`);
         
+        // Don't queue if job was stopped
+        if (jobInfo.stopped) {
+            console.log(`⏹️  Not queuing chunk for stopped job ${streamId}`);
+            return;
+        }
+        
         // Add to queue instead of processing immediately
         const queue = transcriptionQueues.get(streamId);
         if (!queue) {
@@ -242,11 +249,18 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
             return;
         }
         
-        // If queue is too large (>150 chunks = 5 minutes ahead), delete this chunk
-        // This prevents infinite file buildup when FFmpeg generates faster than transcription
-        // No deletion here; chunks will only be deleted on stop request
-            // Delete all .wav chunks for this stream on stop
-            // fs, path, and glob are already required at the top. No deletion here; chunks will only be deleted on stop request.
+        // If queue is too large (>50 chunks = 50 seconds ahead), drop oldest chunks
+        // This prevents huge delays and keeps subtitles timely
+        if (queue.length > 50) {
+            const dropped = queue.shift(); // Drop oldest
+            console.log(`⚠️  Queue too large, dropped oldest chunk: ${dropped.filename}`);
+            // Also delete the file
+            try {
+                fs.unlinkSync(dropped.chunkPath);
+            } catch (e) {
+                // Ignore
+            }
+        }
         
         queue.push({
             filename,
@@ -260,13 +274,19 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
                     return;
                 }
                 
+                // Check if job was stopped
+                if (jobInfo.stopped) {
+                    console.log(`⏹️  Skipping transcription for stopped job ${streamId}`);
+                    return;
+                }
+                
                 try {
                     console.log(`🎤 Transcribing: ${filename}`);
                     const transcription = await transcribeAudioFile(chunkPath, language);
                     
                     if (transcription?.text?.trim()) {
                         const startTime = currentTime;
-                        const endTime = currentTime + 2;
+                        const endTime = currentTime + 1;
                         
                         console.log(`Subtitle [${formatVTTTime(startTime)} --> ${formatVTTTime(endTime)}]: ${transcription.text}`);
                         
@@ -275,7 +295,7 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
                         jobInfo.lastUpdate = Date.now();
                         
                         // Increment currentTime only when we add a subtitle
-                        currentTime += 2;
+                        currentTime += 1;
                         jobInfo.currentTime = currentTime;
                         
                         // Emit event for first subtitle ready
@@ -418,6 +438,9 @@ function stopSubtitleGeneration(streamId) {
     }
     
     console.log(`🛑 Found active job for ${streamId}, stopping...`);
+    
+    // Mark as stopped to prevent further processing
+    job.stopped = true;
     
     // Close file watcher
     if (job.chunkWatcher) {
