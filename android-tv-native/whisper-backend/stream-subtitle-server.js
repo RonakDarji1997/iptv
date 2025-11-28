@@ -355,66 +355,51 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
  * Send audio file to Python Whisper service for transcription
  */
 async function transcribeAudioFile(audioPath, language) {
-    console.log(`Transcribing with whisper-cli: ${audioPath} (${language})`);
+    console.log(`Transcribing via Python service: ${audioPath} (${language})`);
     
     return new Promise((resolve, reject) => {
-        const modelPath = path.join(__dirname, 'models', 'ggml-tiny.bin');
-        const langParam = (language && language !== 'auto') ? language : 'en';
+        const FormData = require('form-data');
+        const fs = require('fs');
+        const http = require('http');
         
-        // Use whisper-cli with Metal acceleration (4x faster than real-time!)
-        const whisperProcess = spawn('whisper-cli', [
-            '-m', modelPath,
-            audioPath,
-            '-l', langParam,
-            '-nt',  // no timestamps in output
-            '-np'   // no prints except result
-        ]);
+        const form = new FormData();
+        form.append('audio', fs.createReadStream(audioPath));
+        if (language && language !== 'auto') {
+            form.append('language', language);
+        }
         
-        let output = '';
-        let errorOutput = '';
-        let resolved = false;
+        const options = {
+            hostname: 'localhost',
+            port: 8771,
+            path: '/transcribe',
+            method: 'POST',
+            headers: form.getHeaders()
+        };
         
-        // 10-second timeout for 2-second audio chunks (should take < 1 second)
-        const timeout = setTimeout(() => {
-            if (!resolved) {
-                resolved = true;
-                console.error(`⏱️  Whisper timeout for ${path.basename(audioPath)}`);
-                whisperProcess.kill('SIGKILL');
-                reject(new Error('Whisper transcription timeout'));
-            }
-        }, 10000);
-        
-        whisperProcess.stdout.on('data', (data) => {
-            output += data.toString();
+        const req = http.request(options, (res) => {
+            let data = '';
+            res.on('data', (chunk) => {
+                data += chunk;
+            });
+            res.on('end', () => {
+                try {
+                    const result = JSON.parse(data);
+                    if (result.error) {
+                        reject(new Error(result.error));
+                    } else {
+                        resolve({ text: result.text });
+                    }
+                } catch (err) {
+                    reject(new Error('Invalid response from Python service'));
+                }
+            });
         });
         
-        whisperProcess.stderr.on('data', (data) => {
-            errorOutput += data.toString();
+        req.on('error', (err) => {
+            reject(err);
         });
         
-        whisperProcess.on('close', (code) => {
-            if (resolved) return; // Already handled by timeout
-            resolved = true;
-            clearTimeout(timeout);
-            if (code !== 0) {
-                console.error(`whisper-cli error: ${errorOutput}`);
-                reject(new Error(`whisper-cli failed with code ${code}`));
-                return;
-            }
-            
-            // Extract transcribed text (remove metadata lines)
-            const lines = output.split('\n').filter(line => 
-                !line.includes('whisper_') && 
-                !line.includes('ggml_') &&
-                !line.includes('system_info') &&
-                !line.includes('main: processing') &&
-                line.trim().length > 0
-            );
-            
-            const text = lines.join(' ').trim();
-            console.log(`Transcription result: ${text || '(empty)'}`);
-            resolve({ text });
-        });
+        form.pipe(req);
     });
 }
 
