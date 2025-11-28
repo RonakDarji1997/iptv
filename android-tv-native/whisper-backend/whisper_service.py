@@ -194,7 +194,7 @@ def get_supported_languages():
     })
 
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 8765))
+    port = int(os.getenv('PORT', 8771))
     
     logger.info('=' * 60)
     logger.info('🎙️  Whisper Subtitle Service Starting...')
