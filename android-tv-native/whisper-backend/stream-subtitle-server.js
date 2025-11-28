@@ -498,19 +498,19 @@ app.post('/start-subtitle', async (req, res) => {
         console.log('✅ Subtitle URL:', subtitleUrl);
         console.log('⏳ Waiting for first subtitle to be ready...');
         
-        // Wait for first subtitle with 10 second timeout (reduced from 60s)
-        // Typically takes 2-3 seconds: FFmpeg generates first 2s chunk + whisper transcribes (~0.5s)
+        // Wait for first subtitle with 30 second timeout (increased from 10s)
+        // FFmpeg startup + first chunk + transcription can take longer
         const firstSubtitleReady = await Promise.race([
             new Promise((resolve) => {
                 subtitleEvents.once(`ready:${streamId}`, () => resolve(true));
             }),
-            new Promise((resolve) => setTimeout(() => resolve(false), 10000))
+            new Promise((resolve) => setTimeout(() => resolve(false), 30000))
         ]);
         
         if (firstSubtitleReady) {
             console.log('🎉 First subtitle ready, sending response');
         } else {
-            console.log('⚠️  Timeout waiting for first subtitle (10s), sending response anyway');
+            console.log('⚠️  Timeout waiting for first subtitle (30s), sending response anyway');
         }
         
         res.json({
