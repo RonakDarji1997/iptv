@@ -212,4 +212,4 @@ if __name__ == '__main__':
         sys.exit(1)
     
     # Run Flask app
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=False)
