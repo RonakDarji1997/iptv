@@ -16,11 +16,8 @@ const { EventEmitter } = require('events');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const FormData = require('form-data');
-const fetch = require('node-fetch');
 
 const PORT = process.env.PORT || 8770;
-const PYTHON_PORT = process.env.PYTHON_PORT || 8771;
 
 const app = express();
 const glob = require('glob');
@@ -615,40 +612,19 @@ app.get('/active-jobs', (req, res) => {
  * Health check
  */
 app.get('/health', async (req, res) => {
-    try {
-        // Check if Python service is running
-        const pythonResponse = await fetch(`http://localhost:${PYTHON_PORT}/health`, {
-            timeout: 2000
-        });
-        
-        const pythonHealth = await pythonResponse.json();
-        
-        res.json({
-            status: 'healthy',
-            activeJobs: activeJobs.size,
-            whisperService: pythonHealth
-        });
-    } catch (error) {
-        res.json({
-            status: 'degraded',
-            activeJobs: activeJobs.size,
-            whisperService: 'unavailable',
-            error: error.message
-        });
-    }
+    res.json({
+        status: 'healthy',
+        activeJobs: activeJobs.size
+    });
 });
 
 // ============================================
 // START SERVER
 // ============================================
 
-// Python service no longer needed - using whisper-cli with Metal acceleration instead!
-// whisper-cli is 10x faster (4x faster than real-time vs 20x slower)
-
 // Start Express server
 app.listen(PORT, () => {
     console.log(`\n🚀 Stream Subtitle Server running on port ${PORT}`);
-    console.log(`📝 Python Whisper service on port ${PYTHON_PORT}`);
     console.log(`\nEndpoints:`);
     console.log(`  POST /start-subtitle - Start subtitle generation`);
     console.log(`  POST /stop-subtitle - Stop subtitle generation`);
