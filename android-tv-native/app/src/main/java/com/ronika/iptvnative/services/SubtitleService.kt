@@ -32,7 +32,7 @@ class SubtitleService {
     private val scope = CoroutineScope(Dispatchers.IO)
     
     // Backend configuration
-    private val backendUrl = "http://10.0.2.2:8770"
+    private val backendUrl = "http://subtitles.ronika.co"
     
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)

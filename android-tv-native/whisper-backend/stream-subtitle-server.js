@@ -17,7 +17,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const FormData = require('form-data');
-const fetch = require('node-fetch');
+
 
 const PORT = process.env.PORT || 8770;
 const PYTHON_PORT = process.env.PYTHON_PORT || 8771;
@@ -176,10 +176,15 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
     // -f segment: output segments
     // -segment_time 2: 2-second chunks (faster processing)
     // -af silencedetect: Skip silence to avoid processing empty audio
+
+    // Docker FFmpeg command
+    // Map subtitle directory to /data in container
+    const dockerVolume = `${SUBTITLE_DIR}:/data`;
+    // Replace subtitle output path with /data inside container
+    const outputPath = `/data/${streamId}_chunk_%03d.wav`;
     const ffmpegArgs = [
         '-ss', startPosition.toString(),
         '-i', streamUrl,
-        // No -t limit: generate continuously until stopped
         '-vn',
         '-acodec', 'pcm_s16le',
         '-ar', '16000',
@@ -189,13 +194,17 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
         '-segment_time', '2',
         '-segment_format', 'wav',
         '-reset_timestamps', '1',
-        path.join(SUBTITLE_DIR, `${streamId}_chunk_%03d.wav`)
+        outputPath
     ];
-    
-    console.log('FFmpeg command:', 'ffmpeg', ffmpegArgs.join(' '));
+    const dockerArgs = [
+        'run', '--rm',
+        '-v', dockerVolume,
+        'jrottenberg/ffmpeg:latest',
+        ...ffmpegArgs
+    ];
+    console.log('FFmpeg command:', 'docker', dockerArgs.join(' '));
     console.log(`⏱️  Starting from ${startPosition}s, generating continuously until stopped`);
-    
-    const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
+    const ffmpegProcess = spawn('docker', dockerArgs);
     
     // Start currentTime from startPosition so VTT timestamps match video time
     let currentTime = startPosition;
@@ -614,28 +623,12 @@ app.get('/active-jobs', (req, res) => {
 /**
  * Health check
  */
-app.get('/health', async (req, res) => {
-    try {
-        // Check if Python service is running
-        const pythonResponse = await fetch(`http://localhost:${PYTHON_PORT}/health`, {
-            timeout: 2000
-        });
-        
-        const pythonHealth = await pythonResponse.json();
-        
-        res.json({
-            status: 'healthy',
-            activeJobs: activeJobs.size,
-            whisperService: pythonHealth
-        });
-    } catch (error) {
-        res.json({
-            status: 'degraded',
-            activeJobs: activeJobs.size,
-            whisperService: 'unavailable',
-            error: error.message
-        });
-    }
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'healthy',
+        activeJobs: activeJobs.size,
+        whisperService: 'whisper-cli'
+    });
 });
 
 // ============================================
