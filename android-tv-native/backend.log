@@ -1,0 +1,15 @@
+2025-11-28 14:44:34,487 - __main__ - INFO - ============================================================
+2025-11-28 14:44:34,487 - __main__ - INFO - 🎙️  Whisper Subtitle Service Starting...
+2025-11-28 14:44:34,487 - __main__ - INFO - ============================================================
+2025-11-28 14:44:34,487 - __main__ - INFO - Model: tiny
+2025-11-28 14:44:34,487 - __main__ - INFO - Device: auto
+2025-11-28 14:44:34,487 - __main__ - INFO - Port: 8765
+2025-11-28 14:44:34,487 - __main__ - INFO - ============================================================
+2025-11-28 14:44:34,487 - __main__ - INFO - Loading Whisper model: tiny...
+2025-11-28 14:44:34,487 - __main__ - INFO - First run will download model (~150MB), please wait...
+2025-11-28 14:44:34,712 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Systran/faster-whisper-tiny/revision/main "HTTP/1.1 200 OK"
+2025-11-28 14:44:34,831 - __main__ - INFO - ✅ Whisper model 'tiny' loaded successfully!
+ * Serving Flask app 'whisper_service'
+ * Debug mode: off
+Address already in use
+Port 8765 is in use by another program. Either identify and stop that program, or start the server with a different port.

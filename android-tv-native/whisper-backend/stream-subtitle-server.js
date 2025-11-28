@@ -23,6 +23,7 @@ const PORT = process.env.PORT || 8770;
 const PYTHON_PORT = process.env.PYTHON_PORT || 8771;
 
 const app = express();
+const glob = require('glob');
 app.use(cors());
 app.use(express.json());
 
@@ -246,16 +247,9 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
         
         // If queue is too large (>150 chunks = 5 minutes ahead), delete this chunk
         // This prevents infinite file buildup when FFmpeg generates faster than transcription
-        if (queue.length > 150) {
-            console.log(`🗑️  Queue full (${queue.length}), deleting excess chunk: ${filename}`);
-            try {
-                fs.unlinkSync(chunkPath);
-                processedChunks.delete(filename);
-            } catch (err) {
-                console.error(`Failed to delete excess chunk: ${err.message}`);
-            }
-            return;
-        }
+        // No deletion here; chunks will only be deleted on stop request
+            // Delete all .wav chunks for this stream on stop
+            // fs, path, and glob are already required at the top. No deletion here; chunks will only be deleted on stop request.
         
         queue.push({
             filename,
@@ -449,8 +443,18 @@ function stopSubtitleGeneration(streamId) {
     
     // Kill FFmpeg process
     if (job.ffmpegProcess) {
+        console.log(`🛑 Stopping FFmpeg process for stream ${streamId}`);
         job.ffmpegProcess.kill('SIGTERM');
     }
+    // Kill all FFmpeg processes (global)
+    const { exec } = require('child_process');
+    exec('pkill -f ffmpeg', (error, stdout, stderr) => {
+        if (error) {
+            console.log(`Error killing all ffmpeg: ${error.message}`);
+        } else {
+            console.log('🛑 pkill -f ffmpeg executed to kill all FFmpeg processes');
+        }
+    });
     
     // Clean up chunk files
     const chunkFiles = fs.readdirSync(SUBTITLE_DIR).filter(f => f.startsWith(`${streamId}_chunk_`));
