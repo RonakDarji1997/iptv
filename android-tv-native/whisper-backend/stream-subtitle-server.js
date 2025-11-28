@@ -367,31 +367,20 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
  * Send audio file to Python Whisper service for transcription
  */
 async function transcribeAudioFile(audioPath, language) {
-    console.log(`Transcribing with whisper-cli (Docker): ${audioPath} (${language})`);
+    console.log(`Transcribing with native whisper-cli: ${audioPath} (${language})`);
 
     return new Promise((resolve, reject) => {
-        const modelDir = path.join(__dirname, 'models');
-        const subtitleDir = path.join(__dirname, 'subtitles');
-        const modelPath = '/models/ggml-tiny.bin';
-        const chunkFile = path.basename(audioPath);
+        const modelPath = path.join(__dirname, 'models', 'ggml-tiny.bin');
         const langParam = (language && language !== 'auto') ? language : 'en';
 
-        // Docker run command for whisper-cli
-        // Mount models and subtitles directories
-        const dockerArgs = [
-            'run', '--rm',
-            '-v', `${modelDir}:/models`,
-            '-v', `${subtitleDir}:/subtitles`,
-            'whisper-cli-image',
+        // Use native whisper-cli
+        const whisperProcess = spawn('whisper-cli', [
             '-m', modelPath,
-            `/subtitles/${chunkFile}`,
+            audioPath,
             '-l', langParam,
             '-nt',
             '-np'
-        ];
-
-        // Use sudo for Docker if required
-        const whisperProcess = spawn('sudo', ['docker', ...dockerArgs]);
+        ]);
 
         let output = '';
         let errorOutput = '';
@@ -401,7 +390,7 @@ async function transcribeAudioFile(audioPath, language) {
         const timeout = setTimeout(() => {
             if (!resolved) {
                 resolved = true;
-                console.error(`⏱️  Whisper timeout for ${chunkFile}`);
+                console.error(`⏱️  Whisper timeout for ${path.basename(audioPath)}`);
                 whisperProcess.kill('SIGKILL');
                 reject(new Error('Whisper transcription timeout'));
             }
@@ -420,8 +409,8 @@ async function transcribeAudioFile(audioPath, language) {
             resolved = true;
             clearTimeout(timeout);
             if (code !== 0) {
-                console.error(`whisper-cli (Docker) error: ${errorOutput}`);
-                reject(new Error(`whisper-cli (Docker) failed with code ${code}`));
+                console.error(`whisper-cli error: ${errorOutput}`);
+                reject(new Error(`whisper-cli failed with code ${code}`));
                 return;
             }
 
