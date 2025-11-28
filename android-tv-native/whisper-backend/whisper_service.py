@@ -97,70 +97,38 @@ def transcribe_audio():
     start_time = datetime.now()
     
     try:
-        # Get audio data
-        if 'file' in request.files:
-            audio_file = request.files['file']
-            audio_data = audio_file.read()
-        else:
-            audio_data = request.data
+        # Get audio data from file upload
+        if 'audio' not in request.files:
+            return jsonify({'error': 'No audio file provided'}), 400
         
-        if not audio_data:
-            return jsonify({'error': 'No audio data provided'}), 400
+        audio_file = request.files['audio']
+        language = request.form.get('language', 'en')
         
-        # Get language parameter
-        language = request.args.get('language', 'auto')
-        if language == 'auto':
-            language = None  # Let Whisper auto-detect
-        
-        # Save audio temporarily
-        temp_path = f"uploads/temp_{datetime.now().timestamp()}.wav"
-        with open(temp_path, 'wb') as f:
-            f.write(audio_data)
+        # Save uploaded file to temp location
+        temp_path = os.path.join('uploads', f'temp_{time.time()}.wav')
+        audio_file.save(temp_path)
         
         # Transcribe
-        logger.info(f"Transcribing audio ({len(audio_data)} bytes)...")
+        logger.info(f'Transcribing audio ({os.path.getsize(temp_path)} bytes)...')
         model = load_model()
         
         segments, info = model.transcribe(
             temp_path,
-            language=language,
+            language=language if language != 'auto' else None,
             beam_size=5,
-            vad_filter=True,  # Voice activity detection (filters silence)
+            vad_filter=True,
             vad_parameters=dict(min_silence_duration_ms=500)
         )
         
-        # Collect all segments
-        transcription = ""
-        all_segments = []
-        
-        for segment in segments:
-            transcription += segment.text + " "
-            all_segments.append({
-                'start': segment.start,
-                'end': segment.end,
-                'text': segment.text.strip()
-            })
+        text = ' '.join([segment.text for segment in segments])
         
         # Clean up
-        try:
-            os.remove(temp_path)
-        except:
-            pass
+        os.remove(temp_path)
         
-        # Calculate processing time
-        processing_time = (datetime.now() - start_time).total_seconds()
-        
-        logger.info(f"✅ Transcription complete ({processing_time:.2f}s): {transcription.strip()[:100]}...")
-        
-        return jsonify({
-            'success': True,
-            'text': transcription.strip(),
-            'segments': all_segments,
-            'language': info.language,
-            'language_probability': info.language_probability,
-            'duration': info.duration,
-            'processing_time': processing_time
-        })
+        logger.info(f'Transcription result: {text[:50]}...')
+        return jsonify({'text': text})
+
+    
         
     except Exception as e:
         logger.error(f"Transcription error: {e}", exc_info=True)
