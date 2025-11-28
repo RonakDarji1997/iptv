@@ -17,7 +17,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const FormData = require('form-data');
-
+const fetch = require('node-fetch');
 
 const PORT = process.env.PORT || 8770;
 const PYTHON_PORT = process.env.PYTHON_PORT || 8771;
@@ -176,15 +176,10 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
     // -f segment: output segments
     // -segment_time 2: 2-second chunks (faster processing)
     // -af silencedetect: Skip silence to avoid processing empty audio
-
-    // Docker FFmpeg command
-    // Map subtitle directory to /data in container
-    const dockerVolume = `${SUBTITLE_DIR}:/data`;
-    // Replace subtitle output path with /data inside container
-    const outputPath = `/data/${streamId}_chunk_%03d.wav`;
     const ffmpegArgs = [
         '-ss', startPosition.toString(),
         '-i', streamUrl,
+        // No -t limit: generate continuously until stopped
         '-vn',
         '-acodec', 'pcm_s16le',
         '-ar', '16000',
@@ -194,17 +189,13 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
         '-segment_time', '2',
         '-segment_format', 'wav',
         '-reset_timestamps', '1',
-        outputPath
+        path.join(SUBTITLE_DIR, `${streamId}_chunk_%03d.wav`)
     ];
-    const dockerArgs = [
-        'run', '--rm',
-        '-v', dockerVolume,
-        'jrottenberg/ffmpeg:latest',
-        ...ffmpegArgs
-    ];
-    console.log('FFmpeg command:', 'docker', dockerArgs.join(' '));
+    
+    console.log('FFmpeg command:', 'ffmpeg', ffmpegArgs.join(' '));
     console.log(`⏱️  Starting from ${startPosition}s, generating continuously until stopped`);
-    const ffmpegProcess = spawn('docker', dockerArgs);
+    
+    const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
     
     // Start currentTime from startPosition so VTT timestamps match video time
     let currentTime = startPosition;
@@ -367,65 +358,63 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
  * Send audio file to Python Whisper service for transcription
  */
 async function transcribeAudioFile(audioPath, language) {
-    console.log(`Transcribing with whisper.cpp: ${audioPath} (${language})`);
-
+    console.log(`Transcribing with whisper-cli: ${audioPath} (${language})`);
+    
     return new Promise((resolve, reject) => {
         const modelPath = path.join(__dirname, 'models', 'ggml-tiny.bin');
         const langParam = (language && language !== 'auto') ? language : 'en';
-            // Path to whisper.cpp binary (NAS: ./main in whisper-backend directory)
-            const whisperBin = path.join(__dirname, 'main');
-
-        // whisper.cpp command: main -m <model> -f <audio> -l <lang> -otxt
-        const whisperProcess = spawn(whisperBin, [
+        
+        // Use whisper-cli with Metal acceleration (4x faster than real-time!)
+        const whisperProcess = spawn('whisper-cli', [
             '-m', modelPath,
-            '-f', audioPath,
+            audioPath,
             '-l', langParam,
-            '-otxt'
+            '-nt',  // no timestamps in output
+            '-np'   // no prints except result
         ]);
-
+        
         let output = '';
         let errorOutput = '';
         let resolved = false;
-
-        // 10-second timeout for 2-second audio chunks
+        
+        // 10-second timeout for 2-second audio chunks (should take < 1 second)
         const timeout = setTimeout(() => {
             if (!resolved) {
                 resolved = true;
-                console.error(`⏱️  Whisper.cpp timeout for ${path.basename(audioPath)}`);
+                console.error(`⏱️  Whisper timeout for ${path.basename(audioPath)}`);
                 whisperProcess.kill('SIGKILL');
-                reject(new Error('Whisper.cpp transcription timeout'));
+                reject(new Error('Whisper transcription timeout'));
             }
         }, 10000);
-
+        
         whisperProcess.stdout.on('data', (data) => {
             output += data.toString();
         });
-
+        
         whisperProcess.stderr.on('data', (data) => {
             errorOutput += data.toString();
         });
-
+        
         whisperProcess.on('close', (code) => {
-            if (resolved) return;
+            if (resolved) return; // Already handled by timeout
             resolved = true;
             clearTimeout(timeout);
             if (code !== 0) {
-                console.error(`whisper.cpp error: ${errorOutput}`);
-                reject(new Error(`whisper.cpp failed with code ${code}`));
+                console.error(`whisper-cli error: ${errorOutput}`);
+                reject(new Error(`whisper-cli failed with code ${code}`));
                 return;
             }
-
-            // whisper.cpp outputs transcript to <audio>.txt
-            const txtPath = audioPath + '.txt';
-            let text = '';
-            try {
-                if (fs.existsSync(txtPath)) {
-                    text = fs.readFileSync(txtPath, 'utf8').trim();
-                    fs.unlinkSync(txtPath); // Clean up
-                }
-            } catch (err) {
-                console.error(`Failed to read whisper.cpp output: ${err.message}`);
-            }
+            
+            // Extract transcribed text (remove metadata lines)
+            const lines = output.split('\n').filter(line => 
+                !line.includes('whisper_') && 
+                !line.includes('ggml_') &&
+                !line.includes('system_info') &&
+                !line.includes('main: processing') &&
+                line.trim().length > 0
+            );
+            
+            const text = lines.join(' ').trim();
             console.log(`Transcription result: ${text || '(empty)'}`);
             resolve({ text });
         });
@@ -625,12 +614,28 @@ app.get('/active-jobs', (req, res) => {
 /**
  * Health check
  */
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'healthy',
-        activeJobs: activeJobs.size,
-        whisperService: 'whisper-cli'
-    });
+app.get('/health', async (req, res) => {
+    try {
+        // Check if Python service is running
+        const pythonResponse = await fetch(`http://localhost:${PYTHON_PORT}/health`, {
+            timeout: 2000
+        });
+        
+        const pythonHealth = await pythonResponse.json();
+        
+        res.json({
+            status: 'healthy',
+            activeJobs: activeJobs.size,
+            whisperService: pythonHealth
+        });
+    } catch (error) {
+        res.json({
+            status: 'degraded',
+            activeJobs: activeJobs.size,
+            whisperService: 'unavailable',
+            error: error.message
+        });
+    }
 });
 
 // ============================================
