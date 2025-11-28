@@ -367,62 +367,73 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
  * Send audio file to Python Whisper service for transcription
  */
 async function transcribeAudioFile(audioPath, language) {
-    console.log(`Transcribing with whisper-cli: ${audioPath} (${language})`);
-    
+    console.log(`Transcribing with whisper-cli (Docker): ${audioPath} (${language})`);
+
     return new Promise((resolve, reject) => {
-        const modelPath = path.join(__dirname, 'models', 'ggml-tiny.bin');
+        const modelDir = path.join(__dirname, 'models');
+        const subtitleDir = path.join(__dirname, 'subtitles');
+        const modelPath = '/models/ggml-tiny.bin';
+        const chunkFile = path.basename(audioPath);
         const langParam = (language && language !== 'auto') ? language : 'en';
-        
-        // Use whisper-cli with Metal acceleration (4x faster than real-time!)
-        const whisperProcess = spawn('whisper-cli', [
+
+        // Docker run command for whisper-cli
+        // Mount models and subtitles directories
+        const dockerArgs = [
+            'run', '--rm',
+            '-v', `${modelDir}:/models`,
+            '-v', `${subtitleDir}:/subtitles`,
+            'whisper-cli-image',
             '-m', modelPath,
-            audioPath,
+            `/subtitles/${chunkFile}`,
             '-l', langParam,
-            '-nt',  // no timestamps in output
-            '-np'   // no prints except result
-        ]);
-        
+            '-nt',
+            '-np'
+        ];
+
+        // Use sudo for Docker if required
+        const whisperProcess = spawn('sudo', ['docker', ...dockerArgs]);
+
         let output = '';
         let errorOutput = '';
         let resolved = false;
-        
-        // 10-second timeout for 2-second audio chunks (should take < 1 second)
+
+        // 10-second timeout for 2-second audio chunks
         const timeout = setTimeout(() => {
             if (!resolved) {
                 resolved = true;
-                console.error(`⏱️  Whisper timeout for ${path.basename(audioPath)}`);
+                console.error(`⏱️  Whisper timeout for ${chunkFile}`);
                 whisperProcess.kill('SIGKILL');
                 reject(new Error('Whisper transcription timeout'));
             }
         }, 10000);
-        
+
         whisperProcess.stdout.on('data', (data) => {
             output += data.toString();
         });
-        
+
         whisperProcess.stderr.on('data', (data) => {
             errorOutput += data.toString();
         });
-        
+
         whisperProcess.on('close', (code) => {
-            if (resolved) return; // Already handled by timeout
+            if (resolved) return;
             resolved = true;
             clearTimeout(timeout);
             if (code !== 0) {
-                console.error(`whisper-cli error: ${errorOutput}`);
-                reject(new Error(`whisper-cli failed with code ${code}`));
+                console.error(`whisper-cli (Docker) error: ${errorOutput}`);
+                reject(new Error(`whisper-cli (Docker) failed with code ${code}`));
                 return;
             }
-            
+
             // Extract transcribed text (remove metadata lines)
-            const lines = output.split('\n').filter(line => 
-                !line.includes('whisper_') && 
+            const lines = output.split('\n').filter(line =>
+                !line.includes('whisper_') &&
                 !line.includes('ggml_') &&
                 !line.includes('system_info') &&
                 !line.includes('main: processing') &&
                 line.trim().length > 0
             );
-            
+
             const text = lines.join(' ').trim();
             console.log(`Transcription result: ${text || '(empty)'}`);
             resolve({ text });
