@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import logging
+import time
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from faster_whisper import WhisperModel
