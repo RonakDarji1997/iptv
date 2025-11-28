@@ -2,21 +2,22 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000">
+    android:background="#09090b">
 
     <!-- Main Horizontal Layout -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="horizontal"
-        android:background="#0f1419">
+        android:background="#09090b">
 
-        <!-- Sidebar Container (same width as MainActivity) -->
+        <!-- Sidebar Container (hidden to remove left spacing) -->
         <FrameLayout
             android:id="@+id/sidebar_frame"
-            android:layout_width="100dp"
+            android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:background="#1a2027">
+            android:background="#09090b"
+            android:visibility="gone">
 
             <LinearLayout
                 android:id="@+id/sidebar_container"
@@ -83,10 +84,9 @@
 
         <!-- Main Content Area -->
         <FrameLayout
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:background="#0f1419">
+            android:background="#09090b">
 
             <!-- Netflix-style Movie Rows -->
             <androidx.recyclerview.widget.RecyclerView

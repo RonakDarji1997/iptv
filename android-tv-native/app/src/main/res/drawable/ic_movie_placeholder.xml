@@ -5,7 +5,7 @@
     android:viewportWidth="180"
     android:viewportHeight="270">
     <path
-        android:fillColor="#1a2027"
+        android:fillColor="#09090b"
         android:pathData="M0,0h180v270h-180z"/>
     <path
         android:fillColor="#666666"

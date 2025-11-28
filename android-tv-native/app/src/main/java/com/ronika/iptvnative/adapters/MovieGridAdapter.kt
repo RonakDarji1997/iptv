@@ -70,19 +70,24 @@ class MovieGridAdapter(
 
             // Construct full image URL
             val imageUrl = movie.getImageUrl()
-            val fullUrl = if (imageUrl != null && !imageUrl.startsWith("http")) {
-                val baseUrl = com.ronika.iptvnative.api.ApiClient.portalUrl
-                    .substringBefore("/server/load.php")
-                    .substringBefore("/stalker_portal")
-                "$baseUrl$imageUrl"
+            val fullUrl = if (imageUrl != null && imageUrl != "false" && !imageUrl.startsWith("http")) {
+                // Use correct Stalker portal domain
+                "http://tv.stream4k.cc$imageUrl"
+            } else if (imageUrl == "false") {
+                null  // Skip loading for invalid URLs
             } else {
                 imageUrl
             }
 
+            // Load poster with optimizations
             poster.load(fullUrl) {
                 placeholder(R.drawable.ic_movie_placeholder)
                 error(R.drawable.ic_movie_placeholder)
-                crossfade(true)
+                crossfade(false) // Disable for performance
+                size(300, 450) // Resize to reasonable dimensions
+                memoryCacheKey(fullUrl)
+                diskCacheKey(fullUrl)
+                allowHardware(true) // GPU acceleration
             }
         }
     }

@@ -1,7 +1,7 @@
 package com.ronika.iptvnative.models
 
 data class Season(
-    val id: String,
+    val id: String,  // season ID used for fetching episodes
     val name: String,
     val seasonNumber: String
 )

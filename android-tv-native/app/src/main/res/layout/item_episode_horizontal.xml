@@ -7,7 +7,7 @@
     android:focusable="true"
     app:cardCornerRadius="8dp"
     app:cardElevation="4dp"
-    app:cardBackgroundColor="#18181b">
+    app:cardBackgroundColor="#09090b">
 
     <FrameLayout
         android:layout_width="match_parent"
@@ -19,7 +19,7 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:scaleType="centerCrop"
-            android:background="#27272a"
+            android:background="#09090b"
             android:contentDescription="Episode Thumbnail" />
 
         <!-- Gradient Overlay -->

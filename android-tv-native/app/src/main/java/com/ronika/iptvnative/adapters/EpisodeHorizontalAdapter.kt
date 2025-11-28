@@ -17,6 +17,10 @@ class EpisodeHorizontalAdapter(
     private val seriesPosterUrl: String?,
     private val onEpisodeClick: (Episode) -> Unit
 ) : RecyclerView.Adapter<EpisodeHorizontalAdapter.EpisodeViewHolder>() {
+    
+    init {
+        android.util.Log.d("EpisodeAdapter", "Series poster URL for episodes: $seriesPosterUrl")
+    }
 
     inner class EpisodeViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val card: CardView = view as CardView
@@ -25,6 +29,12 @@ class EpisodeHorizontalAdapter(
         val duration: TextView = view.findViewById(R.id.episode_duration)
 
         init {
+            // Set foreground drawable for focus border
+            card.foreground = androidx.core.content.ContextCompat.getDrawable(
+                card.context,
+                R.drawable.episode_card_bg
+            )
+            
             card.setOnClickListener {
                 val position = bindingAdapterPosition
                 if (position != RecyclerView.NO_POSITION) {
@@ -69,9 +79,13 @@ class EpisodeHorizontalAdapter(
             }
             
             holder.thumbnail.load(fullUrl) {
-                crossfade(true)
+                crossfade(false) // Disable for performance
                 placeholder(R.drawable.placeholder_poster)
                 error(R.drawable.placeholder_poster)
+                size(250, 375) // Resize for episodes
+                memoryCacheKey(fullUrl)
+                diskCacheKey(fullUrl)
+                allowHardware(true)
             }
         } else {
             holder.thumbnail.setImageResource(R.drawable.placeholder_poster)

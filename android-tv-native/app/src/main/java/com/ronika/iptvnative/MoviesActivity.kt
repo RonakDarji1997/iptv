@@ -10,6 +10,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.ronika.iptvnative.api.ApiClient
 import com.ronika.iptvnative.api.MoviesRequest
+import com.ronika.iptvnative.api.StalkerClient
 import com.ronika.iptvnative.models.Channel
 import com.ronika.iptvnative.models.Genre
 import com.ronika.iptvnative.models.Movie
@@ -22,6 +23,8 @@ class MoviesActivity : ComponentActivity() {
     private lateinit var movieRowsRecycler: RecyclerView
     private lateinit var loadingIndicator: ProgressBar
     private lateinit var movieCategoryRowAdapter: MovieCategoryRowAdapter
+    
+    private val stalkerClient by lazy { StalkerClient("http://tv.stream4k.cc/stalker_portal/server/load.php", "00:1a:79:17:f4:f5") }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -94,11 +97,9 @@ class MoviesActivity : ComponentActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 // Get categories
-                val response = ApiClient.apiService.getMovieCategories(
-                    ApiClient.getCredentials()
-                )
+                val response = stalkerClient.getVodCategories("vod")
                 
-                val categories = response.categories
+                val categories = response.genres
                     .filter { it.id.toIntOrNull() != null }
                     .map { Genre(it.id, it.title, it.name, it.alias, it.censored) }
                 
@@ -109,14 +110,7 @@ class MoviesActivity : ComponentActivity() {
                     android.util.Log.d("MoviesActivity", "Loading movies for: ${category.title ?: category.name}")
                     
                     try {
-                        val moviesResponse = ApiClient.apiService.getMovies(
-                            MoviesRequest(
-                                mac = ApiClient.macAddress,
-                                url = ApiClient.portalUrl,
-                                category = category.id,
-                                page = 1
-                            )
-                        )
+                        val moviesResponse = stalkerClient.getVodItems(category.id, 1, "vod")
                         
                         if (moviesResponse.items.data.isNotEmpty()) {
                             val newRow = MovieCategoryRowAdapter.CategoryRow(

@@ -11,6 +11,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
+import coil.request.CachePolicy
 import com.ronika.iptvnative.adapters.EpisodeHorizontalAdapter
 import com.ronika.iptvnative.api.ApiClient
 import com.ronika.iptvnative.models.Episode
@@ -18,6 +19,29 @@ import com.ronika.iptvnative.models.Season
 import kotlinx.coroutines.launch
 
 class SeriesDetailActivity : ComponentActivity() {
+    
+    companion object {
+        // Cache for series data to avoid reloading on reopen
+        private data class SeriesCache(
+            val seasons: List<Season>,
+            val episodesBySeason: Map<String, List<Episode>>,
+            val timestamp: Long = System.currentTimeMillis()
+        )
+        
+        private val seriesDataCache = mutableMapOf<String, SeriesCache>()
+        private const val CACHE_VALIDITY_MS = 30 * 60 * 1000L // 30 minutes
+        
+        fun clearCache() {
+            seriesDataCache.clear()
+        }
+        
+        fun clearOldCache() {
+            val now = System.currentTimeMillis()
+            seriesDataCache.entries.removeIf { (_, cache) ->
+                now - cache.timestamp > CACHE_VALIDITY_MS
+            }
+        }
+    }
     
     private lateinit var backButton: Button
     private lateinit var posterImage: ImageView
@@ -46,6 +70,8 @@ class SeriesDetailActivity : ComponentActivity() {
     private var seasons = mutableListOf<Season>()
     private var allEpisodesBySeason = mutableMapOf<String, List<Episode>>()
     private var firstEpisode: Episode? = null
+    private var lastPlayedEpisodeId: String? = null
+    private val episodeViewHolders = mutableMapOf<String, View>()
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,6 +88,19 @@ class SeriesDetailActivity : ComponentActivity() {
         country = intent.getStringExtra("COUNTRY")
         genres = intent.getStringExtra("GENRES")
         totalSeasons = intent.getStringExtra("TOTAL_SEASONS")
+        
+        android.util.Log.d("SeriesDetail", "===== RECEIVED INTENT DATA =====")
+        android.util.Log.d("SeriesDetail", "Series ID: $seriesId")
+        android.util.Log.d("SeriesDetail", "Series Name: $seriesName")
+        android.util.Log.d("SeriesDetail", "Poster URL: $posterUrl")
+        android.util.Log.d("SeriesDetail", "Description: $description")
+        android.util.Log.d("SeriesDetail", "Actors: $actors")
+        android.util.Log.d("SeriesDetail", "Director: $director")
+        android.util.Log.d("SeriesDetail", "Year: $year")
+        android.util.Log.d("SeriesDetail", "Country: $country")
+        android.util.Log.d("SeriesDetail", "Genres: $genres")
+        android.util.Log.d("SeriesDetail", "Total Seasons: $totalSeasons")
+        android.util.Log.d("SeriesDetail", "=================================")
         
         initViews()
         displaySeriesInfo()
@@ -127,29 +166,25 @@ class SeriesDetailActivity : ComponentActivity() {
         }
         
         // Poster image - load from screenshot_uri
-        android.util.Log.d("SeriesDetail", "Loading poster from: $posterUrl")
         val currentPosterUrl = posterUrl
+        android.util.Log.d("SeriesDetail", "Loading poster from: $currentPosterUrl")
         if (!currentPosterUrl.isNullOrEmpty()) {
             val fullUrl = if (currentPosterUrl.startsWith("http")) {
                 currentPosterUrl
             } else {
-                val cleanUrl = ApiClient.portalUrl.replace("/stalker_portal/?", "").replace("/stalker_portal", "")
+                val cleanUrl = ApiClient.portalUrl.replace("/stalker_portal/?", "").replace("/stalker_portal", "").replace("/server/load.php", "")
                 val finalUrl = "$cleanUrl$currentPosterUrl"
                 android.util.Log.d("SeriesDetail", "Constructed full URL: $finalUrl")
                 finalUrl
             }
             posterImage.load(fullUrl) {
-                crossfade(true)
+                crossfade(false) // Disable for performance
+                size(400, 600) // Optimize size for series detail poster
+                memoryCachePolicy(CachePolicy.ENABLED)
+                diskCachePolicy(CachePolicy.ENABLED)
                 placeholder(R.drawable.placeholder_poster)
                 error(R.drawable.placeholder_poster)
-                listener(
-                    onSuccess = { _, _ ->
-                        android.util.Log.d("SeriesDetail", "Poster loaded successfully")
-                    },
-                    onError = { _, result ->
-                        android.util.Log.e("SeriesDetail", "Failed to load poster: ${result.throwable.message}")
-                    }
-                )
+                allowHardware(true) // GPU acceleration
             }
         } else {
             android.util.Log.d("SeriesDetail", "No poster URL provided")
@@ -158,39 +193,91 @@ class SeriesDetailActivity : ComponentActivity() {
     
     private fun loadAllSeasonsAndEpisodes() {
         lifecycleScope.launch {
-            try {
-                // Don't show loading indicator to prevent focus reset
-                android.util.Log.d("SeriesDetail", "Loading seasons for series: $seriesId")
+            // Clear old cache entries
+            clearOldCache()
+            
+            // Check cache first
+            val cached = seriesDataCache[seriesId]
+            if (cached != null) {
+                android.util.Log.d("SeriesDetail", "⚡ INSTANT LOAD from cache for series: $seriesId")
                 
-                val response = ApiClient.apiService.getSeriesSeasons(
-                    com.ronika.iptvnative.api.SeriesSeasonsRequest(
-                        mac = ApiClient.macAddress,
-                        url = ApiClient.portalUrl,
-                        seriesId = seriesId
-                    )
+                // Restore from cache
+                seasons.clear()
+                seasons.addAll(cached.seasons)
+                allEpisodesBySeason.clear()
+                allEpisodesBySeason.putAll(cached.episodesBySeason)
+                
+                // Derive first episode from cached data
+                firstEpisode = cached.episodesBySeason.values.firstOrNull()?.firstOrNull()
+                
+                // Update play button
+                if (firstEpisode != null) {
+                    val firstSeason = seasons.firstOrNull()
+                    playButton.text = "▶  Play S${firstSeason?.seasonNumber ?: "1"} E${firstEpisode?.episodeNumber}"
+                }
+                
+                // Display all seasons immediately
+                for (season in cached.seasons) {
+                    val episodes = cached.episodesBySeason[season.id] ?: emptyList()
+                    addSeasonSection(season, episodes)
+                }
+                
+                // Focus play button
+                playButton.postDelayed({
+                    playButton.requestFocus()
+                }, 100)
+                
+                return@launch
+            }
+            
+            try {
+                // Not in cache - load from network
+                android.util.Log.d("SeriesDetail", "📡 Loading from network for series: $seriesId using direct Stalker call")
+                
+                // Use direct Stalker portal call
+                val stalkerClient = com.ronika.iptvnative.api.StalkerClient(
+                    ApiClient.portalUrl,
+                    ApiClient.macAddress
                 )
                 
-                android.util.Log.d("SeriesDetail", "Seasons loaded: ${response.seasons.size}")
+                val jsData = stalkerClient.getSeriesSeasons(seriesId)
+                val dataList = jsData["data"] as? List<*> ?: emptyList<Any>()
                 
-                // Filter out ADULT and CELEBRITY seasons
-                val filteredSeasons = response.seasons.filter { season ->
-                    val name = (season.name ?: "").uppercase()
-                    !name.contains("ADULT") && !name.contains("CELEBRITY")
+                android.util.Log.d("SeriesDetail", "Seasons loaded: ${dataList.size}")
+                
+                // Convert to Season objects and filter out ADULT/CELEBRITY
+                val seasonsList = dataList.mapNotNull { item ->
+                    val seasonMap = item as? Map<*, *> ?: return@mapNotNull null
+                    val id = seasonMap["id"]?.toString() ?: return@mapNotNull null
+                    val name = seasonMap["name"]?.toString() ?: ""
+                    val seasonNumber = seasonMap["season_number"]?.toString() ?: ""
+                    
+                    // Filter out ADULT and CELEBRITY
+                    if (name.uppercase().contains("ADULT") || name.uppercase().contains("CELEBRITY")) {
+                        return@mapNotNull null
+                    }
+                    
+                    Season(
+                        id = id,
+                        name = name.ifEmpty { "Season $seasonNumber" },
+                        seasonNumber = seasonNumber
+                    )
                 }
                 
                 seasons.clear()
-                seasons.addAll(filteredSeasons.map { 
-                    Season(
-                        id = it.id,
-                        name = it.name ?: "Season ${it.season_number ?: ""}",
-                        seasonNumber = it.season_number ?: ""
-                    )
-                })
+                seasons.addAll(seasonsList)
                 
                 // Load episodes for each season
                 for (season in seasons) {
                     loadEpisodesForSeason(season)
                 }
+                
+                // Save to cache after all episodes loaded
+                android.util.Log.d("SeriesDetail", "💾 Saving to cache for instant future loads")
+                seriesDataCache[seriesId] = SeriesCache(
+                    seasons = seasons.toList(),
+                    episodesBySeason = allEpisodesBySeason.toMap()
+                )
             } catch (e: Exception) {
                 android.util.Log.e("SeriesDetail", "Error loading seasons", e)
                 Toast.makeText(this@SeriesDetailActivity, "Failed to load seasons", Toast.LENGTH_SHORT).show()
@@ -200,32 +287,37 @@ class SeriesDetailActivity : ComponentActivity() {
     
     private suspend fun loadEpisodesForSeason(season: Season) {
         try {
-            android.util.Log.d("SeriesDetail", "Loading episodes for season: ${season.name}")
+            android.util.Log.d("SeriesDetail", "Loading episodes for season: ${season.name} using direct Stalker call")
             
-            val response = ApiClient.apiService.getSeriesEpisodes(
-                com.ronika.iptvnative.api.SeriesEpisodesRequest(
-                    mac = ApiClient.macAddress,
-                    url = ApiClient.portalUrl,
-                    seriesId = seriesId,
-                    seasonId = season.id
-                )
+            // Use direct Stalker portal call
+            val stalkerClient = com.ronika.iptvnative.api.StalkerClient(
+                ApiClient.portalUrl,
+                ApiClient.macAddress
             )
             
-            android.util.Log.d("SeriesDetail", "Episodes loaded: ${response.data.size}")
+            val jsData = stalkerClient.getSeriesEpisodes(seriesId, season.id)
+            val dataList = jsData["data"] as? List<*> ?: emptyList<Any>()
             
-            val episodesList = response.data.sortedBy { 
-                it.series_number?.toIntOrNull() ?: 0 
-            }.map {
+            android.util.Log.d("SeriesDetail", "Episodes loaded: ${dataList.size}")
+            
+            // Convert to Episode objects
+            val episodesList = dataList.mapNotNull { item ->
+                val episodeMap = item as? Map<*, *> ?: return@mapNotNull null
+                val id = episodeMap["id"]?.toString() ?: return@mapNotNull null
+                val name = episodeMap["name"]?.toString() ?: ""
+                val seriesNumber = episodeMap["series_number"]?.toString() ?: ""
+                val time = episodeMap["time"]?.toString() ?: ""
+                
                 Episode(
-                    id = it.id,
-                    name = it.name ?: "Episode ${it.series_number ?: ""}",
-                    episodeNumber = it.series_number ?: "",
-                    duration = it.time ?: "",
+                    id = id,
+                    name = name.ifEmpty { "Episode $seriesNumber" },
+                    episodeNumber = seriesNumber,
+                    duration = time,
                     thumbnailUrl = posterUrl, // Use series poster for episodes
                     seasonId = season.id,
-                    cmd = it.cmd ?: ""
+                    cmd = null  // Don't store cmd, we'll fetch it during playback
                 )
-            }
+            }.sortedBy { it.episodeNumber.toIntOrNull() ?: 0 }
             
             allEpisodesBySeason[season.id] = episodesList
             
@@ -234,6 +326,10 @@ class SeriesDetailActivity : ComponentActivity() {
                 firstEpisode = episodesList[0]
                 runOnUiThread {
                     playButton.text = "▶  Play S${season.seasonNumber} E${episodesList[0].episodeNumber}"
+                    // Request focus on play button when first episode is loaded
+                    playButton.postDelayed({
+                        playButton.requestFocus()
+                    }, 100)
                 }
             }
             
@@ -258,6 +354,7 @@ class SeriesDetailActivity : ComponentActivity() {
         
         // Setup horizontal episodes recycler
         val episodeAdapter = EpisodeHorizontalAdapter(episodes, posterUrl) { episode ->
+            lastPlayedEpisodeId = episode.id
             playEpisode(episode)
         }
         
@@ -267,6 +364,23 @@ class SeriesDetailActivity : ComponentActivity() {
             setHasFixedSize(true)
             // Prevent auto-focus switching
             descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
+            
+            // Store episode views for focus restoration
+            addOnChildAttachStateChangeListener(object : RecyclerView.OnChildAttachStateChangeListener {
+                override fun onChildViewAttachedToWindow(view: View) {
+                    val position = getChildAdapterPosition(view)
+                    if (position >= 0 && position < episodes.size) {
+                        episodeViewHolders[episodes[position].id] = view
+                    }
+                }
+                
+                override fun onChildViewDetachedFromWindow(view: View) {
+                    val position = getChildAdapterPosition(view)
+                    if (position >= 0 && position < episodes.size) {
+                        episodeViewHolders.remove(episodes[position].id)
+                    }
+                }
+            })
         }
         
         seasonsEpisodesContainer.addView(seasonView)
@@ -279,7 +393,8 @@ class SeriesDetailActivity : ComponentActivity() {
         val season = seasons.find { it.id == episode.seasonId }
         val seasonNum = season?.seasonNumber ?: ""
         
-        // Navigate to MainActivity with episodeId (NOT cmd) - MainActivity will fetch file info
+        // Return to MainActivity with episode data - DON'T use FLAG_ACTIVITY_CLEAR_TOP
+        // This allows MainActivity to receive the intent in onNewIntent() and play the episode
         val intent = Intent(this, MainActivity::class.java).apply {
             putExtra("PLAY_TYPE", "series")
             putExtra("SERIES_ID", seriesId)
@@ -298,11 +413,22 @@ class SeriesDetailActivity : ComponentActivity() {
             putExtra("EPISODE_ID", episode.id)
             putExtra("EPISODE_NUMBER", episode.episodeNumber)
             putExtra("EPISODE_NAME", episode.name)
-            // DO NOT pass cmd - let MainActivity get file info first
-            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            // Use SINGLE_TOP so MainActivity receives in onNewIntent
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         startActivity(intent)
-        finish()
+        // Don't call finish() - keep SeriesDetailActivity in back stack for proper back navigation
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        // Restore focus to last played episode if returning from playback
+        lastPlayedEpisodeId?.let { episodeId ->
+            episodeViewHolders[episodeId]?.postDelayed({
+                episodeViewHolders[episodeId]?.requestFocus()
+                android.util.Log.d("SeriesDetail", "Focus restored to episode: $episodeId")
+            }, 200)
+        }
     }
     
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {

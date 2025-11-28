@@ -67,6 +67,24 @@ class MovieCategoryRowAdapter(
                 layoutManager = LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
                 adapter = movieAdapter
                 setHasFixedSize(true)
+                setItemViewCacheSize(10) // Cache 10 items for faster scrolling
+                isNestedScrollingEnabled = false // Disable for better performance
+                
+                // Override key listener to always focus first item when coming from above/below
+                setOnKeyListener { _, keyCode, event ->
+                    if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                        when (keyCode) {
+                            android.view.KeyEvent.KEYCODE_DPAD_DOWN, android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                                // Always focus first item when moving vertically
+                                post {
+                                    getChildAt(0)?.requestFocus()
+                                }
+                                false // Let the event propagate
+                            }
+                            else -> false
+                        }
+                    } else false
+                }
                 
                 // Add child focus listener to change category title color
                 setOnHierarchyChangeListener(object : ViewGroup.OnHierarchyChangeListener {
@@ -107,17 +125,11 @@ class MovieCategoryRowAdapter(
                 }
             }
             
-            // Handle DOWN key on category title - navigate to category screen
+            // Handle DOWN key on category title - move to first movie thumbnail
             categoryTitle.setOnKeyListener { _, keyCode, event ->
                 if (event.action == android.view.KeyEvent.ACTION_DOWN && keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
-                    if (bindingAdapterPosition != RecyclerView.NO_POSITION) {
-                        val row = categoryRows[bindingAdapterPosition]
-                        val intent = android.content.Intent(itemView.context, MovieCategoryActivity::class.java).apply {
-                            putExtra("categoryId", row.categoryId)
-                            putExtra("categoryTitle", row.categoryTitle)
-                        }
-                        itemView.context.startActivity(intent)
-                    }
+                    // Focus first item in movies recycler
+                    moviesRecycler.getChildAt(0)?.requestFocus()
                     true
                 } else {
                     false
@@ -201,14 +213,34 @@ class MovieThumbnailAdapter(
                 }
             }
             
-            // Block LEFT navigation on first item
+            // Handle navigation keys
             itemView.setOnKeyListener { _, keyCode, event ->
-                if (event.action == android.view.KeyEvent.ACTION_DOWN && keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT) {
-                    // Check if this is the first item (position 0)
-                    if (bindingAdapterPosition == 0) {
-                        true // Consume the event, prevent navigation
-                    } else {
-                        false // Allow normal navigation
+                if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                    when (keyCode) {
+                        android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                            // Block LEFT on first item
+                            if (bindingAdapterPosition == 0) {
+                                true // Consume the event
+                            } else {
+                                false // Allow normal navigation
+                            }
+                        }
+                        android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                            // Navigate back to category title
+                            var parent = itemView.parent
+                            while (parent != null) {
+                                if (parent is android.view.ViewGroup) {
+                                    val titleView = parent.findViewById<TextView>(R.id.category_title)
+                                    if (titleView != null) {
+                                        titleView.requestFocus()
+                                        break
+                                    }
+                                }
+                                parent = if (parent is android.view.View) (parent as android.view.View).parent else null
+                            }
+                            true
+                        }
+                        else -> false
                     }
                 } else {
                     false
@@ -229,23 +261,24 @@ class MovieThumbnailAdapter(
             
             // Construct full image URL
             val imageUrl = movie.getImageUrl()
-            val fullUrl = if (imageUrl != null && !imageUrl.startsWith("http")) {
-                // Extract base URL from portalUrl (remove /server/load.php and /stalker_portal)
-                val baseUrl = com.ronika.iptvnative.api.ApiClient.portalUrl
-                    .substringBefore("/server/load.php")
-                    .substringBefore("/stalker_portal")
-                "$baseUrl$imageUrl"
+            val fullUrl = if (imageUrl != null && imageUrl != "false" && !imageUrl.startsWith("http")) {
+                // Use correct Stalker portal domain
+                "http://tv.stream4k.cc$imageUrl"
+            } else if (imageUrl == "false") {
+                null  // Skip loading for invalid URLs
             } else {
                 imageUrl
             }
             
-            android.util.Log.d("MovieThumbnail", "Loading image for ${movie.name}: $fullUrl")
-            
-            // Load poster image using Coil
+            // Load poster image using Coil with optimizations
             poster.load(fullUrl) {
                 placeholder(R.drawable.ic_movie_placeholder)
                 error(R.drawable.ic_movie_placeholder)
-                crossfade(true)
+                crossfade(false) // Disable for performance
+                size(300, 450) // Resize to reasonable dimensions
+                memoryCacheKey(fullUrl) // Cache by URL
+                diskCacheKey(fullUrl)
+                allowHardware(true) // Use hardware bitmaps for GPU acceleration
             }
         }
     }
@@ -263,10 +296,31 @@ class MovieThumbnailAdapter(
                 }
             }
             
-            // Block RIGHT navigation on View All button (it's the last item)
+            // Handle navigation keys
             itemView.setOnKeyListener { _, keyCode, event ->
-                if (event.action == android.view.KeyEvent.ACTION_DOWN && keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT) {
-                    true // Consume the event, prevent navigation beyond View All
+                if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                    when (keyCode) {
+                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                            // Block RIGHT on View All button (it's the last item)
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                            // Navigate back to category title
+                            var parent = itemView.parent
+                            while (parent != null) {
+                                if (parent is android.view.ViewGroup) {
+                                    val titleView = parent.findViewById<TextView>(R.id.category_title)
+                                    if (titleView != null) {
+                                        titleView.requestFocus()
+                                        break
+                                    }
+                                }
+                                parent = if (parent is android.view.View) (parent as android.view.View).parent else null
+                            }
+                            true
+                        }
+                        else -> false
+                    }
                 } else {
                     false
                 }

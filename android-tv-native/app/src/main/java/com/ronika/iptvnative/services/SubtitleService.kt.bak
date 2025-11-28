@@ -1,0 +1,367 @@
+package com.ronika.iptvnative.services
+
+import android.content.Context
+import android.util.Log
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.BaseAudioProcessor
+import androidx.media3.common.C
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.concurrent.TimeUnit
+
+/**
+ * Service for generating live subtitles using backend Whisper API
+ * 
+ * Features:
+ * - Captures audio from ExoPlayer video playback using AudioProcessor
+ * - Sends audio chunks to backend for transcription
+ * - Returns subtitle text with timestamps
+ * - Auto-detects language or uses specified language
+ */
+class SubtitleService(
+    private val context: Context,
+    private val backendUrl: String = "http://192.168.2.69:8765" // Change to your backend IP
+) {
+    companion object {
+        private const val TAG = "SubtitleService"
+        private const val CHUNK_DURATION_MS = 3000 // 3 seconds
+        private const val SAMPLE_RATE = 16000
+        private const val CHUNK_SIZE_SAMPLES = SAMPLE_RATE * CHUNK_DURATION_MS / 1000 // 48000 samples
+    }
+    
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var isRunning = false
+    private var exoPlayer: ExoPlayer? = null
+    private val audioBuffer = mutableListOf<Short>()
+    
+    /**
+     * Custom AudioProcessor to capture audio from ExoPlayer
+     */
+    inner class CaptureAudioProcessor : BaseAudioProcessor() {
+        
+        override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+            Log.d(TAG, "Audio configured: ${inputAudioFormat.sampleRate}Hz, ${inputAudioFormat.channelCount} channels")
+            
+            // Convert to mono 16kHz for Whisper
+            return AudioProcessor.AudioFormat(
+                SAMPLE_RATE,
+                1, // Mono
+                C.ENCODING_PCM_16BIT
+            )
+        }
+        
+        override fun queueInput(inputBuffer: ByteBuffer) {
+            if (!isRunning) {
+                return
+            }
+            
+            // Read PCM samples from buffer
+            val samples = mutableListOf<Short>()
+            inputBuffer.order(ByteOrder.LITTLE_ENDIAN)
+            
+            while (inputBuffer.hasRemaining()) {
+                samples.add(inputBuffer.short)
+            }
+            
+            // Add to audio buffer
+            synchronized(audioBuffer) {
+                audioBuffer.addAll(samples)
+                
+                // If we have enough samples (3 seconds), process them
+                if (audioBuffer.size >= CHUNK_SIZE_SAMPLES) {
+                    val chunk = audioBuffer.take(CHUNK_SIZE_SAMPLES).toShortArray()
+                    audioBuffer.subList(0, CHUNK_SIZE_SAMPLES).clear()
+                    
+                    // Send to backend for transcription
+                    scope.launch {
+                        transcribeAudio(chunk)
+                    }
+                }
+            }
+        }
+    }
+    
+    val audioProcessor = CaptureAudioProcessor()
+    
+    private val okHttpClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+    
+    // Subtitle state
+    private val _subtitleFlow = MutableStateFlow<SubtitleEvent>(SubtitleEvent.Idle)
+    val subtitleFlow: StateFlow<SubtitleEvent> = _subtitleFlow
+    
+    // Current language
+    private var currentLanguage = "auto"
+    
+    /**
+     * Check if backend is available
+     */
+    suspend fun checkBackendHealth(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("$backendUrl/health")
+                .get()
+                .build()
+            
+            val response = okHttpClient.newCall(request).execute()
+            val isHealthy = response.isSuccessful
+            
+            if (isHealthy) {
+                val body = response.body?.string()
+                Log.d(TAG, "Backend health: $body")
+            }
+            
+            response.close()
+            isHealthy
+        } catch (e: Exception) {
+            Log.e(TAG, "Backend health check failed", e)
+            false
+        }
+    }
+    
+    /**
+     * Auto-detect language from backend or use specified language
+     */
+    suspend fun detectLanguage(): String = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("$backendUrl/languages")
+                .get()
+                .build()
+            
+            val response = okHttpClient.newCall(request).execute()
+            if (response.isSuccessful) {
+                val body = response.body?.string()
+                val json = JSONObject(body ?: "{}")
+                val defaultLang = json.optString("default", "auto")
+                Log.d(TAG, "Default language: $defaultLang")
+                response.close()
+                return@withContext defaultLang
+            }
+            response.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to detect language", e)
+        }
+        "auto"
+    }
+    
+    /**
+     * Set the ExoPlayer instance to capture audio from
+     */
+    fun setPlayer(player: ExoPlayer) {
+        this.exoPlayer = player
+        Log.d(TAG, "ExoPlayer set for audio capture")
+    }
+    
+    /**
+     * Start subtitle generation
+     * Note: This is now simplified - just sends periodic requests
+     * In production, you'd use ExoPlayer's AudioProcessor to capture actual audio
+     */
+    fun start(language: String = "auto") {
+        if (isRunning) {
+            Log.w(TAG, "Subtitle service already running")
+            return
+        }
+        
+        currentLanguage = language
+        isRunning = true
+        
+        scope.launch {
+            try {
+                // Check backend first
+                _subtitleFlow.emit(SubtitleEvent.Checking)
+                
+                if (!checkBackendHealth()) {
+                    _subtitleFlow.emit(SubtitleEvent.Error("Backend not available at $backendUrl"))
+                    stop()
+                    return@launch
+                }
+                
+                _subtitleFlow.emit(SubtitleEvent.Started)
+                Log.d(TAG, "✅ Subtitle generation started - capturing real audio from player")
+                
+                // Show initial status
+                _subtitleFlow.emit(SubtitleEvent.Subtitle(
+                    text = "🎙️ Listening to video audio...",
+                    timestamp = System.currentTimeMillis(),
+                    language = language,
+                    confidence = 1.0f
+                ))
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start subtitle service", e)
+                _subtitleFlow.emit(SubtitleEvent.Error(e.message ?: "Unknown error"))
+                stop()
+            }
+        }
+    }
+    
+    /**
+     * Stop subtitle generation
+     */
+    fun stop() {
+        if (!isRunning) {
+            return
+        }
+        
+        isRunning = false
+        audioBuffer.clear()
+        
+        scope.launch {
+            _subtitleFlow.emit(SubtitleEvent.Stopped)
+        }
+        
+        Log.d(TAG, "Subtitle generation stopped")
+    }
+    
+    /**
+     * Clean up resources
+     */
+    fun cleanup() {
+        stop()
+        scope.cancel()
+    }
+    
+
+    
+    /**
+     * Send audio to backend for transcription
+     */
+    private suspend fun transcribeAudio(audioData: ShortArray) {
+        withContext(Dispatchers.IO) {
+            try {
+                // Convert short array to byte array (WAV format)
+                val wavData = convertToWav(audioData)
+                
+                // Create request
+                val requestBody = wavData.toRequestBody("audio/wav".toMediaTypeOrNull())
+                
+                val request = Request.Builder()
+                    .url("$backendUrl/transcribe?language=$currentLanguage")
+                    .post(requestBody)
+                    .build()
+                
+                // Execute request
+                val response = okHttpClient.newCall(request).execute()
+                
+                if (response.isSuccessful) {
+                    val body = response.body?.string()
+                    val json = JSONObject(body ?: "{}")
+                    
+                    val success = json.optBoolean("success", false)
+                    if (success) {
+                        val text = json.optString("text", "")
+                        val language = json.optString("language", currentLanguage)
+                        val confidence = json.optDouble("language_probability", 0.0).toFloat()
+                        
+                        if (text.isNotBlank()) {
+                            Log.d(TAG, "Transcription: $text (lang: $language, conf: $confidence)")
+                            _subtitleFlow.emit(SubtitleEvent.Subtitle(
+                                text = text,
+                                timestamp = System.currentTimeMillis(),
+                                language = language,
+                                confidence = confidence
+                            ))
+                        }
+                    } else {
+                        val error = json.optString("error", "Unknown error")
+                        Log.e(TAG, "Transcription failed: $error")
+                    }
+                } else {
+                    Log.e(TAG, "Backend request failed: ${response.code}")
+                }
+                
+                response.close()
+                
+            } catch (e: IOException) {
+                Log.e(TAG, "Network error during transcription", e)
+                _subtitleFlow.emit(SubtitleEvent.Error("Network error: ${e.message}"))
+            } catch (e: Exception) {
+                Log.e(TAG, "Transcription error", e)
+            }
+        }
+    }
+    
+    /**
+     * Convert short array to WAV format
+     */
+    private fun convertToWav(audioData: ShortArray): ByteArray {
+        val baos = ByteArrayOutputStream()
+        
+        // WAV header
+        val channels = 1
+        val bitsPerSample = 16
+        val byteRate = SAMPLE_RATE * channels * bitsPerSample / 8
+        val dataSize = audioData.size * 2
+        val fileSize = dataSize + 36
+        
+        // Write WAV header
+        baos.write("RIFF".toByteArray())
+        baos.write(intToByteArray(fileSize), 0, 4)
+        baos.write("WAVE".toByteArray())
+        baos.write("fmt ".toByteArray())
+        baos.write(intToByteArray(16), 0, 4) // PCM header size
+        baos.write(shortToByteArray(1), 0, 2) // Audio format (PCM)
+        baos.write(shortToByteArray(channels.toShort()), 0, 2)
+        baos.write(intToByteArray(SAMPLE_RATE), 0, 4)
+        baos.write(intToByteArray(byteRate), 0, 4)
+        baos.write(shortToByteArray((channels * bitsPerSample / 8).toShort()), 0, 2)
+        baos.write(shortToByteArray(bitsPerSample.toShort()), 0, 2)
+        baos.write("data".toByteArray())
+        baos.write(intToByteArray(dataSize), 0, 4)
+        
+        // Write audio data
+        for (sample in audioData) {
+            baos.write(shortToByteArray(sample), 0, 2)
+        }
+        
+        return baos.toByteArray()
+    }
+    
+    private fun intToByteArray(value: Int): ByteArray {
+        return byteArrayOf(
+            (value and 0xFF).toByte(),
+            ((value shr 8) and 0xFF).toByte(),
+            ((value shr 16) and 0xFF).toByte(),
+            ((value shr 24) and 0xFF).toByte()
+        )
+    }
+    
+    private fun shortToByteArray(value: Short): ByteArray {
+        return byteArrayOf(
+            (value.toInt() and 0xFF).toByte(),
+            ((value.toInt() shr 8) and 0xFF).toByte()
+        )
+    }
+    
+    /**
+     * Subtitle events
+     */
+    sealed class SubtitleEvent {
+        object Idle : SubtitleEvent()
+        object Checking : SubtitleEvent()
+        object Started : SubtitleEvent()
+        object Stopped : SubtitleEvent()
+        data class Subtitle(
+            val text: String,
+            val timestamp: Long,
+            val language: String,
+            val confidence: Float
+        ) : SubtitleEvent()
+        data class Error(val message: String) : SubtitleEvent()
+    }
+}

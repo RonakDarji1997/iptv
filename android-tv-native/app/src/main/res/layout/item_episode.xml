@@ -7,7 +7,8 @@
     android:layout_marginBottom="8dp"
     android:focusable="true"
     android:clickable="true"
-    app:cardBackgroundColor="#18181b"
+    android:background="@drawable/episode_card_bg"
+    app:cardBackgroundColor="@android:color/transparent"
     app:cardCornerRadius="8dp"
     app:cardElevation="2dp">
 

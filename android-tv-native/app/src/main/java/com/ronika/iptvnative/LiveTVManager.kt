@@ -85,9 +85,11 @@ class LiveTVManager(private val activity: MainActivity) {
         // Hide VOD-only controls (restart button, top info bar, progress bar, time)
         livePlayerView.post {
             livePlayerView.findViewById<android.widget.ImageButton>(R.id.restart_button)?.visibility = View.GONE
+            livePlayerView.findViewById<android.widget.ImageButton>(R.id.next_button)?.visibility = View.GONE
             livePlayerView.findViewById<View>(R.id.top_info_bar)?.visibility = View.GONE
             livePlayerView.findViewById<View>(R.id.top_gradient)?.visibility = View.GONE
-            livePlayerView.findViewById<View>(R.id.progress_container)?.visibility = View.GONE
+            livePlayerView.findViewById<View>(R.id.bottom_gradient)?.visibility = View.GONE
+            livePlayerView.findViewById<View>(R.id.bottom_controls_container)?.visibility = View.GONE
             livePlayerView.findViewById<TextView>(R.id.exo_position)?.visibility = View.GONE
             livePlayerView.findViewById<TextView>(R.id.exo_duration)?.visibility = View.GONE
             // Also hide the time separator "/" between position and duration

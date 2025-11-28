@@ -52,7 +52,7 @@ class EpisodeAdapter(
 
             // Load thumbnail if available
             // TODO: Add thumbnail URL to Episode model and load with Coil
-            episodeThumbnail.setBackgroundColor(Color.parseColor("#27272a"))
+            episodeThumbnail.setBackgroundColor(Color.parseColor("#09090b"))
 
             itemView.setOnClickListener {
                 onEpisodeClick(episode)
@@ -60,12 +60,12 @@ class EpisodeAdapter(
             
             itemView.onFocusChangeListener = View.OnFocusChangeListener { _, hasFocus ->
                 if (hasFocus) {
-                    card.setCardBackgroundColor(Color.parseColor("#27272a"))
+                    card.setCardBackgroundColor(Color.parseColor("#09090b"))
                     episodeName.setTextColor(Color.WHITE)
                     episodeTime.setTextColor(Color.parseColor("#a1a1aa"))
                     card.cardElevation = 8f
                 } else {
-                    card.setCardBackgroundColor(Color.parseColor("#18181b"))
+                    card.setCardBackgroundColor(Color.parseColor("#09090b"))
                     episodeName.setTextColor(Color.WHITE)
                     episodeTime.setTextColor(Color.parseColor("#71717a"))
                     card.cardElevation = 2f

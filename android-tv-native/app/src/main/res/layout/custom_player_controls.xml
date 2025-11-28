@@ -1,80 +1,64 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/player_controls_root"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="@android:color/transparent">
+    android:layout_height="match_parent">
+    android:background="@android:color/transparent"
+    android:clickable="false"
+    android:focusable="false">
 
-    <!-- Top Gradient Overlay - VOD Only -->
+    <!-- Top Gradient Overlay -->
     <View
         android:id="@+id/top_gradient"
         android:layout_width="match_parent"
-        android:layout_height="120dp"
+        android:layout_height="150dp"
         android:layout_gravity="top"
         android:background="@drawable/gradient_top"
         android:visibility="gone" />
 
     <!-- Bottom Gradient Overlay -->
     <View
+        android:id="@+id/bottom_gradient"
         android:layout_width="match_parent"
-        android:layout_height="200dp"
+        android:layout_height="250dp"
         android:layout_gravity="bottom"
-        android:background="@drawable/gradient_bottom" />
+        android:background="@drawable/gradient_bottom"
+        android:visibility="gone" />
 
-    <!-- Top Info Bar - VOD Only -->
+    <!-- Top Info Bar - Title at top left like reference image -->
     <LinearLayout
         android:id="@+id/top_info_bar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="top"
         android:orientation="horizontal"
-        android:paddingTop="16dp"
+        android:paddingTop="32dp"
         android:paddingBottom="16dp"
-        android:paddingStart="40dp"
-        android:paddingEnd="40dp"
-        android:gravity="center_vertical"
+        android:paddingStart="48dp"
+        android:paddingEnd="48dp"
+        android:gravity="start|center_vertical"
         android:visibility="gone">
 
-        <!-- Platform Badge -->
+        <!-- Content Title -->
         <TextView
-            android:id="@+id/platform_badge"
+            android:id="@+id/content_title"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="AMAZON ORIGINAL"
+            android:text="Movie Title"
             android:textColor="#ffffff"
-            android:textSize="24sp"
+            android:textSize="32sp"
             android:textStyle="bold"
-            android:letterSpacing="0.15"
-            android:layout_weight="1" />
-
-        <!-- Time Display -->
-        <TextView
-            android:id="@+id/time_display"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="#ffffff"
-            android:textSize="16sp"
-            android:text="Fri, Nov 22, 12:33 p.m." />
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:shadowColor="#000000"
+            android:shadowDx="2"
+            android:shadowDy="2"
+            android:shadowRadius="4" />
 
     </LinearLayout>
 
-    <!-- Restart Button - Top Left (VOD Only) -->
-    <ImageButton
-        android:id="@+id/restart_button"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:layout_gravity="top|start"
-        android:layout_marginStart="24dp"
-        android:layout_marginTop="24dp"
-        android:src="@drawable/ic_replay"
-        android:background="@drawable/button_focus_bg_small"
-        android:contentDescription="Restart from beginning"
-        android:tint="#ffffff"
-        android:scaleType="fitCenter"
-        android:padding="12dp"
-        android:focusable="true"
-        android:visibility="visible" />
-
-    <!-- Center Play/Pause Icon Overlay (shown temporarily when toggling) -->
+    <!-- Center Play/Pause Icon Overlay (shown when clicking center) -->
     <ImageView
         android:id="@+id/play_pause_overlay"
         android:layout_width="120dp"
@@ -88,196 +72,148 @@
 
     <!-- Bottom Control Bar -->
     <LinearLayout
+        android:id="@+id/bottom_controls_container"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
         android:orientation="vertical"
         android:paddingTop="20dp"
-        android:paddingBottom="30dp"
+        android:paddingBottom="40dp"
         android:paddingStart="40dp"
-        android:paddingEnd="40dp">
+        android:paddingEnd="40dp"
+        android:visibility="gone">
 
-        <!-- Content Title and Quality Badges - VOD Only -->
+        <!-- Progress Bar Container -->
         <LinearLayout
-            android:id="@+id/vod_info_container"
+            android:id="@+id/progress_bar_container"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginBottom="16dp"
-            android:visibility="gone">
+            android:orientation="vertical"
+            android:layout_marginBottom="24dp"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:background="@android:color/transparent"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp">
 
-            <TextView
-                android:id="@+id/fullscreen_channel_name"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Content Title"
-                android:textColor="#ffffff"
-                android:textSize="20sp"
-                android:textStyle="normal"
-                android:singleLine="true"
-                android:ellipsize="end" />
+            <!-- Progress Bar -->
+            <androidx.media3.ui.DefaultTimeBar
+                android:id="@+id/exo_progress"
+                android:layout_width="match_parent"
+                android:layout_height="8dp"
+                android:focusable="true"
+                android:layout_marginBottom="12dp" />
 
-            <!-- Quality Badges Container -->
+            <!-- Time Position and Duration -->
             <LinearLayout
-                android:id="@+id/quality_badges_container"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:layout_marginStart="16dp">
+                android:gravity="start">
 
-                <!-- 1920x1080 Badge -->
                 <TextView
-                    android:id="@+id/resolution_badge"
+                    android:id="@+id/exo_position"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="1920x1080"
                     android:textColor="#ffffff"
-                    android:textSize="11sp"
-                    android:textStyle="bold"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:paddingTop="3dp"
-                    android:paddingBottom="3dp"
-                    android:background="#55ffffff"
-                    android:layout_marginEnd="6dp" />
+                    android:textSize="18sp"
+                    android:textStyle="normal"
+                    android:text="00:00" />
 
-                <!-- FPS Badge -->
                 <TextView
-                    android:id="@+id/fps_badge"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="25 FPS"
-                    android:textColor="#ffffff"
-                    android:textSize="11sp"
-                    android:textStyle="bold"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:paddingTop="3dp"
-                    android:paddingBottom="3dp"
-                    android:background="#55ffffff"
-                    android:layout_marginEnd="6dp" />
+                    android:textColor="#888888"
+                    android:textSize="18sp"
+                    android:text=" / "
+                    android:paddingStart="4dp"
+                    android:paddingEnd="4dp" />
 
-                <!-- STEREO Badge -->
                 <TextView
-                    android:id="@+id/audio_badge"
+                    android:id="@+id/exo_duration"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="STEREO"
-                    android:textColor="#ffffff"
-                    android:textSize="11sp"
-                    android:textStyle="bold"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:paddingTop="3dp"
-                    android:paddingBottom="3dp"
-                    android:background="#55ffffff" />
+                    android:textColor="#888888"
+                    android:textSize="18sp"
+                    android:text="00:00" />
 
             </LinearLayout>
 
         </LinearLayout>
 
-        <!-- Time Position and Duration -->
+        <!-- Control Buttons -->
         <LinearLayout
+            android:id="@+id/control_buttons_container"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="start"
-            android:layout_marginBottom="8dp">
-
-            <TextView
-                android:id="@+id/exo_position"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textColor="#ffffff"
-                android:textSize="18sp"
-                android:text="00:02" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textColor="#888888"
-                android:textSize="18sp"
-                android:text=" / "
-                android:paddingStart="4dp"
-                android:paddingEnd="4dp" />
-
-            <TextView
-                android:id="@+id/exo_duration"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textColor="#888888"
-                android:textSize="18sp"
-                android:text="1:44:39" />
-
-        </LinearLayout>
-
-        <!-- Progress Bar -->
-        <LinearLayout
-            android:id="@+id/progress_container"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:nextFocusDown="@id/prev_episode_button">
-
-            <androidx.media3.ui.DefaultTimeBar
-                android:id="@+id/exo_progress"
-                android:layout_width="match_parent"
-                android:layout_height="6dp"
-                android:focusable="false" />
-
-        </LinearLayout>
-
-        <!-- Episode Navigation (Series only) -->
-        <LinearLayout
-            android:id="@+id/episode_navigation_container"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center"
-            android:paddingTop="16dp"
             android:focusable="false"
-            android:descendantFocusability="afterDescendants"
-            android:visibility="gone">
+            android:descendantFocusability="afterDescendants">
 
-            <Button
-                android:id="@+id/prev_episode_button"
-                android:layout_width="160dp"
+            <!-- Restart Button - Smaller Icon -->
+            <ImageButton
+                android:id="@+id/restart_button"
+                android:layout_width="48dp"
                 android:layout_height="48dp"
-                android:text="◀ Previous Episode"
-                android:textSize="14sp"
-                android:textColor="@drawable/button_text_color"
-                android:background="@drawable/button_background"
+                android:src="@drawable/ic_replay"
+                android:background="@drawable/restart_button_bg"
+                android:scaleType="centerInside"
+                android:tint="#ffffff"
+                android:padding="12dp"
                 android:layout_marginEnd="12dp"
                 android:focusable="true"
                 android:clickable="true"
-                android:nextFocusRight="@id/next_episode_button"
-                android:nextFocusLeft="@id/next_episode_button" />
+                android:contentDescription="Restart"
+                android:nextFocusUp="@id/progress_bar_container"
+                android:nextFocusRight="@id/next_button" />
 
-            <Button
-                android:id="@+id/next_episode_button"
-                android:layout_width="160dp"
+            <!-- Next Button (for series) - Smaller Icon -->
+            <ImageButton
+                android:id="@+id/next_button"
+                android:layout_width="48dp"
                 android:layout_height="48dp"
-                android:text="Next Episode ▶"
-                android:textSize="14sp"
-                android:textColor="@drawable/button_text_color"
-                android:background="@drawable/button_background"
-                android:layout_marginStart="12dp"
+                android:src="@android:drawable/ic_media_next"
+                android:background="@drawable/restart_button_bg"
+                android:scaleType="centerInside"
+                android:tint="#ffffff"
+                android:padding="12dp"
                 android:focusable="true"
                 android:clickable="true"
-                android:nextFocusLeft="@id/prev_episode_button"
-                android:nextFocusRight="@id/prev_episode_button" />
+                android:contentDescription="Next Episode"
+                android:nextFocusUp="@id/progress_bar_container"
+                android:nextFocusLeft="@id/restart_button"
+                android:nextFocusRight="@id/subtitle_button"
+                android:visibility="gone" />
+
+            <!-- Subtitle Button - AI Generated Subtitles -->
+            <ImageButton
+                android:id="@+id/subtitle_button"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@drawable/ic_subtitles"
+                android:background="@drawable/restart_button_bg"
+                android:scaleType="centerInside"
+                android:tint="#ffffff"
+                android:padding="12dp"
+                android:layout_marginEnd="12dp"
+                android:focusable="true"
+                android:clickable="true"
+                android:contentDescription="Toggle Subtitles"
+                android:nextFocusUp="@id/progress_bar_container"
+                android:nextFocusLeft="@id/next_button"
+                android:nextFocusRight="@id/subtitle_button"
+                android:visibility="visible" />
 
         </LinearLayout>
 
-        <!-- LIVE Badge (shown for live instead of progress bar) -->
+        <!-- LIVE Badge (shown for live content) -->
         <LinearLayout
             android:id="@+id/live_badge_container"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center"
+            android:layout_marginTop="16dp"
             android:visibility="gone">
 
             <TextView
@@ -286,43 +222,73 @@
                 android:layout_height="wrap_content"
                 android:text="● LIVE"
                 android:textColor="#ff0000"
-                android:textSize="16sp"
+                android:textSize="18sp"
                 android:textStyle="bold"
-                android:paddingStart="16dp"
-                android:paddingEnd="16dp"
-                android:paddingTop="6dp"
-                android:paddingBottom="6dp"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
                 android:background="#40ffffff" />
 
         </LinearLayout>
 
-        <!-- Hidden buttons for ExoPlayer control (not visible, controlled by keys) -->
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:visibility="gone">
+    </LinearLayout>
 
-            <ImageButton
-                android:id="@+id/exo_rew"
-                android:layout_width="1dp"
-                android:layout_height="1dp"
-                android:focusable="false" />
+    <!-- Hidden buttons for ExoPlayer control (not visible, controlled by keys) -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:visibility="gone">
 
-            <ImageButton
-                android:id="@+id/exo_play_pause"
-                android:layout_width="1dp"
-                android:layout_height="1dp"
-                android:focusable="false" />
+        <ImageButton
+            android:id="@+id/exo_rew"
+            android:layout_width="1dp"
+            android:layout_height="1dp"
+            android:focusable="false" />
 
-            <ImageButton
-                android:id="@+id/exo_ffwd"
-                android:layout_width="1dp"
-                android:layout_height="1dp"
-                android:focusable="false" />
+        <ImageButton
+            android:id="@+id/exo_play_pause"
+            android:layout_width="1dp"
+            android:layout_height="1dp"
+            android:focusable="false" />
 
-        </LinearLayout>
+        <ImageButton
+            android:id="@+id/exo_ffwd"
+            android:layout_width="1dp"
+            android:layout_height="1dp"
+            android:focusable="false" />
 
     </LinearLayout>
+
+    <!-- Live Subtitle Text Overlay (AI Generated) -->
+    <TextView
+        android:id="@+id/live_subtitle_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="120dp"
+        android:layout_marginStart="80dp"
+        android:layout_marginEnd="80dp"
+        android:background="#DD000000"
+        android:padding="16dp"
+        android:textColor="#FFFFFF"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:lineSpacingExtra="4dp"
+        android:shadowColor="#000000"
+        android:shadowDx="2"
+        android:shadowDy="2"
+        android:shadowRadius="4"
+        android:visibility="gone"
+        android:focusable="false"
+        android:clickable="false"
+        android:elevation="100dp"
+        android:translationZ="100dp"
+        android:maxLines="3"
+        android:ellipsize="end"
+        tools:text="[LIVE] This is an example subtitle text that appears here"
+        tools:visibility="visible" />
 
 </FrameLayout>

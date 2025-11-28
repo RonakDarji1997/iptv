@@ -20,8 +20,17 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.Job
+import android.net.Uri
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.GridLayoutManager
@@ -32,6 +41,7 @@ import com.ronika.iptvnative.adapters.CategoryAdapter
 import com.ronika.iptvnative.adapters.ChannelAdapter
 import com.ronika.iptvnative.adapters.ChannelRowAdapter
 import com.ronika.iptvnative.api.ApiClient
+import com.ronika.iptvnative.services.SubtitleService
 import com.ronika.iptvnative.api.ChannelsRequest
 import com.ronika.iptvnative.api.GenreRequest
 import com.ronika.iptvnative.api.MoviesRequest
@@ -60,6 +70,35 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var navigationManager: NavigationManager
     private var liveTVManager: LiveTVManager? = null
+    
+    // Direct Stalker client for VOD (no backend, no DB, no handshake)
+    private val stalkerClient: com.ronika.iptvnative.api.StalkerClient by lazy {
+        com.ronika.iptvnative.api.StalkerClient(
+            portalUrl = "http://tv.stream4k.cc/stalker_portal/server/load.php",
+            macAddress = "00:1a:79:17:f4:f5"
+        )
+    }
+    
+    // Cache for API responses to avoid redundant calls
+    private data class CacheEntry<T>(
+        val data: T,
+        val timestamp: Long = System.currentTimeMillis()
+    )
+    
+    private val contentCache = mutableMapOf<String, CacheEntry<List<Channel>>>()
+    private val seriesCache = mutableMapOf<String, CacheEntry<List<Series>>>() // Cache for series metadata
+    private val genresCache = mutableMapOf<String, CacheEntry<List<Genre>>>()
+    private val CACHE_DURATION = 5 * 60 * 1000L // 5 minutes
+    
+    private fun <T> isCacheValid(entry: CacheEntry<T>?): Boolean {
+        return entry != null && (System.currentTimeMillis() - entry.timestamp) < CACHE_DURATION
+    }
+    
+    private fun clearCache() {
+        contentCache.clear()
+        seriesCache.clear()
+        genresCache.clear()
+    }
     
     // UI Components - Sidebar
     private lateinit var categorySidebar: LinearLayout
@@ -133,10 +172,20 @@ class MainActivity : ComponentActivity() {
     // Players - Separate for Live TV and VOD
     private var livePlayer: ExoPlayer? = null
     private var vodPlayer: ExoPlayer? = null
+    private var currentStreamUrl: String? = null
     private var currentPlayingChannel: Channel? = null
     private var currentPlayingCategoryId: String? = null  // Track which category has the playing channel
+    
+    // Live Subtitle Service (AI Generated)
+    private var subtitleButton: ImageButton? = null
+    private var liveSubtitleText: TextView? = null
+    private var subtitleService: SubtitleService? = null
+    private var isSubtitlesEnabled = false
+    private var audioPermissionGranted = false
     private var currentPlayingCategoryIndex: Int = -1  // Track the index of the category that's playing
     private var isFullscreen = false
+    private val controlsHideHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var controlsHideRunnable: Runnable? = null
     private var currentPlayingIndex = 0
     private var isOnMainNavigation = true
     
@@ -173,6 +222,43 @@ class MainActivity : ComponentActivity() {
     // Netflix-style movie rows RecyclerView
     private lateinit var movieRowsRecycler: RecyclerView
     
+    // Activity result launcher for MovieCategoryActivity
+    private val movieCategoryResultLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        android.util.Log.d("MainActivity", "===== MovieCategoryActivity result received =====")
+        android.util.Log.d("MainActivity", "Result code: ${result.resultCode}, OK=${android.app.Activity.RESULT_OK}")
+        android.util.Log.d("MainActivity", "Result data: ${result.data}")
+        
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            result.data?.let { data ->
+                val movieId = data.getStringExtra("movieId") ?: return@let
+                val movieName = data.getStringExtra("movieName") ?: return@let
+                val movieCmd = data.getStringExtra("movieCmd") ?: return@let
+                val movieLogo = data.getStringExtra("movieLogo") ?: ""
+                val categoryId = data.getStringExtra("categoryId") ?: ""
+                
+                android.util.Log.d("MainActivity", "✓ Received movie to play: $movieName")
+                android.util.Log.d("MainActivity", "  - ID: $movieId")
+                android.util.Log.d("MainActivity", "  - CMD: $movieCmd")
+                android.util.Log.d("MainActivity", "  - selectedTab: $selectedTab")
+                
+                // Create channel object and play
+                val channel = Channel(
+                    id = movieId,
+                    name = movieName,
+                    number = "",
+                    logo = movieLogo,
+                    cmd = movieCmd,
+                    genreId = categoryId
+                )
+                
+                android.util.Log.d("MainActivity", "Calling onChannelSelected...")
+                onChannelSelected(channel)
+            }
+        }
+    }
+    
     // State
     private var selectedTab = "TV"
     private var hoverTab = "TV"
@@ -186,11 +272,15 @@ class MainActivity : ComponentActivity() {
     private val allChannels = mutableListOf<Channel>()
     private val allMovies = mutableListOf<Movie>() // Store full movie objects with metadata
     private val allSeries = mutableListOf<Series>() // Store full series objects with metadata
+    private val seriesMap = mutableMapOf<String, Series>() // Map for instant series lookup by ID
     private var totalItemsCount = 0
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        
+        // Keep screen on to prevent screensaver during playback
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         
         // Set API credentials with actual values
         // Using direct IP to bypass DNS issues (tv.stream4k.cc -> 172.66.167.27)
@@ -219,11 +309,19 @@ class MainActivity : ComponentActivity() {
             return // Skip normal UI setup
         }
         
+        // Check if we're launching to play a movie from MovieCategoryActivity
+        if (intent.getBooleanExtra("playMovie", false)) {
+            handleMoviePlaybackIntent(intent)
+        }
+        
         // Setup adapters
         setupAdapters()
         
         // Setup listeners (keep logic outside of MainActivity for clarity)
         setupTabListeners()
+        setupFocusListeners()
+        
+        android.util.Log.d("MainActivity", "✅ Focus listeners setup complete")
         
         // Load initial TV tab (selectedTab already defaults to "TV")
         switchTab("TV")
@@ -242,6 +340,13 @@ class MainActivity : ComponentActivity() {
         if (playType == "series") {
             android.util.Log.d("MainActivity", "onNewIntent: Series playback requested")
             handleSeriesPlayback()
+            return
+        }
+        
+        // Handle movie playback if launched with movie data
+        if (intent?.getBooleanExtra("playMovie", false) == true) {
+            android.util.Log.d("MainActivity", "onNewIntent: Movie playback requested")
+            handleMoviePlaybackIntent(intent)
         }
     }
     
@@ -305,49 +410,44 @@ class MainActivity : ComponentActivity() {
         // Set fullscreen flag
         isFullscreen = true
         
-        // Fetch series file info and play
+        // Fetch series file info and play using direct Stalker calls
         lifecycleScope.launch {
             try {
-                android.util.Log.d("MainActivity", "Fetching series file info for episode: $episodeId")
+                android.util.Log.d("MainActivity", "Getting episode file info for series: $seriesId, season: $seasonId, episode: $episodeId")
                 
-                val fileInfo = ApiClient.apiService.getSeriesFileInfo(
-                    com.ronika.iptvnative.api.SeriesFileInfoRequest(
-                        mac = ApiClient.macAddress,
-                        url = ApiClient.portalUrl,
-                        seriesId = seriesId,
-                        seasonId = seasonId,
-                        episodeId = episodeId
-                    )
-                )
+                // Step 1: Get file info using direct Stalker call
+                val fileInfo = stalkerClient.getEpisodeFileInfo(seriesId, seasonId, episodeId)
                 
-                android.util.Log.d("MainActivity", "File info received: id=${fileInfo.fileInfo?.id}")
-                
-                val fileId = fileInfo.fileInfo?.id
-                if (fileId != null) {
-                    val cmd = "/media/file_${fileId}.mpg"
-                    android.util.Log.d("MainActivity", "Constructed cmd: $cmd")
+                if (fileInfo != null) {
+                    // Get the file ID from the response
+                    val fileId = fileInfo["id"] as? String
                     
-                    // Get stream URL with series type and episode number
-                    val streamResponse = ApiClient.apiService.getStreamUrl(
-                        com.ronika.iptvnative.api.StreamUrlRequest(
-                            mac = ApiClient.macAddress,
-                            url = ApiClient.portalUrl,
-                            cmd = cmd,
-                            type = "series",
+                    if (fileId != null) {
+                        android.util.Log.d("MainActivity", "Got file ID: $fileId")
+                        
+                        // Step 2: Construct the cmd parameter as /media/file_{id}.mpg
+                        val cmd = "/media/file_${fileId}.mpg"
+                        android.util.Log.d("MainActivity", "Constructed cmd: $cmd")
+                        
+                        // Step 3: Call create_link with the file cmd to get authenticated streaming URL
+                        android.util.Log.d("MainActivity", "Calling create_link to get authenticated stream URL")
+                        val streamUrlResponse = stalkerClient.getVodStreamUrl(cmd, type = "vod")
+                        val streamUrl = streamUrlResponse.url
+                        currentStreamUrl = streamUrl  // Track for subtitle service
+                        
+                        android.util.Log.d("MainActivity", "Got authenticated stream URL: $streamUrl")
+                        
+                        // Play the episode with authenticated URL
+                        playSeriesEpisode(
+                            streamUrl = streamUrl,
+                            title = "$seriesName - $episodeName",
+                            seasonNumber = seasonNumber,
                             episodeNumber = episodeNumber
                         )
-                    )
-                    
-                    val streamUrl = streamResponse.url
-                    android.util.Log.d("MainActivity", "Got stream URL: $streamUrl")
-                    
-                    // Play the episode
-                    playSeriesEpisode(
-                        streamUrl = streamUrl,
-                        title = "$seriesName - $episodeName",
-                        seasonNumber = seasonNumber,
-                        episodeNumber = episodeNumber
-                    )
+                    } else {
+                        android.util.Log.e("MainActivity", "No file ID in file info")
+                        Toast.makeText(this@MainActivity, "Failed to get file ID", Toast.LENGTH_SHORT).show()
+                    }
                 } else {
                     android.util.Log.e("MainActivity", "No file info returned for episode")
                     android.widget.Toast.makeText(this@MainActivity, "Episode not available", android.widget.Toast.LENGTH_SHORT).show()
@@ -361,9 +461,46 @@ class MainActivity : ComponentActivity() {
         }
     }
     
+    private fun handleMoviePlaybackIntent(intent: android.content.Intent) {
+        val movieId = intent.getStringExtra("movieId") ?: return
+        val movieName = intent.getStringExtra("movieName") ?: return
+        val movieCmd = intent.getStringExtra("movieCmd") ?: return
+        val movieLogo = intent.getStringExtra("movieLogo") ?: ""
+        val categoryId = intent.getStringExtra("categoryId") ?: ""
+        
+        android.util.Log.d("MainActivity", "===== Movie playback from intent =====")
+        android.util.Log.d("MainActivity", "Movie: $movieName")
+        android.util.Log.d("MainActivity", "ID: $movieId, CMD: $movieCmd")
+        
+        // Switch to MOVIES tab first
+        selectedTab = "MOVIES"
+        
+        // Create channel object and play
+        val channel = Channel(
+            id = movieId,
+            name = movieName,
+            number = "",
+            logo = movieLogo,
+            cmd = movieCmd,
+            genreId = categoryId
+        )
+        
+        // Play the movie using existing function
+        lifecycleScope.launch {
+            // Small delay to ensure UI is ready
+            kotlinx.coroutines.delay(100)
+            showMovieFullscreen(channel)
+        }
+    }
+    
     private fun playSeriesEpisode(streamUrl: String, title: String, seasonNumber: String, episodeNumber: String) {
+        android.util.Log.d("MainActivity", "===== playSeriesEpisode CALLED =====")
         android.util.Log.d("MainActivity", "Playing series episode: $title")
         android.util.Log.d("MainActivity", "Stream URL: $streamUrl")
+        android.util.Log.d("MainActivity", "isPlayingSeries flag: $isPlayingSeries")
+        android.util.Log.d("MainActivity", "isFullscreen flag: $isFullscreen")
+        android.util.Log.d("MainActivity", "currentSeriesId: $currentSeriesId")
+        android.util.Log.d("MainActivity", "currentSeriesName: $currentSeriesName")
         
         // Use the same playback logic as movies (VOD content)
         val isLive = false
@@ -382,6 +519,7 @@ class MainActivity : ComponentActivity() {
             }
                 
             targetPlayer?.apply {
+                currentStreamUrl = streamUrl  // Track for subtitle service
                 android.util.Log.d("MainActivity", "Setting new media item...")
                 val mediaItem = MediaItem.fromUri(streamUrl)
                 setMediaItem(mediaItem)
@@ -400,10 +538,23 @@ class MainActivity : ComponentActivity() {
             }
             
             // Update player controls based on content type
+            android.util.Log.d("MainActivity", "Calling updatePlayerControlsForContentType()")
             updatePlayerControlsForContentType()
             
+            // Show player controller to display custom controls
+            android.util.Log.d("MainActivity", "Calling showController()")
+            playerView.showController()
+            
             // Show episode navigation buttons for series
+            android.util.Log.d("MainActivity", "Calling updateEpisodeNavigationVisibility()")
             updateEpisodeNavigationVisibility()
+            
+            // Log control visibility after setup
+            val restartBtn = playerView.findViewById<ImageButton>(R.id.restart_button)
+            val nextBtn = playerView.findViewById<ImageButton>(R.id.next_button)
+            val progressBar = playerView.findViewById<LinearLayout>(R.id.progress_bar_container)
+            val bottomControls = playerView.findViewById<LinearLayout>(R.id.bottom_controls_container)
+            android.util.Log.d("MainActivity", "Controls after setup - restart: ${restartBtn?.visibility}, next: ${nextBtn?.visibility}, progress: ${progressBar?.visibility}, bottom: ${bottomControls?.visibility}")
             
             android.util.Log.d("MainActivity", "Player started successfully")
         } catch (e: Exception) {
@@ -435,6 +586,31 @@ class MainActivity : ComponentActivity() {
         playerPreviewContainer = findViewById(R.id.player_preview_container)
         playerContainer = findViewById(R.id.player_container)
         playerView = findViewById(R.id.player_view)
+        
+        // Configure SubtitleView for better visibility
+        try {
+            val subtitleView = playerView.subtitleView
+            if (subtitleView != null) {
+                subtitleView.setStyle(
+                    androidx.media3.ui.CaptionStyleCompat(
+                        android.graphics.Color.WHITE,
+                        android.graphics.Color.BLACK,
+                        android.graphics.Color.TRANSPARENT,
+                        androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW,
+                        android.graphics.Color.BLACK,
+                        android.graphics.Typeface.SANS_SERIF
+                    )
+                )
+                subtitleView.setFixedTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 24f)
+                subtitleView.setBottomPaddingFraction(0.1f)
+                android.util.Log.d("MainActivity", "✅ SubtitleView configured with styling")
+            } else {
+                android.util.Log.w("MainActivity", "⚠️  SubtitleView is null")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "❌ Error configuring SubtitleView", e)
+        }
+        
         contentHeader = findViewById(R.id.content_header)
         contentListContainer = findViewById(R.id.content_list_container)
         contentTitle = findViewById(R.id.content_title)
@@ -679,52 +855,114 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun setupCustomPlayerControls() {
-        // Find custom control views
-        progressContainer = playerView.findViewById(R.id.progress_container)
-        liveBadgeContainer = playerView.findViewById(R.id.live_badge_container)
-        rewindButton = playerView.findViewById(R.id.exo_rew)
-        forwardButton = playerView.findViewById(R.id.exo_ffwd)
-        fullscreenChannelName = playerView.findViewById(R.id.fullscreen_channel_name)
-        
-        // Find additional custom views
-        val platformBadge = playerView.findViewById<TextView>(R.id.platform_badge)
-        val resolutionBadge = playerView.findViewById<TextView>(R.id.resolution_badge)
-        val fpsBadge = playerView.findViewById<TextView>(R.id.fps_badge)
-        val audioBadge = playerView.findViewById<TextView>(R.id.audio_badge)
+        // Find new enhanced custom views
+        val topInfoBar = playerView.findViewById<LinearLayout>(R.id.top_info_bar)
+        val topGradient = playerView.findViewById<View>(R.id.top_gradient)
+        val bottomGradient = playerView.findViewById<View>(R.id.bottom_gradient)
+        val bottomControlsContainer = playerView.findViewById<LinearLayout>(R.id.bottom_controls_container)
+        val contentTitle = playerView.findViewById<TextView>(R.id.content_title)
+        val progressBarContainer = playerView.findViewById<LinearLayout>(R.id.progress_bar_container)
+        val controlButtonsContainer = playerView.findViewById<LinearLayout>(R.id.control_buttons_container)
         val restartButton = playerView.findViewById<ImageButton>(R.id.restart_button)
+        val nextButton = playerView.findViewById<ImageButton>(R.id.next_button)
+        
+        // Setup subtitle button and text
+        subtitleButton = playerView.findViewById(R.id.subtitle_button)
+        liveSubtitleText = findViewById(R.id.fullscreen_subtitle_text)  // Use fullscreen overlay, not player controls
+        
+        // Initialize subtitle service
+        subtitleService = SubtitleService()
+        
+        // Setup subtitle button click listener with debouncing (1 second)
+        var lastSubtitleToggleTime = 0L
+        subtitleButton?.setOnClickListener {
+            val now = System.currentTimeMillis()
+            if (now - lastSubtitleToggleTime > 1000) { // Debounce: 1 second minimum between toggles
+                lastSubtitleToggleTime = now
+                toggleSubtitles()
+            } else {
+                android.util.Log.d("MainActivity", "⏭️ Ignoring rapid CC button click (debounced)")
+            }
+        }
+        
+        // Observe subtitle events
+        lifecycleScope.launch {
+            subtitleService?.subtitleFlow?.collect { event ->
+                event?.let { handleSubtitleEvent(it) }
+            }
+        }
+        
+        liveBadgeContainer = playerView.findViewById(R.id.live_badge_container)
         val playPauseOverlay = playerView.findViewById<ImageView>(R.id.play_pause_overlay)
+        val playerControlsRoot = playerView.findViewById<FrameLayout>(R.id.player_controls_root)
+        
+        // Clear old references (not used anymore)
+        progressContainer = null
+        rewindButton = null
+        forwardButton = null
+        fullscreenChannelName = null
+        
+        // Setup center click to toggle play/pause
+        playerControlsRoot?.setOnClickListener {
+            android.util.Log.d("MainActivity", "Player center clicked")
+            if (isFullscreen) {
+                // Only toggle play/pause if no control button has focus
+                if (currentFocus == null || currentFocus == playerView || currentFocus == playerControlsRoot) {
+                    playerView.player?.let { player ->
+                        if (player.isPlaying) {
+                            player.pause()
+                        } else {
+                            player.play()
+                        }
+                        showPlayPauseOverlay(player.isPlaying)
+                    }
+                }
+            }
+        }
         
         // Setup restart button
         restartButton?.setOnClickListener {
+            android.util.Log.d("MainActivity", "Restart button clicked")
             playerView.player?.seekTo(0)
             playerView.player?.play()
             showPlayPauseOverlay(true)
+            playerView.showController()
+            scheduleControlsHide()
         }
         
-        // Setup episode navigation buttons (for series only)
-        val episodeNavContainer = playerView.findViewById<LinearLayout>(R.id.episode_navigation_container)
-        val prevEpisodeButton = playerView.findViewById<Button>(R.id.prev_episode_button)
-        val nextEpisodeButton = playerView.findViewById<Button>(R.id.next_episode_button)
-        
-        prevEpisodeButton?.setOnClickListener {
-            playPreviousEpisode()
-        }
-        
-        nextEpisodeButton?.setOnClickListener {
+        // Setup next button (for series)
+        nextButton?.setOnClickListener {
+            android.util.Log.d("MainActivity", "Next button clicked")
             playNextEpisode()
+            playerView.showController()
+            scheduleControlsHide()
         }
         
-        // Setup key listeners to prevent player from seeking when buttons have focus
-        prevEpisodeButton?.setOnKeyListener { _, keyCode, event ->
+        // Setup key listeners for control buttons
+        restartButton?.setOnKeyListener { _, keyCode, event ->
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                android.util.Log.d("MainActivity", "⏯️ Restart button key: $keyCode")
                 when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        nextEpisodeButton?.requestFocus()
-                        true // Consume the event
+                        if (isPlayingSeries) {
+                            nextButton?.requestFocus()
+                            true
+                        } else {
+                            false
+                        }
                     }
                     KeyEvent.KEYCODE_DPAD_LEFT -> {
-                        // Stay on previous button (wraps around)
-                        false // Let default behavior handle it
+                        // Stay on restart button (leftmost)
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        progressBarContainer?.requestFocus()
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                        // Trigger click
+                        restartButton?.performClick()
+                        true
                     }
                     else -> false
                 }
@@ -733,16 +971,28 @@ class MainActivity : ComponentActivity() {
             }
         }
         
-        nextEpisodeButton?.setOnKeyListener { _, keyCode, event ->
+        nextButton?.setOnKeyListener { _, keyCode, event ->
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                android.util.Log.d("MainActivity", "⏭️ Next button key: $keyCode")
                 when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_LEFT -> {
-                        prevEpisodeButton?.requestFocus()
-                        true // Consume the event
+                        restartButton?.requestFocus()
+                        true
                     }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        // Stay on next button (wraps around)
-                        false // Let default behavior handle it
+                        // Navigate to subtitle button
+                        val subtitleButton = playerView.findViewById<ImageButton>(R.id.subtitle_button)
+                        subtitleButton?.requestFocus()
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        progressBarContainer?.requestFocus()
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                        // Trigger click
+                        nextButton?.performClick()
+                        true
                     }
                     else -> false
                 }
@@ -751,13 +1001,82 @@ class MainActivity : ComponentActivity() {
             }
         }
         
-        // Show/hide episode navigation based on playback type
-        episodeNavContainer?.visibility = if (isPlayingSeries) View.VISIBLE else View.GONE
+        // Setup subtitle button key listener
+        val subtitleButton = playerView.findViewById<ImageButton>(R.id.subtitle_button)
+        subtitleButton?.setOnKeyListener { _, keyCode, event ->
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                android.util.Log.d("MainActivity", "📺 Subtitle button key: $keyCode")
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        // Navigate back to next button if visible, otherwise to restart
+                        if (isPlayingSeries && nextButton?.visibility == View.VISIBLE) {
+                            nextButton?.requestFocus()
+                        } else {
+                            restartButton?.requestFocus()
+                        }
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        // Stay on subtitle button (rightmost)
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        progressBarContainer?.requestFocus()
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                        // Trigger click
+                        subtitleButton?.performClick()
+                        true
+                    }
+                    else -> false
+                }
+            } else {
+                false
+            }
+        }
+        
+        // Setup progress bar container focus
+        progressBarContainer?.isFocusable = true
+        progressBarContainer?.isFocusableInTouchMode = true
+        progressBarContainer?.setOnKeyListener { _, keyCode, event ->
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                android.util.Log.d("MainActivity", "📏 Progress bar key: $keyCode")
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        restartButton?.requestFocus()
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        // Seek backward 10 seconds
+                        playerView.player?.let { player ->
+                            val newPos = (player.currentPosition - 10000).coerceAtLeast(0)
+                            player.seekTo(newPos)
+                            playerView.showController()
+                            scheduleControlsHide()
+                        }
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        // Seek forward 10 seconds
+                        playerView.player?.let { player ->
+                            val newPos = (player.currentPosition + 10000).coerceAtMost(player.duration)
+                            player.seekTo(newPos)
+                            playerView.showController()
+                            scheduleControlsHide()
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            } else {
+                false
+            }
+        }
         
         // Setup player listener to update overlay icon
         playerView.player?.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                // Update overlay icon based on playing state
                 playPauseOverlay?.setImageResource(
                     if (isPlaying) androidx.media3.ui.R.drawable.exo_icon_pause 
                     else androidx.media3.ui.R.drawable.exo_icon_play
@@ -765,40 +1084,42 @@ class MainActivity : ComponentActivity() {
             }
         })
         
-        // Update platform badge based on content
-        platformBadge?.text = when (selectedTab) {
-            "TV" -> "LIVE TV"
-            "MOVIES" -> ""
-            "SHOWS" -> ""
-            else -> "IPTV PLAYER"
+        // Show/hide next button based on series playback
+        nextButton?.visibility = if (isPlayingSeries) View.VISIBLE else View.GONE
+        
+        // Ensure focus navigation works when next button is visible
+        if (isPlayingSeries) {
+            nextButton?.setNextFocusRightId(R.id.subtitle_button)
+            restartButton?.setNextFocusRightId(R.id.next_button)
+            nextButton?.requestLayout()
+            restartButton?.requestLayout()
+            android.util.Log.d("MainActivity", "🎯 [Line 1051] Focus set for SERIES: next→subtitle, restart→next (isPlayingSeries=$isPlayingSeries)")
+        } else {
+            restartButton?.setNextFocusRightId(R.id.subtitle_button)
+            restartButton?.requestLayout()
+            android.util.Log.d("MainActivity", "🎯 [Line 1051] Focus set for NON-SERIES: restart→subtitle (isPlayingSeries=$isPlayingSeries)")
         }
         
         // Update control visibility based on current channel
         updatePlayerControlsForContentType()
     }
     
-    private fun showPlayPauseOverlay(show: Boolean) {
+    private fun showPlayPauseOverlay(isPlaying: Boolean) {
         val playPauseOverlay = playerView.findViewById<ImageView>(R.id.play_pause_overlay)
         playPauseOverlay?.let { overlay ->
-            if (show) {
-                // Update icon based on current playback state
-                val isPlaying = playerView.player?.isPlaying == true
-                overlay.setImageResource(
-                    if (isPlaying) androidx.media3.ui.R.drawable.exo_icon_pause 
-                    else androidx.media3.ui.R.drawable.exo_icon_play
-                )
-                overlay.visibility = View.VISIBLE
-                overlay.alpha = 0.9f
-                
-                // Hide after 1 second
-                overlay.postDelayed({
-                    overlay.animate().alpha(0f).setDuration(300).withEndAction {
-                        overlay.visibility = View.GONE
-                    }
-                }, 1000)
-            } else {
-                overlay.visibility = View.GONE
-            }
+            // Update icon based on playback state
+            overlay.setImageResource(
+                if (isPlaying) androidx.media3.ui.R.drawable.exo_icon_play 
+                else androidx.media3.ui.R.drawable.exo_icon_pause
+            )
+            overlay.visibility = View.VISIBLE
+            overlay.alpha = 0.9f
+            
+            overlay.postDelayed({
+                overlay.animate().alpha(0f).setDuration(300).withEndAction {
+                    overlay.visibility = View.GONE
+                }
+            }, 800)
         }
     }
     
@@ -812,29 +1133,108 @@ class MainActivity : ComponentActivity() {
             try {
                 val currentEpNum = currentEpisodeNumber?.toIntOrNull() ?: return@launch
                 
-                // Load current season episodes to find previous
-                val response = ApiClient.apiService.getSeriesEpisodes(
-                    com.ronika.iptvnative.api.SeriesEpisodesRequest(
-                        mac = ApiClient.macAddress,
-                        url = ApiClient.portalUrl,
-                        seriesId = currentSeriesId ?: "",
-                        seasonId = currentSeasonId ?: "",
-                        page = 1
-                    )
-                )
+                android.util.Log.d("MainActivity", "Loading previous episode before E$currentEpNum")
                 
-                val episodes = response.data.sortedBy { 
-                    it.series_number?.toIntOrNull() ?: Int.MAX_VALUE 
+                // Load current season episodes directly from Stalker portal
+                val responseMap = withContext(Dispatchers.IO) {
+                    stalkerClient.getSeriesEpisodes(
+                        currentSeriesId ?: "",
+                        currentSeasonId ?: ""
+                    )
                 }
+                
+                android.util.Log.d("MainActivity", "Response keys: ${responseMap.keys}")
+                
+                // Parse the data - it could be a Map or List
+                val episodesRaw = when (val data = responseMap["data"]) {
+                    is List<*> -> data
+                    is Map<*, *> -> (data as Map<String, Any>).values.toList()
+                    else -> throw Exception("Unexpected data format: ${data?.javaClass?.name}")
+                }
+                
+                // Debug: Log first episode to see available fields
+                if (episodesRaw.isNotEmpty()) {
+                    val firstEp = episodesRaw[0] as? Map<String, Any>
+                    android.util.Log.d("MainActivity", "First episode keys: ${firstEp?.keys}")
+                }
+                
+                // Convert to episode objects
+                val sortedEpisodes = episodesRaw.mapNotNull { episodeItem ->
+                    (episodeItem as? Map<String, Any>)?.let { ep ->
+                        Triple(
+                            ep["id"] as? String ?: "",
+                            ep["name"] as? String ?: "",
+                            ep["series_number"] as? String ?: ""
+                        )
+                    }
+                }.sortedBy { it.third.toIntOrNull() ?: Int.MAX_VALUE }
+                
+                android.util.Log.d("MainActivity", "Found ${sortedEpisodes.size} episodes")
+                android.util.Log.d("MainActivity", "Episode numbers: ${sortedEpisodes.map { it.third }}")
                 
                 // Find previous episode
-                val currentIndex = episodes.indexOfFirst { 
-                    it.series_number?.toIntOrNull() == currentEpNum 
+                val currentIndex = sortedEpisodes.indexOfFirst { 
+                    it.third.toIntOrNull() == currentEpNum 
                 }
                 
+                android.util.Log.d("MainActivity", "Current episode E$currentEpNum is at index: $currentIndex, total: ${sortedEpisodes.size}")
+                
                 if (currentIndex > 0) {
-                    val prevEpisode = episodes[currentIndex - 1]
-                    playEpisode(prevEpisode)
+                    val prevEpisode = sortedEpisodes[currentIndex - 1]
+                    val (episodeId, episodeName, episodeNumber) = prevEpisode
+                    
+                    android.util.Log.d("MainActivity", "Found previous episode: $episodeName (E$episodeNumber)")
+                    
+                    // Update current episode tracking
+                    currentEpisodeId = episodeId
+                    currentEpisodeNumber = episodeNumber
+                    currentEpisodeName = episodeName
+                    
+                    // Use the same flow as initial episode playback
+                    // Step 1: Get file info
+                    val fileInfo = withContext(Dispatchers.IO) {
+                        stalkerClient.getEpisodeFileInfo(
+                            currentSeriesId ?: "",
+                            currentSeasonId ?: "",
+                            episodeId
+                        )
+                    }
+                    
+                    if (fileInfo != null) {
+                        val fileId = fileInfo["id"] as? String
+                        
+                        if (fileId != null) {
+                            android.util.Log.d("MainActivity", "Got file ID: $fileId")
+                            
+                            // Step 2: Construct cmd parameter
+                            val cmd = "/media/file_${fileId}.mpg"
+                            android.util.Log.d("MainActivity", "Constructed cmd: $cmd")
+                            
+                            // Step 3: Get authenticated stream URL
+                            val streamUrlResponse = withContext(Dispatchers.IO) {
+                                stalkerClient.getVodStreamUrl(cmd, type = "vod")
+                            }
+                            val streamUrl = streamUrlResponse.url
+                            
+                            android.util.Log.d("MainActivity", "Got authenticated stream URL: $streamUrl")
+                            
+                            // Step 4: Play the episode
+                            playSeriesEpisode(
+                                streamUrl = streamUrl,
+                                title = "$currentSeriesName - $episodeName",
+                                seasonNumber = currentSeasonNumber ?: "",
+                                episodeNumber = episodeNumber
+                            )
+                            
+                            Toast.makeText(this@MainActivity, "Playing E$episodeNumber: $episodeName", Toast.LENGTH_SHORT).show()
+                        } else {
+                            android.util.Log.e("MainActivity", "No file ID in file info")
+                            Toast.makeText(this@MainActivity, "Failed to get file ID", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        android.util.Log.e("MainActivity", "No file info returned")
+                        Toast.makeText(this@MainActivity, "Unable to load episode", Toast.LENGTH_SHORT).show()
+                    }
                 } else {
                     android.util.Log.d("MainActivity", "Already at first episode")
                     Toast.makeText(this@MainActivity, "Already at first episode", Toast.LENGTH_SHORT).show()
@@ -856,218 +1256,261 @@ class MainActivity : ComponentActivity() {
             try {
                 val currentEpNum = currentEpisodeNumber?.toIntOrNull() ?: return@launch
                 
-                // Load current season episodes to find next
-                val response = ApiClient.apiService.getSeriesEpisodes(
-                    com.ronika.iptvnative.api.SeriesEpisodesRequest(
-                        mac = ApiClient.macAddress,
-                        url = ApiClient.portalUrl,
-                        seriesId = currentSeriesId ?: "",
-                        seasonId = currentSeasonId ?: "",
-                        page = 1
-                    )
-                )
+                android.util.Log.d("MainActivity", "Loading next episode after E$currentEpNum")
                 
-                val episodes = response.data.sortedBy { 
-                    it.series_number?.toIntOrNull() ?: Int.MAX_VALUE 
+                // Load current season episodes directly from Stalker portal
+                val responseMap = withContext(Dispatchers.IO) {
+                    stalkerClient.getSeriesEpisodes(
+                        currentSeriesId ?: "",
+                        currentSeasonId ?: ""
+                    )
                 }
+                
+                android.util.Log.d("MainActivity", "Response keys: ${responseMap.keys}")
+                
+                // Parse the data - it could be a Map or List
+                val episodesRaw = when (val data = responseMap["data"]) {
+                    is List<*> -> data
+                    is Map<*, *> -> (data as Map<String, Any>).values.toList()
+                    else -> throw Exception("Unexpected data format: ${data?.javaClass?.name}")
+                }
+                
+                // Debug: Log first episode to see available fields
+                if (episodesRaw.isNotEmpty()) {
+                    val firstEp = episodesRaw[0] as? Map<String, Any>
+                    android.util.Log.d("MainActivity", "First episode keys: ${firstEp?.keys}")
+                }
+                
+                // Convert to episode objects
+                val sortedEpisodes = episodesRaw.mapNotNull { episodeItem ->
+                    (episodeItem as? Map<String, Any>)?.let { ep ->
+                        Triple(
+                            ep["id"] as? String ?: "",
+                            ep["name"] as? String ?: "",
+                            ep["series_number"] as? String ?: ""
+                        )
+                    }
+                }.sortedBy { it.third.toIntOrNull() ?: Int.MAX_VALUE }
+                
+                android.util.Log.d("MainActivity", "Found ${sortedEpisodes.size} episodes")
+                android.util.Log.d("MainActivity", "Episode numbers: ${sortedEpisodes.map { it.third }}")
                 
                 // Find next episode
-                val currentIndex = episodes.indexOfFirst { 
-                    it.series_number?.toIntOrNull() == currentEpNum 
+                val currentIndex = sortedEpisodes.indexOfFirst { 
+                    it.third.toIntOrNull() == currentEpNum 
                 }
                 
-                if (currentIndex >= 0 && currentIndex < episodes.size - 1) {
-                    val nextEpisode = episodes[currentIndex + 1]
-                    playEpisode(nextEpisode)
+                android.util.Log.d("MainActivity", "Current episode E$currentEpNum is at index: $currentIndex, total: ${sortedEpisodes.size}")
+                
+                if (currentIndex >= 0 && currentIndex < sortedEpisodes.size - 1) {
+                    val nextEpisode = sortedEpisodes[currentIndex + 1]
+                    val (episodeId, episodeName, episodeNumber) = nextEpisode
+                    
+                    android.util.Log.d("MainActivity", "Found next episode: $episodeName (E$episodeNumber)")
+                    
+                    // Update current episode tracking
+                    currentEpisodeId = episodeId
+                    currentEpisodeNumber = episodeNumber
+                    currentEpisodeName = episodeName
+                    
+                    // Use the same flow as initial episode playback
+                    // Step 1: Get file info
+                    val fileInfo = withContext(Dispatchers.IO) {
+                        stalkerClient.getEpisodeFileInfo(
+                            currentSeriesId ?: "",
+                            currentSeasonId ?: "",
+                            episodeId
+                        )
+                    }
+                    
+                    if (fileInfo != null) {
+                        val fileId = fileInfo["id"] as? String
+                        
+                        if (fileId != null) {
+                            android.util.Log.d("MainActivity", "Got file ID: $fileId")
+                            
+                            // Step 2: Construct cmd parameter
+                            val cmd = "/media/file_${fileId}.mpg"
+                            android.util.Log.d("MainActivity", "Constructed cmd: $cmd")
+                            
+                            // Step 3: Get authenticated stream URL
+                            val streamUrlResponse = withContext(Dispatchers.IO) {
+                                stalkerClient.getVodStreamUrl(cmd, type = "vod")
+                            }
+                            val streamUrl = streamUrlResponse.url
+                            
+                            android.util.Log.d("MainActivity", "Got authenticated stream URL: $streamUrl")
+                            
+                            // Step 4: Play the episode
+                            playSeriesEpisode(
+                                streamUrl = streamUrl,
+                                title = "$currentSeriesName - $episodeName",
+                                seasonNumber = currentSeasonNumber ?: "",
+                                episodeNumber = episodeNumber
+                            )
+                            
+                            Toast.makeText(this@MainActivity, "Playing E$episodeNumber: $episodeName", Toast.LENGTH_SHORT).show()
+                        } else {
+                            android.util.Log.e("MainActivity", "No file ID in file info")
+                            Toast.makeText(this@MainActivity, "Failed to get file ID", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        android.util.Log.e("MainActivity", "No file info returned")
+                        Toast.makeText(this@MainActivity, "Unable to load episode", Toast.LENGTH_SHORT).show()
+                    }
                 } else {
                     android.util.Log.d("MainActivity", "Already at last episode")
                     Toast.makeText(this@MainActivity, "Already at last episode", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
                 android.util.Log.e("MainActivity", "Error loading next episode", e)
-                Toast.makeText(this@MainActivity, "Error loading next episode", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-    
-    private fun playEpisode(episodeData: com.ronika.iptvnative.api.SeriesEpisode) {
-        lifecycleScope.launch {
-            try {
-                // Update current episode tracking
-                currentEpisodeId = episodeData.id
-                currentEpisodeNumber = episodeData.series_number
-                currentEpisodeName = episodeData.name
-                
-                android.util.Log.d("MainActivity", "Playing episode: ${episodeData.name} (E${episodeData.series_number})")
-                
-                // Fetch file info for the episode
-                val fileInfo = ApiClient.apiService.getSeriesFileInfo(
-                    com.ronika.iptvnative.api.SeriesFileInfoRequest(
-                        mac = ApiClient.macAddress,
-                        url = ApiClient.portalUrl,
-                        seriesId = currentSeriesId ?: "",
-                        seasonId = currentSeasonId ?: "",
-                        episodeId = episodeData.id
-                    )
-                )
-                
-                val fileId = fileInfo.fileInfo?.id
-                if (fileId != null) {
-                    val cmd = "/media/file_${fileId}.mpg"
-                    android.util.Log.d("MainActivity", "Got file ID: $fileId, cmd: $cmd")
-                    
-                    // Get stream URL from backend API (same as initial playback)
-                    val streamResponse = ApiClient.apiService.getStreamUrl(
-                        com.ronika.iptvnative.api.StreamUrlRequest(
-                            mac = ApiClient.macAddress,
-                            url = ApiClient.portalUrl,
-                            cmd = cmd,
-                            type = "series",
-                            episodeNumber = episodeData.series_number ?: ""
-                        )
-                    )
-                    
-                    val streamUrl = streamResponse.url
-                    android.util.Log.d("MainActivity", "Got stream URL: $streamUrl")
-                    
-                    // Update VOD info
-                    val vodInfoContainer = playerView.findViewById<LinearLayout>(R.id.vod_info_container)
-                    val channelNameText = playerView.findViewById<TextView>(R.id.fullscreen_channel_name)
-                    channelNameText?.text = "${currentSeriesName} - S${currentSeasonNumber}E${episodeData.series_number}: ${episodeData.name}"
-                    
-                    // Play the new episode
-                    val mediaItem = MediaItem.fromUri(streamUrl)
-                    vodPlayer?.setMediaItem(mediaItem)
-                    vodPlayer?.prepare()
-                    vodPlayer?.play()
-                    
-                    // Ensure episode navigation remains visible
-                    updateEpisodeNavigationVisibility()
-                    
-                    Toast.makeText(this@MainActivity, "Playing E${episodeData.series_number}: ${episodeData.name}", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this@MainActivity, "Unable to load episode stream", Toast.LENGTH_SHORT).show()
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("MainActivity", "Error playing episode", e)
-                Toast.makeText(this@MainActivity, "Error playing episode", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "Error loading next episode: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
     }
     
     private fun updateEpisodeNavigationVisibility() {
-        val episodeNavContainer = playerView.findViewById<LinearLayout>(R.id.episode_navigation_container)
-        val prevButton = playerView.findViewById<Button>(R.id.prev_episode_button)
-        
-        episodeNavContainer?.visibility = if (isPlayingSeries) View.VISIBLE else View.GONE
-        
-        // Request focus on the previous button when navigation becomes visible
-        if (isPlayingSeries && episodeNavContainer?.visibility == View.VISIBLE) {
-            episodeNavContainer?.post {
-                prevButton?.requestFocus()
-                android.util.Log.d("MainActivity", "Requested focus on previous episode button")
-            }
-        }
-        
+        // Update controls to show/hide next button based on series playback
+        updatePlayerControlsForContentType()
         android.util.Log.d("MainActivity", "Episode navigation visibility: ${if (isPlayingSeries) "VISIBLE" else "GONE"}")
     }
     
     private fun setupPlayerControlsVisibility() {
-        // Show controls on any key press
+        // Show controls on any key press and schedule auto-hide
         playerView.setControllerVisibilityListener(
             androidx.media3.ui.PlayerView.ControllerVisibilityListener { visibility ->
                 android.util.Log.d("MainActivity", "Controller visibility changed: $visibility")
+                if (visibility == View.VISIBLE) {
+                    scheduleControlsHide()
+                    // Don't auto-focus - let user navigate with DOWN key
+                    android.util.Log.d("MainActivity", "📺 Controls shown, waiting for user input")
+                } else {
+                    // Controls hidden - clear focus so MainActivity receives key events
+                    android.util.Log.d("MainActivity", "🛡️ Controls hidden, clearing focus")
+                    playerView.clearFocus()
+                    cancelControlsHide()
+                }
             }
         )
+        
+        // Set controller timeout to match our custom hide (3 seconds)
+        playerView.controllerShowTimeoutMs = 3000
     }
     
     private fun startTimeUpdater() {
-        val timeDisplay = playerView.findViewById<TextView>(R.id.time_display)
+        // Time display removed from new controls - not needed anymore
+    }
+    
+    private fun scheduleControlsHide() {
+        // Cancel any existing hide task
+        controlsHideRunnable?.let { controlsHideHandler.removeCallbacks(it) }
         
-        // Update time every second
-        val handler = android.os.Handler(mainLooper)
-        val runnable = object : Runnable {
-            override fun run() {
-                val calendar = java.util.Calendar.getInstance()
-                val dayOfWeek = when (calendar.get(java.util.Calendar.DAY_OF_WEEK)) {
-                    java.util.Calendar.MONDAY -> "Mon"
-                    java.util.Calendar.TUESDAY -> "Tue"
-                    java.util.Calendar.WEDNESDAY -> "Wed"
-                    java.util.Calendar.THURSDAY -> "Thu"
-                    java.util.Calendar.FRIDAY -> "Fri"
-                    java.util.Calendar.SATURDAY -> "Sat"
-                    java.util.Calendar.SUNDAY -> "Sun"
-                    else -> ""
-                }
-                val month = when (calendar.get(java.util.Calendar.MONTH)) {
-                    java.util.Calendar.JANUARY -> "Jan"
-                    java.util.Calendar.FEBRUARY -> "Feb"
-                    java.util.Calendar.MARCH -> "Mar"
-                    java.util.Calendar.APRIL -> "Apr"
-                    java.util.Calendar.MAY -> "May"
-                    java.util.Calendar.JUNE -> "Jun"
-                    java.util.Calendar.JULY -> "Jul"
-                    java.util.Calendar.AUGUST -> "Aug"
-                    java.util.Calendar.SEPTEMBER -> "Sep"
-                    java.util.Calendar.OCTOBER -> "Oct"
-                    java.util.Calendar.NOVEMBER -> "Nov"
-                    java.util.Calendar.DECEMBER -> "Dec"
-                    else -> ""
-                }
-                val day = calendar.get(java.util.Calendar.DAY_OF_MONTH)
-                val hour = calendar.get(java.util.Calendar.HOUR)
-                val minute = calendar.get(java.util.Calendar.MINUTE)
-                val amPm = if (calendar.get(java.util.Calendar.AM_PM) == java.util.Calendar.AM) "a.m." else "p.m."
-                
-                val timeString = String.format("%s, %s %d, %d:%02d %s", dayOfWeek, month, day, if (hour == 0) 12 else hour, minute, amPm)
-                timeDisplay?.text = timeString
-                
-                handler.postDelayed(this, 1000)
+        // Schedule new hide task for 3 seconds
+        controlsHideRunnable = Runnable {
+            if (isFullscreen && playerView.player?.isPlaying == true) {
+                playerView.hideController()
             }
         }
-        handler.post(runnable)
+        controlsHideRunnable?.let { controlsHideHandler.postDelayed(it, 3000) }
+    }
+    
+    private fun cancelControlsHide() {
+        controlsHideRunnable?.let { controlsHideHandler.removeCallbacks(it) }
     }
     
     private fun updatePlayerControlsForContentType() {
-        val isLive = selectedTab == "TV" || currentPlayingChannel?.isLive == true
+        android.util.Log.d("MainActivity", "===== updatePlayerControlsForContentType CALLED =====")
+        // If playing series, it's VOD content (not live) regardless of selectedTab
+        val isLive = if (isPlayingSeries) {
+            false
+        } else {
+            selectedTab == "TV" || currentPlayingChannel?.isLive == true
+        }
+        android.util.Log.d("MainActivity", "isLive: $isLive, selectedTab: $selectedTab, isFullscreen: $isFullscreen, isPlayingSeries: $isPlayingSeries")
         
-        // Find VOD-specific elements
+        // Find new enhanced control elements
         val topGradient = playerView.findViewById<View>(R.id.top_gradient)
-        val topInfoBar = playerView.findViewById<View>(R.id.top_info_bar)
-        val vodInfoContainer = playerView.findViewById<View>(R.id.vod_info_container)
-        val qualityBadgesContainer = playerView.findViewById<View>(R.id.quality_badges_container)
+        val bottomGradient = playerView.findViewById<View>(R.id.bottom_gradient)
+        val topInfoBar = playerView.findViewById<LinearLayout>(R.id.top_info_bar)
+        val bottomControlsContainer = playerView.findViewById<LinearLayout>(R.id.bottom_controls_container)
+        val contentTitle = playerView.findViewById<TextView>(R.id.content_title)
+        val progressBarContainer = playerView.findViewById<LinearLayout>(R.id.progress_bar_container)
         val restartButton = playerView.findViewById<ImageButton>(R.id.restart_button)
-        val platformBadge = playerView.findViewById<TextView>(R.id.platform_badge)
+        val nextButton = playerView.findViewById<ImageButton>(R.id.next_button)
+        val liveBadgeContainer = playerView.findViewById<LinearLayout>(R.id.live_badge_container)
         
-        // Update platform badge based on current content
-        platformBadge?.text = when (selectedTab) {
-            "TV" -> "LIVE TV"
-            "MOVIES" -> "MOVIES"
-            "SHOWS" -> "TV SERIES"
-            else -> "IPTV PLAYER"
+        android.util.Log.d("MainActivity", "Found views - topGradient: ${topGradient != null}, bottomGradient: ${bottomGradient != null}, topInfoBar: ${topInfoBar != null}")
+        android.util.Log.d("MainActivity", "Found views - bottomControls: ${bottomControlsContainer != null}, restart: ${restartButton != null}, next: ${nextButton != null}, progress: ${progressBarContainer != null}")
+        
+        // Update content title with current playing content
+        val titleText = when {
+            isPlayingSeries -> {
+                if (currentEpisodeName?.isNotEmpty() == true) {
+                    "$currentSeriesName - $currentEpisodeName"
+                } else {
+                    currentSeriesName ?: currentPlayingChannel?.name ?: "Playing"
+                }
+            }
+            else -> currentPlayingChannel?.name ?: "Playing"
+        }
+        contentTitle?.text = titleText
+        
+        // Show new enhanced controls only in fullscreen
+        if (isFullscreen) {
+            android.util.Log.d("MainActivity", "Showing controls - isLive: $isLive, isPlayingSeries: $isPlayingSeries")
+            topGradient?.visibility = View.VISIBLE
+            bottomGradient?.visibility = View.VISIBLE
+            topInfoBar?.visibility = View.VISIBLE
+            bottomControlsContainer?.visibility = if (isLive) View.GONE else View.VISIBLE
+            
+            // Show/hide progress bar vs LIVE badge
+            progressBarContainer?.visibility = if (isLive) View.GONE else View.VISIBLE
+            liveBadgeContainer?.visibility = if (isLive) View.VISIBLE else View.GONE
+            
+            // Show/hide buttons based on content type
+            restartButton?.visibility = if (isLive) View.GONE else View.VISIBLE
+            nextButton?.visibility = if (isPlayingSeries && !isLive) View.VISIBLE else View.GONE
+            
+            // Update focus navigation based on next button visibility
+            if (isPlayingSeries && !isLive) {
+                // Set up the focus chain: restart -> next -> subtitle
+                restartButton?.setNextFocusRightId(R.id.next_button)
+                nextButton?.setNextFocusRightId(R.id.subtitle_button)
+                nextButton?.setNextFocusLeftId(R.id.restart_button)
+                
+                // Also update subtitle button to point back to next button
+                val subtitleButton = findViewById<ImageButton>(R.id.subtitle_button)
+                subtitleButton?.setNextFocusLeftId(R.id.next_button)
+                
+                // Force layout refresh
+                restartButton?.requestLayout()
+                nextButton?.requestLayout()
+                subtitleButton?.requestLayout()
+                
+                android.util.Log.d("MainActivity", "🎯 [Line 1430] Focus chain for SERIES: restart→next→subtitle (isPlayingSeries=$isPlayingSeries, isLive=$isLive)")
+                android.util.Log.d("MainActivity", "🔍 Verify: restartButton.nextFocusRightId=${restartButton?.nextFocusRightId} (should be ${R.id.next_button})")
+                android.util.Log.d("MainActivity", "🔍 Verify: nextButton.nextFocusRightId=${nextButton?.nextFocusRightId} (should be ${R.id.subtitle_button})")
+                android.util.Log.d("MainActivity", "🔍 Verify: subtitleButton.nextFocusLeftId=${subtitleButton?.nextFocusLeftId} (should be ${R.id.next_button})")
+            } else {
+                // For non-series: restart -> subtitle
+                restartButton?.setNextFocusRightId(R.id.subtitle_button)
+                val subtitleButton = findViewById<ImageButton>(R.id.subtitle_button)
+                subtitleButton?.setNextFocusLeftId(R.id.restart_button)
+                restartButton?.requestLayout()
+                subtitleButton?.requestLayout()
+                android.util.Log.d("MainActivity", "🎯 [Line 1430] Focus chain for NON-SERIES: restart→subtitle (isPlayingSeries=$isPlayingSeries, isLive=$isLive)")
+            }
+            
+            android.util.Log.d("MainActivity", "Controls visibility set - restart: ${restartButton?.visibility}, next: ${nextButton?.visibility}, progress: ${progressBarContainer?.visibility}")
+        } else {
+            // Hide all enhanced controls when not in fullscreen
+            topGradient?.visibility = View.GONE
+            bottomGradient?.visibility = View.GONE
+            topInfoBar?.visibility = View.GONE
+            bottomControlsContainer?.visibility = View.GONE
         }
         
-        // Show/hide progress bar vs LIVE badge
-        progressContainer?.visibility = if (isLive) View.GONE else View.VISIBLE
-        liveBadgeContainer?.visibility = if (isLive) View.VISIBLE else View.GONE
-        
-        // Keep all top info hidden for clean UI
-        topGradient?.visibility = View.GONE
-        topInfoBar?.visibility = View.GONE
-        vodInfoContainer?.visibility = View.GONE
-        qualityBadgesContainer?.visibility = View.GONE
-        
-        // Show/hide seek and restart buttons for live content
-        rewindButton?.visibility = if (isLive) View.GONE else View.VISIBLE
-        forwardButton?.visibility = if (isLive) View.GONE else View.VISIBLE
-        restartButton?.visibility = if (isLive) View.GONE else View.VISIBLE
-        
-        // Show/hide episode navigation for series only
-        val episodeNavContainer = playerView.findViewById<LinearLayout>(R.id.episode_navigation_container)
-        episodeNavContainer?.visibility = if (isPlayingSeries && !isLive) View.VISIBLE else View.GONE
-        
-        // Update channel name in player controls
-        fullscreenChannelName?.text = currentPlayingChannel?.name ?: ""
+        android.util.Log.d("MainActivity", "Updated player controls - isLive: $isLive, isSeries: $isPlayingSeries, isFullscreen: $isFullscreen")
     }
     
     private fun setupAdapters() {
@@ -1123,7 +1566,11 @@ class MainActivity : ComponentActivity() {
             onViewAllClick = { categoryId, categoryTitle ->
                 // Open category detail screen
                 android.util.Log.d("MainActivity", "View All clicked for category: $categoryTitle")
-                // TODO: Open CategoryDetailActivity
+                val intent = Intent(this@MainActivity, MovieCategoryActivity::class.java).apply {
+                    putExtra("categoryId", categoryId)
+                    putExtra("categoryTitle", categoryTitle)
+                }
+                movieCategoryResultLauncher.launch(intent)
             }
         )
         
@@ -1134,6 +1581,8 @@ class MainActivity : ComponentActivity() {
             setHasFixedSize(false)
             isFocusable = false // Let children handle focus
             descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+            setItemViewCacheSize(5) // Cache 5 category rows
+            isNestedScrollingEnabled = false // Better performance
             android.util.Log.d("MainActivity", "movieRowsRecycler setup complete with adapter and layoutManager")
         }
         
@@ -1214,7 +1663,7 @@ class MainActivity : ComponentActivity() {
                 descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
                 isFocusable = false
                 
-                // Add scroll listener for lazy loading
+                // Add scroll listener for smart prefetching
                 clearOnScrollListeners()
                 addOnScrollListener(object : RecyclerView.OnScrollListener() {
                     override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
@@ -1224,8 +1673,15 @@ class MainActivity : ComponentActivity() {
                         val totalItemCount = layoutManager.itemCount
                         val firstVisibleItemPosition = layoutManager.findFirstVisibleItemPosition()
                         
+                        // Calculate current page based on scroll position (5 items per page)
+                        val itemsPerPage = 5
+                        val estimatedCurrentPage = (firstVisibleItemPosition / itemsPerPage) + 1
+                        
+                        // Smart prefetching: when user approaches a page, prefetch 2 pages ahead
                         if (!isLoadingMore && hasMorePages && dy > 0) {
+                            // If approaching end of loaded content, prefetch next 2 pages
                             if ((visibleItemCount + firstVisibleItemPosition) >= totalItemCount - 10) {
+                                android.util.Log.d("MainActivity", "Smart prefetch triggered at page ~$estimatedCurrentPage")
                                 loadMoreContent()
                             }
                         }
@@ -1241,28 +1697,79 @@ class MainActivity : ComponentActivity() {
         }
         
         tvTab.setOnClickListener {
+            android.util.Log.d("MainActivity", "📺 TV clicked - switching tab and hiding sidebar")
             switchTab("TV")
+            hideSidebarAndShowContent()
         }
         
         moviesTab.setOnClickListener {
+            android.util.Log.d("MainActivity", "🎬 MOVIES clicked - switching tab and hiding sidebar")
             switchTab("MOVIES")
+            hideSidebarAndShowContent()
         }
         
         showsTab.setOnClickListener {
+            android.util.Log.d("MainActivity", "📺 SHOWS clicked - switching tab and hiding sidebar")
             switchTab("SHOWS")
+            hideSidebarAndShowContent()
         }
+    }
+    
+    private fun hideSidebarAndShowContent() {
+        // Set sidebar width to 0dp to prevent space reservation and keep it hidden
+        val sidebarFrame = findViewById<FrameLayout>(R.id.sidebar_frame)
+        sidebarFrame?.layoutParams = (sidebarFrame.layoutParams as? FrameLayout.LayoutParams)?.apply {
+            width = 0
+        }
+        sidebarFrame?.visibility = View.GONE
+        
+        // Hide the sidebar overlay completely
+        sidebarContainer.visibility = View.GONE
+        categorySidebar.visibility = View.GONE
+        
+        // Show the main content area
+        val mainContentArea = findViewById<LinearLayout>(R.id.main_content_area)
+        mainContentArea?.visibility = View.VISIBLE
+        
+        // Restore normal backgrounds (not transparent)
+        val mainContentLayout = findViewById<LinearLayout>(R.id.main_content_layout)
+        mainContentLayout?.setBackgroundColor(android.graphics.Color.parseColor("#09090b"))
+        mainContentArea?.setBackgroundColor(android.graphics.Color.parseColor("#09090b"))
+        
+        // Request focus on the content
+        when (selectedTab) {
+            "TV" -> {
+                if (categoryAdapter.itemCount > 0) {
+                    categoriesRecycler.requestFocus()
+                }
+            }
+            "MOVIES" -> {
+                if (contentListContainer.visibility == View.VISIBLE) {
+                    contentRecycler.requestFocus()
+                }
+            }
+            "SHOWS" -> {
+                if (contentListContainer.visibility == View.VISIBLE) {
+                    contentRecycler.requestFocus()
+                }
+            }
+        }
+        
+        android.util.Log.d("MainActivity", "✅ Sidebar hidden, content shown for $selectedTab")
     }
     
     private fun setupFocusListeners() {
         searchButton.setOnFocusChangeListener { view, hasFocus ->
+            android.util.Log.d("MainActivity", "🔍 SEARCH focus changed: hasFocus=$hasFocus")
             if (hasFocus) {
                 view.setBackgroundResource(R.drawable.nav_item_focused)
+                searchButton.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.BLACK)
+                android.util.Log.d("MainActivity", "🔍 SEARCH: Set BLACK tint, tintList=${searchButton.imageTintList}")
                 navigationManager.expandSidebar()
-                searchButton.setColorFilter(android.graphics.Color.BLACK)
             } else {
                 view.setBackgroundResource(R.drawable.nav_item_normal)
-                searchButton.setColorFilter(android.graphics.Color.WHITE)
-                // collapse after a short delay if nothing inside sidebar is focused
+                searchButton.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.WHITE)
+                android.util.Log.d("MainActivity", "🔍 SEARCH: Set WHITE tint, tintList=${searchButton.imageTintList}")
                 sidebarContainer.postDelayed({
                     if (!isAnySidebarFocused()) navigationManager.collapseSidebar()
                 }, 200)
@@ -1270,67 +1777,93 @@ class MainActivity : ComponentActivity() {
         }
         
         tvTab.setOnFocusChangeListener { view, hasFocus ->
+            android.util.Log.d("MainActivity", "📺 TV focus changed: hasFocus=$hasFocus")
             if (hasFocus) {
                 hoverTab = "TV"
                 view.setBackgroundResource(R.drawable.nav_item_focused)
-                // Black icon on white background
-                tvTab.setColorFilter(android.graphics.Color.BLACK)
+                tvTab.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.BLACK)
+                android.util.Log.d("MainActivity", "📺 TV: Set BLACK tint, tintList=${tvTab.imageTintList}")
                 navigationManager.expandSidebar()
                 updateDebugDisplay()
             } else {
-                applySelectedStyle(view, "TV")
+                view.setBackgroundResource(R.drawable.nav_item_normal)
+                tvTab.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.WHITE)
+                android.util.Log.d("MainActivity", "📺 TV: Set WHITE tint, tintList=${tvTab.imageTintList}")
                 sidebarContainer.postDelayed({
                     if (!isAnySidebarFocused()) navigationManager.collapseSidebar()
                 }, 200)
             }
+        }
+        
+        tvTab.setOnKeyListener { _, keyCode, event ->
+            if (event.action == android.view.KeyEvent.ACTION_DOWN && keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT) {
+                android.util.Log.d("MainActivity", "📺 TV: Right D-pad pressed - switching and hiding sidebar")
+                switchTab("TV")
+                hideSidebarAndShowContent()
+                return@setOnKeyListener true
+            }
+            false
         }
         
         moviesTab.setOnFocusChangeListener { view, hasFocus ->
+            android.util.Log.d("MainActivity", "🎬 MOVIES focus changed: hasFocus=$hasFocus")
             if (hasFocus) {
                 hoverTab = "MOVIES"
                 view.setBackgroundResource(R.drawable.nav_item_focused)
-                // Black icon on white background
-                moviesTab.setColorFilter(android.graphics.Color.BLACK)
+                moviesTab.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.BLACK)
+                android.util.Log.d("MainActivity", "🎬 MOVIES: Set BLACK tint, tintList=${moviesTab.imageTintList}")
                 navigationManager.expandSidebar()
                 updateDebugDisplay()
             } else {
-                applySelectedStyle(view, "MOVIES")
+                view.setBackgroundResource(R.drawable.nav_item_normal)
+                moviesTab.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.WHITE)
+                android.util.Log.d("MainActivity", "🎬 MOVIES: Set WHITE tint, tintList=${moviesTab.imageTintList}")
                 sidebarContainer.postDelayed({
                     if (!isAnySidebarFocused()) navigationManager.collapseSidebar()
                 }, 200)
             }
         }
         
+        moviesTab.setOnKeyListener { _, keyCode, event ->
+            if (event.action == android.view.KeyEvent.ACTION_DOWN && keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT) {
+                android.util.Log.d("MainActivity", "🎬 MOVIES: Right D-pad pressed - switching and hiding sidebar")
+                switchTab("MOVIES")
+                hideSidebarAndShowContent()
+                return@setOnKeyListener true
+            }
+            false
+        }
+        
         showsTab.setOnFocusChangeListener { view, hasFocus ->
+            android.util.Log.d("MainActivity", "📺 SHOWS focus changed: hasFocus=$hasFocus")
             if (hasFocus) {
                 hoverTab = "SHOWS"
                 view.setBackgroundResource(R.drawable.nav_item_focused)
-                // Black icon on white background
-                showsTab.setColorFilter(android.graphics.Color.BLACK)
+                showsTab.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.BLACK)
+                android.util.Log.d("MainActivity", "📺 SHOWS: Set BLACK tint, tintList=${showsTab.imageTintList}")
                 navigationManager.expandSidebar()
                 updateDebugDisplay()
             } else {
-                applySelectedStyle(view, "SHOWS")
+                view.setBackgroundResource(R.drawable.nav_item_normal)
+                showsTab.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.WHITE)
+                android.util.Log.d("MainActivity", "📺 SHOWS: Set WHITE tint, tintList=${showsTab.imageTintList}")
                 sidebarContainer.postDelayed({
                     if (!isAnySidebarFocused()) navigationManager.collapseSidebar()
                 }, 200)
             }
         }
-    }
-    
-    private fun applySelectedStyle(view: View, tab: String) {
-        val imageView = view as android.widget.ImageView
-            if (tab == selectedTab) {
-            view.setBackgroundResource(R.drawable.nav_item_selected)
-            // Black icon on white background for selected tab
-            imageView.setColorFilter(android.graphics.Color.BLACK)
-        } else {
-            view.setBackgroundResource(R.drawable.nav_item_normal)
-            // White icon on dark background for normal tabs
-            imageView.setColorFilter(android.graphics.Color.WHITE)
+        
+        showsTab.setOnKeyListener { _, keyCode, event ->
+            if (event.action == android.view.KeyEvent.ACTION_DOWN && keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT) {
+                android.util.Log.d("MainActivity", "📺 SHOWS: Right D-pad pressed - switching and hiding sidebar")
+                switchTab("SHOWS")
+                hideSidebarAndShowContent()
+                return@setOnKeyListener true
+            }
+            false
         }
     }
-
+    
     private fun isAnySidebarFocused(): Boolean {
         return searchButton.hasFocus() || tvTab.hasFocus() || moviesTab.hasFocus() || showsTab.hasFocus()
     }
@@ -1338,6 +1871,11 @@ class MainActivity : ComponentActivity() {
     private fun switchTab(tab: String) {
         // Store previous tab to check if we're switching or returning
         val previousTab = selectedTab
+        
+        // Restore content alpha if it was dimmed
+        categorySidebar.alpha = 1f
+        findViewById<FrameLayout>(R.id.content_list_container)?.alpha = 1f
+        findViewById<LinearLayout>(R.id.content_header)?.alpha = 1f
         
         // Stop live player if switching away from TV tab
         if (selectedTab == "TV" && tab != "TV") {
@@ -1405,10 +1943,11 @@ class MainActivity : ComponentActivity() {
             findViewById<LinearLayout>(R.id.main_content_area)?.visibility = View.VISIBLE
             
             if (tab == "MOVIES") {
-                // For Movies: Hide sidebar completely for full width
-                findViewById<FrameLayout>(R.id.sidebar_frame)?.visibility = View.GONE
+                // For Movies: Hide sidebar container
+                android.util.Log.d("MainActivity", "switchTab(MOVIES) - Hiding sidebar container")
                 sidebarContainer.visibility = View.GONE
                 categorySidebar.visibility = View.GONE
+                android.util.Log.d("MainActivity", "switchTab(MOVIES) - sidebarContainer visibility after: ${sidebarContainer.visibility}")
                 
                 // Show content area children
                 findViewById<LinearLayout>(R.id.player_preview_container)?.visibility = View.GONE
@@ -1435,10 +1974,8 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun updateTabStyles() {
-        // Apply styles to all tabs based on selected state
-        applySelectedStyle(tvTab, "TV")
-        applySelectedStyle(moviesTab, "MOVIES")
-        applySelectedStyle(showsTab, "SHOWS")
+        // No longer needed - focus listeners handle all icon styling
+        // (white bg + black icon when focused, dark bg + white icon when not focused)
     }
     
     private fun updateDebugDisplay() {
@@ -1526,47 +2063,62 @@ class MainActivity : ComponentActivity() {
                             level++
                         }
                         
-                        val response = ApiClient.apiService.getMovieCategories(
-                            ApiClient.getCredentials()
-                        )
-                        android.util.Log.d("MainActivity", "Got ${response.categories.size} movie categories")
+                        // Get all VOD categories (both movies and series come from type=vod)
+                        val response = stalkerClient.getVodCategories(type = "vod")
+                        android.util.Log.d("MainActivity", "Got ${response.genres.size} VOD categories")
                         
-                        // Filter out non-numeric category IDs
-                        categories = response.categories
+                        // Filter only non-numeric category IDs - show ALL categories including ADULT
+                        categories = response.genres
                             .filter { it.id.toIntOrNull() != null }
-                            .map { Genre(it.id, it.title, it.name, it.alias, it.censored) }
+                            .sortedWith(compareBy(
+                                { (it.censored ?: 0) != 0 }, // Non-censored first (false < true), treat null as 0
+                                { 
+                                    // Sort English alphabet first, then non-English
+                                    val name = (it.title ?: it.name ?: "").trim()
+                                    val firstChar = name.firstOrNull() ?: ' '
+                                    !firstChar.isLetter() || firstChar.code > 127 // Non-English/special chars = true (sorts after)
+                                },
+                                { (it.title ?: it.name ?: "").lowercase().trim() } // Then alphabetically within each group
+                            ))
                         
-                        android.util.Log.d("MainActivity", "Filtered to ${categories.size} movie categories")
+                        android.util.Log.d("MainActivity", "Filtered to ${categories.size} categories (sorted: non-adult first, English alphabet, then other languages, all alphabetical)")
                         
-                        // Load movies for each category (Netflix-style)
-                        loadMovieRows(categories)
+                        // Load categories intelligently - check first page to determine content
+                        loadMovieRows(categories, contentType = "movie")
                     }
                     "SHOWS" -> {
-                        // Hide player/preview container and "All Playlists" header for series
-                        playerPreviewContainer.visibility = View.GONE
+                        // For Series, use same Netflix-style rows as Movies, FULLY hide sidebars
+                        sidebarContainer.visibility = View.GONE
+                        categorySidebar.visibility = View.GONE
+                        contentRecycler.visibility = View.GONE
+                        emptyStateMessage.visibility = View.GONE
+                        movieRowsRecycler.visibility = View.VISIBLE
                         categoryHeaderText.visibility = View.GONE
                         movieDetailsHeaderGrid.visibility = View.GONE
                         movieDetailsHeader.visibility = View.GONE
-                        val response = ApiClient.apiService.getSeriesCategories(
-                            ApiClient.getCredentials()
-                        )
-                        // Filter out non-numeric category IDs
-                        categories = response.categories
-                            .filter { it.id.toIntOrNull() != null }
-                            .map { Genre(it.id, it.title, it.name, it.alias, it.censored) }
-                        categoryAdapter.setCategories(categories)
+                        playerPreviewContainer.visibility = View.GONE
                         
-                        // DON'T auto-select - show empty state and focus on first category
-                        if (categories.isNotEmpty()) {
-                            contentRecycler.visibility = View.GONE
-                            emptyStateMessage.visibility = View.VISIBLE
-                            emptyStateMessage.text = "Select a category to see series"
-                            // Focus on first category with white bar but don't select
-                            categoriesRecycler.requestFocus()
-                            categoriesRecycler.post {
-                                categoriesRecycler.getChildAt(0)?.requestFocus()
-                            }
-                        }
+                        // Get all VOD categories (both movies and series come from type=vod)
+                        val response = stalkerClient.getVodCategories(type = "vod")
+                        
+                        // Filter only non-numeric category IDs - show ALL categories including ADULT
+                        categories = response.genres
+                            .filter { it.id.toIntOrNull() != null }
+                            .sortedWith(compareBy(
+                                { (it.censored ?: 0) != 0 }, // Non-censored first (false < true), treat null as 0
+                                { 
+                                    // Sort English alphabet first, then non-English
+                                    val name = (it.title ?: it.name ?: "").trim()
+                                    val firstChar = name.firstOrNull() ?: ' '
+                                    !firstChar.isLetter() || firstChar.code > 127 // Non-English/special chars = true (sorts after)
+                                },
+                                { (it.title ?: it.name ?: "").lowercase().trim() } // Then alphabetically within each group
+                            ))
+                        
+                        android.util.Log.d("MainActivity", "Filtered to ${categories.size} categories (sorted: non-adult first, English alphabet, then other languages, all alphabetical)")
+                        
+                        // Load categories intelligently - check first page to determine if movie or series
+                        loadMovieRows(categories, contentType = "series")
                     }
                 }
                 
@@ -1580,58 +2132,100 @@ class MainActivity : ComponentActivity() {
         }
     }
     
-    private fun loadMovieRows(categories: List<Genre>) {
-        android.util.Log.d("MainActivity", "loadMovieRows - Loading movies for ${categories.size} categories")
+    private fun loadMovieRows(categories: List<Genre>, contentType: String = "movie") {
+        android.util.Log.d("MainActivity", "loadMovieRows - Loading ${contentType}s for ${categories.size} categories")
         
         // Clear existing rows immediately
         movieCategoryRowAdapter.setCategoryRows(emptyList())
         
+        // Track if we've set focus on the first row
+        var hasSetFocusOnFirstRow = false
+        
+        // Load categories SEQUENTIALLY (not parallel) to reduce lag
+        // Load ALL categories but optimize rendering
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                // Load movies for each category and update UI immediately
-                for (category in categories.take(10)) { // Load first 10 categories
-                    android.util.Log.d("MainActivity", "Loading movies for category: ${category.title ?: category.name}")
+                // Process categories sequentially to avoid overwhelming the system
+                categories.forEach { category ->
+                    android.util.Log.d("MainActivity", "🚀 Loading category: ${category.title ?: category.name}")
                     try {
-                        val moviesResponse = ApiClient.apiService.getMovies(
-                            MoviesRequest(
-                                mac = ApiClient.macAddress,
-                                url = ApiClient.portalUrl,
-                                category = category.id,
-                                page = 1
-                            )
+                        val response = stalkerClient.getVodItems(
+                            categoryId = category.id,
+                            page = 1,
+                            type = "vod"
                         )
                         
-                        android.util.Log.d("MainActivity", "Got ${moviesResponse.items.data.size} movies for ${category.title ?: category.name}")
+                        android.util.Log.d("MainActivity", "Got ${response.items.data.size} items for ${category.title ?: category.name}")
                         
-                        if (moviesResponse.items.data.isNotEmpty()) {
+                        // Smart filtering: Check first page to determine content type
+                        val filteredItems = if (contentType == "movie") {
+                            response.items.data.filter { item ->
+                                val isSeries = item.isSeries ?: "0"
+                                isSeries == "0" // Only movies
+                            }
+                        } else {
+                            response.items.data.filter { item ->
+                                val isSeries = item.isSeries ?: "0"
+                                isSeries != "0" // Only series
+                            }
+                        }
+                        
+                        android.util.Log.d("MainActivity", "Filtered to ${filteredItems.size} ${contentType}s (is_series=${if (contentType == "movie") "0" else "!=0"})")
+                        
+                        // If loading series, populate seriesMap with full metadata
+                        if (contentType == "series" && filteredItems.isNotEmpty()) {
+                                filteredItems.forEach { movie ->
+                                    val series = Series(
+                                        id = movie.id,
+                                        name = movie.name,
+                                        year = movie.year,
+                                        poster = movie.poster,
+                                        screenshot = movie.screenshot,
+                                        screenshotUri = movie.screenshotUri,
+                                        cover = movie.cover,
+                                        coverBig = movie.coverBig,
+                                        ratingImdb = movie.ratingImdb,
+                                        categoryId = movie.categoryId,
+                                        description = movie.description,
+                                        actors = movie.actors,
+                                        director = movie.director,
+                                        country = movie.country,
+                                        genresStr = movie.genresStr,
+                                        originalName = movie.originalName,
+                                        totalEpisodes = movie.totalEpisodes
+                                    )
+                                    seriesMap[series.id] = series
+                                }
+                                android.util.Log.d("MainActivity", "📚 Added ${filteredItems.size} series to seriesMap from category ${category.title}. Total in map: ${seriesMap.size}")
+                        }
+                        
+                        if (filteredItems.isNotEmpty()) {
                             val newRow = MovieCategoryRowAdapter.CategoryRow(
                                 categoryId = category.id,
                                 categoryTitle = (category.title ?: category.name) ?: "Unknown",
-                                movies = moviesResponse.items.data.take(25) // Max 25 movies per row
+                                movies = filteredItems // Show all items with optimized image loading
                             )
                             
-                            // Add row to adapter immediately on main thread
+                            // Add row to UI immediately as it loads
                             withContext(Dispatchers.Main) {
-                                val isFirstRow = movieCategoryRowAdapter.itemCount == 0
                                 movieCategoryRowAdapter.addCategoryRow(newRow)
-                                android.util.Log.d("MainActivity", "Added category row: ${category.title ?: category.name}")
-                                android.util.Log.d("MainActivity", "RecyclerView state - visibility: ${movieRowsRecycler.visibility}, width: ${movieRowsRecycler.width}, height: ${movieRowsRecycler.height}, childCount: ${movieRowsRecycler.childCount}")
+                                android.util.Log.d("MainActivity", "✅ Instantly added category row: ${newRow.categoryTitle} with ${newRow.movies.size} items")
                                 
-                                // Focus first category title immediately after first row is added
-                                if (isFirstRow) {
+                                // Set focus on first row only once - focus first movie thumbnail
+                                if (!hasSetFocusOnFirstRow) {
+                                    hasSetFocusOnFirstRow = true
                                     movieRowsRecycler.postDelayed({
-                                        val firstRow = movieRowsRecycler.getChildAt(0)
-                                        if (firstRow != null) {
-                                            val categoryTitle = firstRow.findViewById<TextView>(R.id.category_title)
-                                            categoryTitle?.requestFocus()
-                                            android.util.Log.d("MainActivity", "Auto-focused first category title")
-                                        }
+                                        val firstRowView = movieRowsRecycler.getChildAt(0)
+                                        val moviesRecycler = firstRowView?.findViewById<RecyclerView>(R.id.movies_recycler)
+                                        moviesRecycler?.postDelayed({
+                                            moviesRecycler.getChildAt(0)?.requestFocus()
+                                        }, 50)
                                     }, 100)
                                 }
                             }
                         }
                     } catch (e: Exception) {
-                        android.util.Log.e("MainActivity", "Error loading movies for category ${category.title}: ${e.message}")
+                        android.util.Log.e("MainActivity", "Error loading items for category ${category.title}: ${e.message}")
                     }
                 }
                 
@@ -1671,6 +2265,7 @@ class MainActivity : ComponentActivity() {
         allChannels.clear()
         allMovies.clear()
         allSeries.clear()
+        seriesMap.clear()
         
         when (selectedTab) {
             "TV" -> loadChannels(genre.id)
@@ -1687,27 +2282,71 @@ class MainActivity : ComponentActivity() {
                 currentPage = 1
                 hasMorePages = true
                 
-                // Load first 5 pages
+                // Check cache first
+                val cacheKey = "channels_$genreId"
+                val cachedEntry = contentCache[cacheKey]
+                
+                if (isCacheValid(cachedEntry)) {
+                    android.util.Log.d("MainActivity", "Using cached channels for genre: $genreId")
+                    allChannels.addAll(cachedEntry!!.data)
+                    totalItemsCount = allChannels.size
+                    contentSubtitle.text = "$totalItemsCount channels"
+                    channelRowAdapter.setChannels(allChannels)
+                    
+                    // Handle playing state same as before
+                    val isPlayingCategory = currentPlayingCategoryId == genreId
+                    if (isPlayingCategory && currentPlayingCategoryIndex >= 0) {
+                        categoryAdapter.setActivePosition(currentPlayingCategoryIndex)
+                    } else {
+                        categoryAdapter.setActivePosition(-1)
+                    }
+                    
+                    if (allChannels.isNotEmpty() && currentPlayingChannel == null) {
+                        channelRowAdapter.setSelectedPosition(0)
+                        channelRowAdapter.setPlayingPosition(0)
+                        currentPlayingCategoryId = genreId
+                        currentPlayingCategoryIndex = selectedCategoryIndex
+                        categoryAdapter.setActivePosition(currentPlayingCategoryIndex)
+                        playChannel(allChannels[0])
+                        contentRecycler.post {
+                            contentRecycler.getChildAt(0)?.requestFocus()
+                        }
+                    } else if (isPlayingCategory && currentPlayingIndex >= 0 && currentPlayingIndex < allChannels.size) {
+                        channelRowAdapter.setSelectedPosition(0)
+                        channelRowAdapter.setPlayingPosition(currentPlayingIndex)
+                        contentRecycler.post {
+                            contentRecycler.getChildAt(0)?.requestFocus()
+                        }
+                    } else {
+                        channelRowAdapter.setSelectedPosition(0)
+                        channelRowAdapter.setPlayingPosition(-1)
+                        contentRecycler.post {
+                            contentRecycler.getChildAt(0)?.requestFocus()
+                        }
+                    }
+                    
+                    loadingIndicator.visibility = View.GONE
+                    return@launch
+                }
+                
+                // Load first 5 pages if not in cache
+                android.util.Log.d("MainActivity", "Loading channels from API for genre: $genreId")
                 for (page in 1..5) {
-                    val response = ApiClient.apiService.getChannels(
-                        ChannelsRequest(
-                            mac = ApiClient.macAddress,
-                            url = ApiClient.portalUrl,
-                            genre = genreId,
-                            page = page
-                        )
+                    val response = stalkerClient.getChannels(
+                        genreId = genreId,
+                        page = page
                     )
                     
-                    // Store total from first response
-                    if (page == 1) {
-                        totalItemsCount = response.channels.total
-                        // Update header with total count
-                        categoryHeaderText.text = "All Playlists ($totalItemsCount)"
-                    }
-                    
-                    val channels = response.channels.data.map { channel ->
-                        channel.copy(logo = buildChannelLogoUrl(channel.logo), isLive = true)
-                    }
+                // Store total from first response
+                if (page == 1) {
+                    totalItemsCount = response.channels.total
+                    // Update content header subtitle with count
+                    contentSubtitle.text = "$totalItemsCount channels"
+                }
+                
+                val channels = response.channels.data.map { channel ->
+                    channel.copy(logo = buildChannelLogoUrl(channel.logo), isLive = true)
+                }
                     if (channels.isEmpty()) {
                         hasMorePages = false
                         break
@@ -1716,6 +2355,11 @@ class MainActivity : ComponentActivity() {
                 }
                 
                 currentPage = 6
+                
+                // Store in cache
+                contentCache[cacheKey] = CacheEntry(allChannels.toList())
+                android.util.Log.d("MainActivity", "Cached ${allChannels.size} channels for genre: $genreId")
+                
                 channelRowAdapter.setChannels(allChannels)
                 contentSubtitle.text = "$totalItemsCount channels"
                 
@@ -1775,19 +2419,34 @@ class MainActivity : ComponentActivity() {
                 currentPage = 1
                 hasMorePages = true
                 
-                // Load first page and show immediately
-                val firstResponse = ApiClient.apiService.getMovies(
-                    MoviesRequest(
-                        mac = ApiClient.macAddress,
-                        url = ApiClient.portalUrl,
-                        category = categoryId,
-                        page = 1,
-                        type = "vod"
-                    )
+                // Check cache first
+                val cacheKey = "movies_$categoryId"
+                val cachedEntry = contentCache[cacheKey]
+                
+                if (isCacheValid(cachedEntry)) {
+                    android.util.Log.d("MainActivity", "Using cached movies for category: $categoryId")
+                    allChannels.addAll(cachedEntry!!.data)
+                    totalItemsCount = allChannels.size
+                    contentSubtitle.text = "$totalItemsCount movies"
+                    channelAdapter.setChannels(allChannels)
+                    setupContentAdapter()
+                    loadingIndicator.visibility = View.GONE
+                    return@launch
+                }
+                
+                // Load only first page (5 items) for fast initial display
+                android.util.Log.d("MainActivity", "Loading movies from API for category: $categoryId")
+                val firstResponse = stalkerClient.getVodItems(
+                    categoryId = categoryId,
+                    page = 1,
+                    type = "vod"
                 )
                 
                 totalItemsCount = firstResponse.items.total
                 val firstMovies = firstResponse.items.data
+                
+                // Update subtitle immediately with total count
+                contentSubtitle.text = "$totalItemsCount movies"
                 
                 if (firstMovies.isNotEmpty()) {
                     allMovies.addAll(firstMovies)
@@ -1798,44 +2457,13 @@ class MainActivity : ComponentActivity() {
                     
                     // Show first page immediately
                     channelAdapter.setChannels(allChannels)
-                    contentSubtitle.text = "$totalItemsCount movies"
                     channelAdapter.setSelectedPosition(0)
                     loadingIndicator.visibility = View.GONE
+                    currentPage = 1
                     
-                    // Load remaining 4 pages in background (batch all at once)
-                    val backgroundMovies = mutableListOf<com.ronika.iptvnative.models.Movie>()
-                    for (page in 2..5) {
-                        val response = ApiClient.apiService.getMovies(
-                            MoviesRequest(
-                                mac = ApiClient.macAddress,
-                                url = ApiClient.portalUrl,
-                                category = categoryId,
-                                page = page,
-                                type = "vod"
-                            )
-                        )
-                        
-                        val movies = response.items.data
-                        if (movies.isEmpty()) {
-                            hasMorePages = false
-                            break
-                        }
-                        
-                        backgroundMovies.addAll(movies)
-                    }
-                    
-                    // Add all background movies at once to prevent multiple focus changes
-                    if (backgroundMovies.isNotEmpty()) {
-                        allMovies.addAll(backgroundMovies)
-                        val movieChannels = backgroundMovies.map {
-                            Channel(it.id, it.name, null, buildImageUrl(it.getImageUrl()), it.cmd, categoryId)
-                        }
-                        allChannels.addAll(movieChannels)
-                        
-                        // Single update after all pages loaded
-                        runOnUiThread {
-                            channelAdapter.setChannels(allChannels)
-                        }
+                    // Prefetch 2 pages ahead (pages 2 & 3) in background
+                    launch(Dispatchers.IO) {
+                        prefetchPages(categoryId, currentPage)
                     }
                     
                     
@@ -1859,19 +2487,51 @@ class MainActivity : ComponentActivity() {
                 currentPage = 1
                 hasMorePages = true
                 
+                // Check cache first
+                val cacheKey = "series_$categoryId"
+                val cachedEntry = contentCache[cacheKey]
+                
+                if (isCacheValid(cachedEntry)) {
+                    android.util.Log.d("MainActivity", "Using cached series for category: $categoryId")
+                    allChannels.addAll(cachedEntry!!.data)
+                    
+                    // Also restore seriesMap from cache
+                    val cachedSeries = seriesCache[cacheKey]
+                    if (cachedSeries != null) {
+                        allSeries.addAll(cachedSeries.data)
+                        cachedSeries.data.forEach { series ->
+                            seriesMap[series.id] = series
+                        }
+                        android.util.Log.d("MainActivity", "📚 Restored ${seriesMap.size} series from cache to seriesMap")
+                    }
+                    
+                    totalItemsCount = allChannels.size
+                    contentSubtitle.text = "$totalItemsCount series"
+                    channelAdapter.setChannels(allChannels)
+                    setupContentAdapter()
+                    loadingIndicator.visibility = View.GONE
+                    return@launch
+                }
+                
                 // Load first page and show immediately
-                val firstResponse = ApiClient.apiService.getSeries(
-                    MoviesRequest(
-                        mac = ApiClient.macAddress,
-                        url = ApiClient.portalUrl,
-                        category = categoryId,
-                        page = 1,
-                        type = "vod"
-                    )
+                android.util.Log.d("MainActivity", "Loading series from API for category: $categoryId")
+                val firstResponse = stalkerClient.getVodItems(
+                    categoryId = categoryId,
+                    page = 1,
+                    type = "vod" // Both movies and series come from vod type
                 )
                 
-                totalItemsCount = firstResponse.items.total
-                val firstSeries = firstResponse.items.data
+                // Filter only series (is_series != "0") - need to check ALL pages for accurate count
+                val firstSeries = firstResponse.items.data.filter { item ->
+                    val isSeries = item.isSeries ?: "0"
+                    isSeries != "0" // Only include series
+                }
+                
+                // For accurate count, we need total from API but filter by is_series
+                // Show approximate count initially, will update after loading
+                totalItemsCount = firstSeries.size
+                contentSubtitle.text = "Loading... (${firstSeries.size}+ series)"
+                android.util.Log.d("MainActivity", "Filtered ${firstSeries.size} series from ${firstResponse.items.data.size} total items")
                 
                 // Log API response data for first few series
                 android.util.Log.d("MainActivity", "=== SERIES API RESPONSE (First Page) ===")
@@ -1922,6 +2582,11 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     allSeries.addAll(convertedSeries)
+                    // Also add to map for instant lookup
+                    convertedSeries.forEach { series ->
+                        seriesMap[series.id] = series
+                    }
+                    android.util.Log.d("MainActivity", "📚 Added ${convertedSeries.size} series to seriesMap. Total in map: ${seriesMap.size}")
                     
                     val seriesChannels = firstSeries.map {
                         Channel(it.id, it.name, null, buildImageUrl(it.getImageUrl()), it.cmd, categoryId)
@@ -1937,17 +2602,18 @@ class MainActivity : ComponentActivity() {
                     // Load remaining 4 pages in background (batch all at once)
                     val backgroundSeries = mutableListOf<com.ronika.iptvnative.models.Movie>()
                     for (page in 2..5) {
-                        val response = ApiClient.apiService.getSeries(
-                            MoviesRequest(
-                                mac = ApiClient.macAddress,
-                                url = ApiClient.portalUrl,
-                                category = categoryId,
-                                page = page,
-                                type = "vod"
-                            )
+                        val response = stalkerClient.getVodItems(
+                            categoryId = categoryId,
+                            page = page,
+                            type = "vod"
                         )
                         
-                        val series = response.items.data
+                        // Filter only series (is_series != "0")
+                        val series = response.items.data.filter { item ->
+                            val isSeries = item.isSeries ?: "0"
+                            isSeries != "0"
+                        }
+                        
                         if (series.isEmpty()) {
                             hasMorePages = false
                             break
@@ -1990,9 +2656,17 @@ class MainActivity : ComponentActivity() {
                         // Single update after all pages loaded
                         runOnUiThread {
                             channelAdapter.setChannels(allChannels)
+                            // Update subtitle with final count
+                            totalItemsCount = allSeries.size
+                            contentSubtitle.text = "$totalItemsCount series"
                         }
                     }
                     
+                    // Cache both channels and series data
+                    val cacheKey = "series_$categoryId"
+                    contentCache[cacheKey] = CacheEntry(allChannels.toList())
+                    seriesCache[cacheKey] = CacheEntry(allSeries.toList())
+                    android.util.Log.d("MainActivity", "Cached ${allChannels.size} channels and ${allSeries.size} series for category: $categoryId")
                     
                     currentPage = 6
                 } else {
@@ -2033,17 +2707,18 @@ class MainActivity : ComponentActivity() {
                             allChannels.addAll(channels)
                             channelRowAdapter.setChannels(allChannels)
                             currentPage++
+                            
+                            // Update cache with new content
+                            val cacheKey = "channels_${selectedGenre.id}"
+                            contentCache[cacheKey] = CacheEntry(allChannels.toList())
+                            android.util.Log.d("MainActivity", "Updated cache with ${allChannels.size} channels")
                         }
                     }
                     "MOVIES" -> {
-                        val response = ApiClient.apiService.getMovies(
-                            MoviesRequest(
-                                mac = ApiClient.macAddress,
-                                url = ApiClient.portalUrl,
-                                category = selectedGenre.id,
-                                page = currentPage,
-                                type = "vod"
-                            )
+                        val response = stalkerClient.getVodItems(
+                            categoryId = selectedGenre.id,
+                            page = currentPage,
+                            type = "vod"
                         )
                         val movies = response.items.data
                         if (movies.isEmpty()) {
@@ -2056,17 +2731,18 @@ class MainActivity : ComponentActivity() {
                             allChannels.addAll(movieChannels)
                             channelAdapter.setChannels(allChannels)
                             currentPage++
+                            
+                            // Update cache with new content
+                            val cacheKey = "movies_${selectedGenre.id}"
+                            contentCache[cacheKey] = CacheEntry(allChannels.toList())
+                            android.util.Log.d("MainActivity", "Updated cache with ${allChannels.size} movies")
                         }
                     }
                     "SHOWS" -> {
-                        val response = ApiClient.apiService.getSeries(
-                            MoviesRequest(
-                                mac = ApiClient.macAddress,
-                                url = ApiClient.portalUrl,
-                                category = selectedGenre.id,
-                                page = currentPage,
-                                type = "vod"
-                            )
+                        val response = stalkerClient.getVodItems(
+                            categoryId = selectedGenre.id,
+                            page = currentPage,
+                            type = "series"
                         )
                         val seriesData = response.items.data
                         if (seriesData.isEmpty()) {
@@ -2101,6 +2777,11 @@ class MainActivity : ComponentActivity() {
                             allChannels.addAll(seriesChannels)
                             channelAdapter.setChannels(allChannels)
                             currentPage++
+                            
+                            // Update cache with new content
+                            val cacheKey = "series_${selectedGenre.id}"
+                            contentCache[cacheKey] = CacheEntry(allChannels.toList())
+                            android.util.Log.d("MainActivity", "Updated cache with ${allChannels.size} series")
                         }
                     }
                 }
@@ -2112,6 +2793,98 @@ class MainActivity : ComponentActivity() {
         }
     }
     
+    private suspend fun prefetchPages(categoryId: String, fromPage: Int) {
+        try {
+            // Prefetch 2 pages ahead
+            val pagesToFetch = listOf(fromPage + 1, fromPage + 2)
+            
+            for (page in pagesToFetch) {
+                if (!hasMorePages) break
+                
+                android.util.Log.d("MainActivity", "Prefetching page $page for category $categoryId")
+                val response = stalkerClient.getVodItems(
+                    categoryId = categoryId,
+                    page = page,
+                    type = "vod"
+                )
+                
+                val items = response.items.data
+                if (items.isEmpty()) {
+                    hasMorePages = false
+                    break
+                }
+                
+                // Add to cache based on content type
+                if (selectedTab == "MOVIES") {
+                    allMovies.addAll(items)
+                    val movieChannels = items.map {
+                        Channel(it.id, it.name, null, buildImageUrl(it.getImageUrl()), it.cmd, categoryId)
+                    }
+                    allChannels.addAll(movieChannels)
+                } else if (selectedTab == "SHOWS") {
+                    // Filter for series
+                    val seriesItems = items.filter { (it.isSeries ?: "0") != "0" }
+                    val series = seriesItems.map { movie ->
+                        Series(
+                            id = movie.id,
+                            name = movie.name,
+                            year = movie.year,
+                            poster = movie.poster,
+                            screenshot = movie.screenshot,
+                            screenshotUri = movie.screenshotUri,
+                            cover = movie.cover,
+                            coverBig = movie.coverBig,
+                            ratingImdb = movie.ratingImdb,
+                            categoryId = movie.categoryId,
+                            description = movie.description,
+                            actors = movie.actors,
+                            director = movie.director,
+                            country = movie.country,
+                            genresStr = movie.genresStr,
+                            originalName = movie.originalName,
+                            totalEpisodes = null
+                        )
+                    }
+                    allSeries.addAll(series)
+                    // Also add to map for instant lookup
+                    series.forEach { s ->
+                        seriesMap[s.id] = s
+                    }
+                    android.util.Log.d("MainActivity", "📚 Added ${series.size} series to seriesMap. Total in map: ${seriesMap.size}")
+                    val seriesChannels = seriesItems.map {
+                        Channel(it.id, it.name, null, buildImageUrl(it.getImageUrl()), it.cmd, categoryId)
+                    }
+                    allChannels.addAll(seriesChannels)
+                }
+                
+                android.util.Log.d("MainActivity", "Prefetched page $page: ${items.size} items")
+            }
+            
+            // Update UI with prefetched content
+            withContext(Dispatchers.Main) {
+                channelAdapter.setChannels(allChannels)
+                currentPage = fromPage + 2 // Update to last prefetched page
+                
+                // Cache the content after prefetch
+                val cacheKey = when (selectedTab) {
+                    "MOVIES" -> "movies_$categoryId"
+                    "SHOWS" -> "series_$categoryId"
+                    else -> return@withContext
+                }
+                contentCache[cacheKey] = CacheEntry(allChannels.toList())
+                
+                // Also cache series data if loading shows
+                if (selectedTab == "SHOWS") {
+                    seriesCache[cacheKey] = CacheEntry(allSeries.toList())
+                    android.util.Log.d("MainActivity", "📚 Cached ${allSeries.size} series with metadata")
+                }
+                android.util.Log.d("MainActivity", "Cached ${allChannels.size} items for $selectedTab category: $categoryId")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error prefetching pages", e)
+        }
+    }
+    
     private fun buildImageUrl(imagePath: String?): String? {
         if (imagePath.isNullOrEmpty()) return null
         
@@ -2120,12 +2893,11 @@ class MainActivity : ComponentActivity() {
             return imagePath
         }
         
-        // Build full URL from portal
-        val portalUrl = ApiClient.portalUrl
-        val domainUrl = portalUrl.replace("/stalker_portal/?$".toRegex(), "")
-        
+        // Use the correct domain for images (same as MovieCategoryRowAdapter)
+        // Images must be loaded from tv.stream4k.cc, not the IP address
         return if (imagePath.startsWith("/")) {
-            "$domainUrl$imagePath"
+            // imagePath like "/stalker_portal/screenshots/123.jpg"
+            "http://tv.stream4k.cc$imagePath"
         } else {
             imagePath
         }
@@ -2178,21 +2950,35 @@ class MainActivity : ComponentActivity() {
             showPreviewForChannel(channel)
         } else if (selectedTab == "SHOWS") {
             // For series, open SeriesDetailActivity
-            val series = allSeries.find { it.id == channel.id }
-            val posterUrl = buildImageUrl(series?.getImageUrl())
-            android.util.Log.d("MainActivity", "Opening series: ${series?.name}")
-            android.util.Log.d("MainActivity", "Poster URL: $posterUrl")
+            android.util.Log.d("MainActivity", "📺 Opening series - channel.id: ${channel.id}, channel.name: ${channel.name}")
+            android.util.Log.d("MainActivity", "📺 seriesMap size: ${seriesMap.size}")
+            
+            // Look up full series data from seriesMap
+            val series = seriesMap[channel.id]
+            android.util.Log.d("MainActivity", "📺 Found series in map: ${series != null}")
+            
+            if (series != null) {
+                android.util.Log.d("MainActivity", "📺 Series data - name: ${series.name}, screenshot_uri: ${series.screenshotUri}")
+                android.util.Log.d("MainActivity", "📺 Series data - description: ${series.description}")
+                android.util.Log.d("MainActivity", "📺 Series data - actors: ${series.actors}")
+                android.util.Log.d("MainActivity", "📺 Series data - director: ${series.director}")
+                android.util.Log.d("MainActivity", "📺 Series data - getImageUrl(): ${series.getImageUrl()}")
+            }
+            
+            val posterUrl = buildImageUrl(series?.getImageUrl() ?: channel.logo)
+            android.util.Log.d("MainActivity", "📺 Final poster URL: $posterUrl")
+            
             val intent = Intent(this, SeriesDetailActivity::class.java).apply {
                 putExtra("SERIES_ID", channel.id)
                 putExtra("SERIES_NAME", channel.name)
-                putExtra("POSTER_URL", posterUrl)
-                putExtra("DESCRIPTION", series?.description)
-                putExtra("ACTORS", series?.actors)
-                putExtra("DIRECTOR", series?.director)
-                putExtra("YEAR", series?.year)
-                putExtra("COUNTRY", series?.country)
-                putExtra("GENRES", series?.genresStr)
-                putExtra("TOTAL_SEASONS", "${series?.totalEpisodes ?: "Unknown"}")
+                putExtra("POSTER_URL", posterUrl ?: "")
+                putExtra("DESCRIPTION", series?.description ?: "")
+                putExtra("ACTORS", series?.actors ?: "")
+                putExtra("DIRECTOR", series?.director ?: "")  
+                putExtra("YEAR", series?.year ?: "")
+                putExtra("COUNTRY", series?.country ?: "")
+                putExtra("GENRES", series?.genresStr ?: "")
+                putExtra("TOTAL_SEASONS", series?.totalEpisodes ?: "Unknown")
             }
             startActivity(intent)
         } else {
@@ -2425,32 +3211,38 @@ class MainActivity : ComponentActivity() {
     
     private fun exitMovieFullscreen() {
         // Stop VOD playback
-        android.util.Log.d("MainActivity", "Exiting movie fullscreen - stopping VOD player")
+        android.util.Log.d("MainActivity", "===== exitMovieFullscreen CALLED =====")
+        android.util.Log.d("MainActivity", "exitMovieFullscreen - selectedTab: $selectedTab")
+        android.util.Log.d("MainActivity", "exitMovieFullscreen - isPlayingSeries: $isPlayingSeries")
+        android.util.Log.d("MainActivity", "exitMovieFullscreen - currentSeriesId: $currentSeriesId")
+        android.util.Log.d("MainActivity", "exitMovieFullscreen - currentSeriesName: $currentSeriesName")
+        android.util.Log.d("MainActivity", "exitMovieFullscreen - All series data: id=$currentSeriesId, name=$currentSeriesName, poster=$currentSeriesPosterUrl")
+        
         vodPlayer?.apply {
             stop()
             clearMediaItems()
         }
         
-        // Check if we were playing a series - navigate back to SeriesDetailActivity
+        // Check if we were playing a series - go back to series detail screen
         if (isPlayingSeries && currentSeriesId != null) {
-            android.util.Log.d("MainActivity", "Returning to SeriesDetailActivity for series: $currentSeriesName")
-            val intent = Intent(this, SeriesDetailActivity::class.java).apply {
-                putExtra("SERIES_ID", currentSeriesId)
-                putExtra("SERIES_NAME", currentSeriesName)
-                putExtra("POSTER_URL", currentSeriesPosterUrl)
-                putExtra("DESCRIPTION", currentSeriesDescription)
-                putExtra("ACTORS", currentSeriesActors)
-                putExtra("DIRECTOR", currentSeriesDirector)
-                putExtra("YEAR", currentSeriesYear)
-                putExtra("COUNTRY", currentSeriesCountry)
-                putExtra("GENRES", currentSeriesGenres)
-                putExtra("TOTAL_SEASONS", currentSeriesTotalSeasons)
-                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            }
-            startActivity(intent)
+            android.util.Log.d("MainActivity", "✓ Exiting SERIES playback - returning to SeriesDetailActivity")
+            
+            // Reset fullscreen state
+            isFullscreen = false
             
             // Reset series tracking
             isPlayingSeries = false
+            val seriesId = currentSeriesId
+            val seriesName = currentSeriesName
+            val posterUrl = currentSeriesPosterUrl
+            val description = currentSeriesDescription
+            val actors = currentSeriesActors
+            val director = currentSeriesDirector
+            val year = currentSeriesYear
+            val country = currentSeriesCountry
+            val genres = currentSeriesGenres
+            val totalSeasons = currentSeriesTotalSeasons
+            
             currentSeriesId = null
             currentSeriesName = null
             currentSeriesPosterUrl = null
@@ -2461,16 +3253,25 @@ class MainActivity : ComponentActivity() {
             currentSeriesCountry = null
             currentSeriesGenres = null
             currentSeriesTotalSeasons = null
+            
+            // Simply finish this activity to return to SeriesDetailActivity which is already in the back stack
+            finish()
+            
+            android.util.Log.d("MainActivity", "✓ Finished MainActivity, returning to SeriesDetailActivity")
             return
         }
         
-        // Restore normal UI (but keep categories hidden for fullscreen movies)
-        sidebarContainer.visibility = View.GONE // Keep main sidebar hidden
-        categorySidebar.visibility = View.GONE // Keep categories hidden
+        // Restore normal UI for MOVIES - show content WITHOUT sidebar
+        android.util.Log.d("MainActivity", "✓ Exiting MOVIE playback - restoring movie list (NO sidebar)")
+        
+        sidebarContainer.visibility = View.GONE
+        val sidebarFrame = findViewById<FrameLayout>(R.id.sidebar_frame)
+        sidebarFrame?.visibility = View.GONE
+        categorySidebar.visibility = View.GONE
         contentHeader.visibility = View.VISIBLE
         contentListContainer.visibility = View.VISIBLE
         
-        // Restore container height for movies/series (hide player)
+        // Hide player
         playerPreviewContainer.visibility = View.GONE
         val containerParams = playerPreviewContainer.layoutParams as LinearLayout.LayoutParams
         containerParams.weight = 0.55f
@@ -2478,22 +3279,19 @@ class MainActivity : ComponentActivity() {
         
         isFullscreen = false
         
-        // Recalculate grid for fullscreen layout (no sidebars)
+        // Recalculate grid for normal layout (with sidebars)
         if (selectedTab == "MOVIES" || selectedTab == "SHOWS") {
             setupContentAdapter()
         }
         
-        // Return focus to selected movie
-        contentRecycler.post {
-            val selectedPos = channelAdapter.getSelectedPosition()
-            val layoutManager = contentRecycler.layoutManager as? androidx.recyclerview.widget.GridLayoutManager
-            layoutManager?.let {
-                val viewAtPosition = it.findViewByPosition(selectedPos)
-                viewAtPosition?.requestFocus()
-            }
-        }
+        // Focus on content, NOT sidebar
+        contentRecycler.requestFocus()
         
-        android.util.Log.d("MainActivity", "Exited movie fullscreen")
+        android.util.Log.d("MainActivity", "✓ Exited movie fullscreen - restored content WITHOUT sidebar")
+        android.util.Log.d("MainActivity", "  - sidebarContainer: ${sidebarContainer.visibility}")
+        android.util.Log.d("MainActivity", "  - sidebarFrame: ${sidebarFrame?.visibility}")
+        android.util.Log.d("MainActivity", "  - contentHeader: ${contentHeader.visibility}")
+        android.util.Log.d("MainActivity", "  - contentListContainer: ${contentListContainer.visibility}")
     }
     
     private fun toggleFullscreen() {
@@ -2613,6 +3411,8 @@ class MainActivity : ComponentActivity() {
     private fun handleBackButton() {
         android.util.Log.d("MainActivity", "===== handleBackButton CALLED =====")
         android.util.Log.d("MainActivity", "handleBackButton - selectedTab: $selectedTab")
+        android.util.Log.d("MainActivity", "handleBackButton - isPlayingSeries: $isPlayingSeries")
+        android.util.Log.d("MainActivity", "handleBackButton - currentSeriesId: $currentSeriesId")
         
         val isInFullscreen = if (selectedTab == "TV") {
             liveTVManager?.isInFullscreen() ?: false
@@ -2624,13 +3424,16 @@ class MainActivity : ComponentActivity() {
         
         // In video fullscreen - exit to preview/content view
         if (isInFullscreen) {
+            android.util.Log.d("MainActivity", "✓ In fullscreen mode - calling exit function")
             if (selectedTab == "TV") {
+                android.util.Log.d("MainActivity", "  -> Calling liveTVManager.exitFullscreen()")
                 // Exit Live TV fullscreen - go back to channel list
                 liveTVManager?.exitFullscreen()
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                     findViewById<RecyclerView>(R.id.live_channels_recycler)?.requestFocus()
                 }, 150)
             } else {
+                android.util.Log.d("MainActivity", "  -> Calling exitMovieFullscreen() for MOVIES/SHOWS")
                 // Exit movie fullscreen view
                 exitMovieFullscreen()
             }
@@ -2653,6 +3456,10 @@ class MainActivity : ComponentActivity() {
                 liveUIContainer?.visibility == View.VISIBLE) {
                 android.util.Log.d("MainActivity", "✓ Showing main sidebar from Live TV")
                 // Keep Live TV container visible (player keeps running)
+                // Set width to 72dp when showing
+                sidebarFrame.layoutParams = (sidebarFrame.layoutParams as FrameLayout.LayoutParams).apply {
+                    width = (72 * resources.displayMetrics.density).toInt()
+                }
                 sidebarFrame.visibility = View.VISIBLE
                 sidebarContainer.visibility = View.VISIBLE
                 
@@ -2692,36 +3499,87 @@ class MainActivity : ComponentActivity() {
                 mainContentLayout?.bringToFront()
                 mainContentLayout?.requestLayout()
                 
-                android.util.Log.d("MainActivity", "Set visibilities and brought sidebar to front - sidebarFrame: ${sidebarFrame.visibility}, sidebarContainer: ${sidebarContainer.visibility}")
-                sidebarContainer.requestFocus()
+                // Request focus on the current tab instead of letting it default to search
+                when (selectedTab) {
+                    "TV" -> tvTab.requestFocus()
+                    "MOVIES" -> moviesTab.requestFocus()
+                    "SHOWS" -> showsTab.requestFocus()
+                    else -> sidebarContainer.requestFocus()
+                }
+                
+                android.util.Log.d("MainActivity", "Set visibilities and brought sidebar to front - sidebarFrame: ${sidebarFrame.visibility}, sidebarContainer: ${sidebarContainer.visibility}, focus on $selectedTab tab")
                 return
             }
         }
         
-        // If on main sidebar, exit app
-        val sidebarFrame = findViewById<FrameLayout>(R.id.sidebar_frame)
-        if (sidebarContainer.visibility == View.VISIBLE && sidebarFrame?.visibility == View.VISIBLE) {
-            android.util.Log.d("MainActivity", "Exiting app from main sidebar")
+        // Check if we're browsing content (Movies/Shows) - EXACT same logic as Live TV
+        if (selectedTab == "MOVIES" || selectedTab == "SHOWS") {
+            val sidebarFrame = findViewById<FrameLayout>(R.id.sidebar_frame)
+            val mainContentArea = findViewById<LinearLayout>(R.id.main_content_area)
+            val contentListContainer = findViewById<FrameLayout>(R.id.content_list_container)
+            
+            android.util.Log.d("MainActivity", "handleBackButton - Checking MOVIES/SHOWS conditions:")
+            android.util.Log.d("MainActivity", "  mainContentArea visible: ${mainContentArea?.visibility == View.VISIBLE} (value=${mainContentArea?.visibility})")
+            android.util.Log.d("MainActivity", "  sidebarFrame GONE: ${sidebarFrame?.visibility == View.GONE} (value=${sidebarFrame?.visibility}, GONE=${View.GONE})")
+            android.util.Log.d("MainActivity", "  sidebarContainer visibility: ${sidebarContainer.visibility}")
+            android.util.Log.d("MainActivity", "  contentListContainer visible: ${contentListContainer?.visibility == View.VISIBLE} (value=${contentListContainer?.visibility})")
+            
+            // EXACT same condition as Live TV: content visible, sidebar hidden, UI visible
+            // Movies/Shows - show sidebar on back button
+            if (mainContentArea?.visibility == View.VISIBLE && 
+                sidebarContainer.visibility == View.GONE &&
+                contentListContainer?.visibility == View.VISIBLE) {
+                android.util.Log.d("MainActivity", "✓ Showing main sidebar from MOVIES/SHOWS")
+                // Show sidebar
+                sidebarFrame.layoutParams = (sidebarFrame.layoutParams as FrameLayout.LayoutParams).apply {
+                    width = (72 * resources.displayMetrics.density).toInt()
+                }
+                sidebarFrame.visibility = View.VISIBLE
+                sidebarContainer.visibility = View.VISIBLE
+                
+                // Request focus on the current tab
+                when (selectedTab) {
+                    "MOVIES" -> moviesTab.requestFocus()
+                    "SHOWS" -> showsTab.requestFocus()
+                    else -> sidebarContainer.requestFocus()
+                }
+                
+                android.util.Log.d("MainActivity", "Sidebar shown, focus on $selectedTab tab")
+                return
+            }
+        }
+        
+        // If on main sidebar only, exit app
+        val sidebarFrameCheck = findViewById<FrameLayout>(R.id.sidebar_frame)
+        if (sidebarContainer.visibility == View.VISIBLE && sidebarFrameCheck?.visibility == View.VISIBLE) {
+            android.util.Log.d("MainActivity", "✓ Exiting app from main sidebar")
             finish()
             return
         }
         
         // Default: exit app (shouldn't reach here normally)
+        android.util.Log.d("MainActivity", "✓ Default exit - finishing activity")
         finish()
     }
     
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        android.util.Log.d("MainActivity", "Key pressed: $keyCode")
+        android.util.Log.d("MainActivity", "⌨️ Key pressed: $keyCode")
         
         // Show player controls on any key press when in fullscreen
-        val isInFullscreen = if (selectedTab == "TV") {
+        // CRITICAL: If playing series, always use isFullscreen variable (not liveTVManager)
+        val isInFullscreen = if (isPlayingSeries) {
+            isFullscreen
+        } else if (selectedTab == "TV") {
             liveTVManager?.isInFullscreen() ?: false
         } else {
             isFullscreen
         }
         
+        android.util.Log.d("MainActivity", "📍 State check - selectedTab: $selectedTab, isFullscreen: $isFullscreen, isInFullscreen: $isInFullscreen, isPlayingSeries: $isPlayingSeries, player: ${playerView.player != null}")
+        
         if (isInFullscreen && playerView.player != null) {
             playerView.showController()
+            scheduleControlsHide()
         }
         
         // BACK button is now handled by OnBackPressedCallback in onCreate
@@ -2756,33 +3614,59 @@ class MainActivity : ComponentActivity() {
                 return true
             }
             
-            // In Live TV channel list view - go back to main sidebar (keep player running)
-            if (selectedTab == "TV") {
-                val liveTVContainer = findViewById<FrameLayout>(R.id.live_tv_container)
-                val sidebarFrame = findViewById<FrameLayout>(R.id.sidebar_frame)
-                val liveUIContainer = findViewById<LinearLayout>(R.id.live_ui_container)
-                
-                android.util.Log.d("MainActivity", "BACK from Live TV - liveTVContainer visible: ${liveTVContainer?.visibility == View.VISIBLE}, sidebarFrame gone: ${sidebarFrame?.visibility == View.GONE}, liveUIContainer visible: ${liveUIContainer?.visibility == View.VISIBLE}")
-                
-                // If in Live TV mode (sidebar hidden), go back to main navigation
-                if (liveTVContainer?.visibility == View.VISIBLE && 
-                    sidebarFrame?.visibility == View.GONE &&
-                    liveUIContainer?.visibility == View.VISIBLE) {
-                    android.util.Log.d("MainActivity", "Showing main sidebar from Live TV")
-                    // Keep Live TV container visible (player keeps running)
-                    // Just show main sidebar on top
-                    sidebarFrame.visibility = View.VISIBLE
-                    sidebarContainer.visibility = View.VISIBLE
-                    categorySidebar.visibility = View.GONE
-                    
-                    // Focus on the main navigation sidebar
-                    sidebarContainer.requestFocus()
-                    
-                    return true
+        // In Live TV channel list view - go back to main sidebar (keep player running)
+        if (selectedTab == "TV") {
+            val liveTVContainer = findViewById<FrameLayout>(R.id.live_tv_container)
+            val sidebarFrame = findViewById<FrameLayout>(R.id.sidebar_frame)
+            val liveUIContainer = findViewById<LinearLayout>(R.id.live_ui_container)
+            
+            android.util.Log.d("MainActivity", "BACK from Live TV - liveTVContainer visible: ${liveTVContainer?.visibility == View.VISIBLE}, sidebarFrame gone: ${sidebarFrame?.visibility == View.GONE}, liveUIContainer visible: ${liveUIContainer?.visibility == View.VISIBLE}")
+            
+            // If in Live TV mode (sidebar hidden), go back to main navigation
+            if (liveTVContainer?.visibility == View.VISIBLE && 
+                sidebarFrame?.visibility == View.GONE &&
+                liveUIContainer?.visibility == View.VISIBLE) {
+                android.util.Log.d("MainActivity", "Showing main sidebar from Live TV")
+                // Keep Live TV container visible (player keeps running)
+                // Set width to 72dp when showing
+                sidebarFrame.layoutParams = (sidebarFrame.layoutParams as FrameLayout.LayoutParams).apply {
+                    width = (72 * resources.displayMetrics.density).toInt()
                 }
+                // Just show main sidebar on top
+                sidebarFrame.visibility = View.VISIBLE
+                sidebarContainer.visibility = View.VISIBLE
+                categorySidebar.visibility = View.GONE
+                
+                // Request focus on the TV tab since we're in Live TV section
+                tvTab.requestFocus()
+                
+                return true
+            }
+        }
+        
+        // In Movies/Shows rows view OR series detail - go back to main sidebar
+        if ((selectedTab == "MOVIES" || selectedTab == "SHOWS") && 
+            (movieRowsRecycler.visibility == View.VISIBLE || contentListContainer.visibility == View.GONE) &&
+            sidebarContainer.visibility == View.GONE) {
+            android.util.Log.d("MainActivity", "BACK from ${selectedTab} - showing main sidebar")
+            
+            val sidebarFrame = findViewById<FrameLayout>(R.id.sidebar_frame)
+            sidebarFrame?.visibility = View.VISIBLE
+            sidebarContainer.visibility = View.VISIBLE
+            
+            // Show the content if hidden
+            movieRowsRecycler.visibility = View.VISIBLE
+            contentListContainer.visibility = View.VISIBLE
+            contentHeader.visibility = View.VISIBLE
+            
+            // Focus on current tab
+            when (selectedTab) {
+                "MOVIES" -> moviesTab.requestFocus()
+                "SHOWS" -> showsTab.requestFocus()
             }
             
-            // In content view (Movies/Shows) with both sidebars hidden - show categories
+            return true
+        }            // In content view (Movies/Shows) with both sidebars hidden - show categories
             if (categorySidebar.visibility == View.GONE && 
                 sidebarContainer.visibility == View.GONE) {
                 // Show categories sidebar
@@ -2818,11 +3702,43 @@ class MainActivity : ComponentActivity() {
                 return true
             }
             
-            // In categories with main sidebar hidden - show main sidebar
-            if (categorySidebar.visibility == View.VISIBLE && 
-                sidebarContainer.visibility == View.GONE) {
-                // Show main sidebar
+            // In categories/movie rows with main sidebar hidden - show main sidebar ON TOP
+            if (sidebarContainer.visibility == View.GONE &&
+                (categorySidebar.visibility == View.VISIBLE || 
+                 movieRowsRecycler.visibility == View.VISIBLE)) {
+                android.util.Log.d("MainActivity", "Showing main sidebar on top of content")
+                
+                // Show main sidebar with transparent overlay (like Live TV)
                 sidebarContainer.visibility = View.VISIBLE
+                val sidebarFrame = findViewById<FrameLayout>(R.id.sidebar_frame)
+                val mainContentLayout = sidebarFrame?.parent as? android.widget.LinearLayout
+                
+                // Make backgrounds transparent so content shows through
+                mainContentLayout?.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                sidebarFrame?.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                sidebarFrame?.visibility = View.VISIBLE
+                
+                // Hide divider and player/preview container
+                findViewById<View>(R.id.sidebar_divider)?.visibility = View.GONE
+                findViewById<LinearLayout>(R.id.player_preview_container)?.visibility = View.GONE
+                
+                // Hide all other children except sidebar_frame to show content underneath
+                mainContentLayout?.let { parent ->
+                    for (i in 0 until parent.childCount) {
+                        val child = parent.getChildAt(i)
+                        if (child.id != R.id.sidebar_frame) {
+                            child.visibility = View.GONE
+                        }
+                    }
+                }
+                
+                // Bring sidebar to front so it overlays on top
+                mainContentLayout?.bringToFront()
+                mainContentLayout?.requestLayout()
+                
+                // Make root layout transparent too
+                val rootLayout = mainContentLayout?.parent as? android.widget.FrameLayout
+                rootLayout?.setBackgroundColor(android.graphics.Color.TRANSPARENT)
                 
                 // Focus on current tab
                 when (selectedTab) {
@@ -2838,58 +3754,109 @@ class MainActivity : ComponentActivity() {
         
         // Handle custom player controls in fullscreen
         if (isInFullscreen) {
+            android.util.Log.d("MainActivity", "🎮 Key event in fullscreen - keyCode: $keyCode, isPlayingSeries: $isPlayingSeries")
+            val restartButton = playerView.findViewById<ImageButton>(R.id.restart_button)
+            val nextButton = playerView.findViewById<ImageButton>(R.id.next_button)
+            val progressBarContainer = playerView.findViewById<LinearLayout>(R.id.progress_bar_container)
+            val bottomControlsContainer = playerView.findViewById<LinearLayout>(R.id.bottom_controls_container)
+            
+            val subtitleButton = playerView.findViewById<ImageButton>(R.id.subtitle_button)
+            
+            android.util.Log.d("MainActivity", "Controls found - restart: ${restartButton != null}, next: ${nextButton != null}, progress: ${progressBarContainer != null}, subtitle: ${subtitleButton != null}")
+            android.util.Log.d("MainActivity", "Controls visibility - restart: ${restartButton?.visibility}, next: ${nextButton?.visibility}, progress: ${progressBarContainer?.visibility}")
+            
+            // Check if any control has focus
+            val hasControlFocus = currentFocus == restartButton || currentFocus == nextButton || currentFocus == progressBarContainer || currentFocus == subtitleButton
+            android.util.Log.d("MainActivity", "hasControlFocus: $hasControlFocus, currentFocus: ${currentFocus?.javaClass?.simpleName}")
+            
             when (keyCode) {
-                // UP key - next channel in Live TV, focus restart button in VOD
+                // CENTER/OK key - if no control has focus, toggle play/pause; otherwise let the button handle it
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                    android.util.Log.d("MainActivity", "⏯️ CENTER pressed - hasControlFocus: $hasControlFocus")
+                    if (!hasControlFocus) {
+                        // Toggle play/pause
+                        playerView.player?.let { player ->
+                            if (player.isPlaying) {
+                                android.util.Log.d("MainActivity", "⏸️ Pausing")
+                                player.pause()
+                            } else {
+                                android.util.Log.d("MainActivity", "▶️ Playing")
+                                player.play()
+                            }
+                            showPlayPauseOverlay(player.isPlaying)
+                        }
+                        // Show controls after play/pause
+                        playerView.showController()
+                        return true
+                    }
+                    // Let focused button handle the click
+                    return false
+                }
+                
+                // LEFT key - seek backward 10 seconds (only when no control has focus)
+                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    if (!hasControlFocus && (selectedTab == "MOVIES" || selectedTab == "SHOWS" || isPlayingSeries)) {
+                        android.util.Log.d("MainActivity", "⏪ Seeking back 10s")
+                        playerView.player?.let { player ->
+                            val newPos = (player.currentPosition - 10000).coerceAtLeast(0)
+                            player.seekTo(newPos)
+                            playerView.showController()
+                            return true
+                        }
+                    }
+                    // If control has focus, don't consume the event (let button handle it)
+                    return false
+                }
+                
+                // RIGHT key - seek forward 10 seconds (only when no control has focus)
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    android.util.Log.d("MainActivity", "➡️ RIGHT key - hasControlFocus: $hasControlFocus, currentFocus: ${currentFocus?.javaClass?.simpleName}")
+                    if (!hasControlFocus && (selectedTab == "MOVIES" || selectedTab == "SHOWS" || isPlayingSeries)) {
+                        android.util.Log.d("MainActivity", "⏩ Seeking forward 10s")
+                        playerView.player?.let { player ->
+                            val newPos = (player.currentPosition + 10000).coerceAtMost(player.duration)
+                            player.seekTo(newPos)
+                            playerView.showController()
+                            return true
+                        }
+                    }
+                    // If control has focus, don't consume the event (let button handle it)
+                    android.util.Log.d("MainActivity", "➡️ Letting button handle RIGHT key navigation")
+                    return false
+                }
+                
+                // DOWN key - give focus to restart button if no control has focus
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (!hasControlFocus) {
+                        android.util.Log.d("MainActivity", "⬇️ DOWN key pressed, showing controls and giving focus")
+                        // Show controls first
+                        playerView.showController()
+                        // Give focus to restart button after delay
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            if (restartButton?.visibility == View.VISIBLE && restartButton.isFocusable) {
+                                val gotFocus = restartButton.requestFocus()
+                                android.util.Log.d("MainActivity", "🎯 Focus on restart button: $gotFocus")
+                            }
+                        }, 200)
+                        return true
+                    }
+                    return false
+                }
+                
+                // UP key - in Live TV, next channel; otherwise handle as normal
                 KeyEvent.KEYCODE_DPAD_UP -> {
                     if (selectedTab == "TV") {
-                        // Live TV: UP goes to next channel
                         liveTVManager?.playNextChannel()
                         return true
-                    } else {
-                        // VOD: focus restart button
-                        val restartButton = playerView.findViewById<ImageButton>(R.id.restart_button)
-                        restartButton?.requestFocus()
-                        return true
                     }
                 }
-                
-                // DOWN key - previous channel in Live TV
-                KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    if (selectedTab == "TV") {
-                        // Live TV: DOWN goes to previous channel
-                        liveTVManager?.playPreviousChannel()
-                        return true
-                    }
-                }
-                
-                // LEFT key - rewind 10 seconds
-                KeyEvent.KEYCODE_DPAD_LEFT -> {
-                    if (selectedTab == "MOVIES" || selectedTab == "SHOWS") {
-                        rewindButton?.performClick()
-                        return true
-                    }
-                }
-                
-                // RIGHT key - forward 10 seconds
-                KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    if (selectedTab == "MOVIES" || selectedTab == "SHOWS") {
-                        forwardButton?.performClick()
-                        return true
-                    }
-                }
-                
-                // CENTER/OK key - toggle play/pause with overlay
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                    playerView.player?.let { player ->
-                        if (player.isPlaying) {
-                            player.pause()
-                        } else {
-                            player.play()
-                        }
-                        showPlayPauseOverlay(true)
-                        return true
-                    }
-                }
+            }
+            
+            // Show controls on ANY key press if they're hidden (catch-all for all other keys)
+            if (!playerView.isControllerFullyVisible) {
+                android.util.Log.d("MainActivity", "🔑 Any key pressed in fullscreen, showing controls")
+                playerView.showController()
+                return true
             }
         }
         
@@ -3162,51 +4129,53 @@ class MainActivity : ComponentActivity() {
         
         android.util.Log.d("MainActivity", "Content type: $contentType")
         
-        // Get actual stream URL from backend API
+        // Get actual stream URL using direct Stalker portal call
         lifecycleScope.launch {
             try {
-                // For VOD content, we need to get movie info first
                 var finalCmd = rawCmd
+                
+                var streamUrl = ""
+                
+                // For VOD, first get file info to get the file ID, then call create_link
                 if (contentType == "vod") {
-                    android.util.Log.d("MainActivity", "VOD detected - getting movie info for ID: ${channel.id}")
+                    android.util.Log.d("MainActivity", "Getting VOD file info for movie ID: ${channel.id}")
                     try {
-                        val movieInfoResponse = ApiClient.apiService.getMovieInfo(
-                            mapOf(
-                                "mac" to ApiClient.macAddress,
-                                "url" to ApiClient.portalUrl,
-                                "movieId" to channel.id
-                            )
-                        )
-                        val fileInfo = movieInfoResponse.fileInfo
-                        if (fileInfo != null && fileInfo.id != null) {
-                            finalCmd = "/media/file_${fileInfo.id}.mpg"
-                            android.util.Log.d("MainActivity", "Got movie file info - new CMD: $finalCmd")
+                        val fileInfo = stalkerClient.getVodFileInfo(channel.id)
+                        if (fileInfo != null) {
+                            // Get the file ID from the response
+                            val fileId = fileInfo["id"] as? String
+                            if (fileId != null) {
+                                android.util.Log.d("MainActivity", "Got file ID: $fileId, calling create_link...")
+                                
+                                // Now call create_link with the file ID in the correct format
+                                val vodCmd = "/media/file_$fileId.mpg"
+                                val response = stalkerClient.getVodStreamUrl(vodCmd, "vod")
+                                streamUrl = response.url
+                                android.util.Log.d("MainActivity", "Got tokenized stream URL: $streamUrl")
+                            } else {
+                                android.util.Log.w("MainActivity", "No file ID in file info")
+                            }
                         } else {
-                            android.util.Log.w("MainActivity", "No file info found, using original CMD")
+                            android.util.Log.w("MainActivity", "No file info returned")
                         }
                     } catch (e: Exception) {
-                        android.util.Log.e("MainActivity", "Error getting movie info: ${e.message}")
-                        // Continue with original CMD
+                        android.util.Log.e("MainActivity", "Error getting file info: ${e.message}")
                     }
+                } else {
+                    // For live TV, use create_link
+                    android.util.Log.d("MainActivity", "Requesting stream URL with CMD: $finalCmd")
+                    val response = stalkerClient.getVodStreamUrl(finalCmd, contentType)
+                    streamUrl = response.url
                 }
-                
-                android.util.Log.d("MainActivity", "Requesting stream URL from API with CMD: $finalCmd")
-                val response = ApiClient.apiService.getStreamUrl(
-                    com.ronika.iptvnative.api.StreamUrlRequest(
-                        mac = ApiClient.macAddress,
-                        url = ApiClient.portalUrl,
-                        cmd = finalCmd,
-                        type = contentType
-                    )
-                )
-                
-                val streamUrl = response.url
                 android.util.Log.d("MainActivity", "Got stream URL: $streamUrl")
                 
                 if (streamUrl.isEmpty()) {
                     android.util.Log.e("MainActivity", "Received empty stream URL")
                     return@launch
                 }
+                
+                // Track stream URL for subtitle service
+                currentStreamUrl = streamUrl
                 
                 // Prepare media item first
                 val mediaItem = MediaItem.Builder()
@@ -3263,6 +4232,10 @@ class MainActivity : ComponentActivity() {
         // Pause players when app goes to background
         livePlayer?.pause()
         vodPlayer?.pause()
+        
+        // Stop subtitle polling and generation when paused
+        subtitlePollingJob?.cancel()
+        subtitleService?.stop()
     }
     
     override fun onStop() {
@@ -3270,7 +4243,399 @@ class MainActivity : ComponentActivity() {
         // Stop players when app is no longer visible
         livePlayer?.stop()
         vodPlayer?.stop()
+        
+        // Stop subtitle polling and generation
+        subtitlePollingJob?.cancel()
+        subtitleService?.stop()
     }
+    
+    // ===== SUBTITLE SERVICE FUNCTIONS =====
+    
+    /**
+     * Toggle live subtitles on/off
+     */
+    private fun toggleSubtitles() {
+        if (isSubtitlesEnabled) {
+            // Stop subtitles
+            subtitleService?.stop()
+            isSubtitlesEnabled = false
+            subtitleButton?.alpha = 0.5f  // Dim button
+            liveSubtitleText?.visibility = View.GONE
+            android.widget.Toast.makeText(this, "Subtitles disabled", android.widget.Toast.LENGTH_SHORT).show()
+        } else {
+            // Player reference tracked via currentStreamUrl
+            
+            // Start subtitles (no permission needed in demo mode)
+            startSubtitles()
+        }
+    }
+    
+    /**
+     * Start subtitle service
+     */
+    // Track when subtitle request was made for proper sync
+    private var subtitleRequestPosition: Long = 0
+    private var subtitleRequestTime: Long = 0
+    
+    private fun startSubtitles() {
+        isSubtitlesEnabled = true
+        subtitleButton?.alpha = 1.0f  // Full brightness
+        
+        // Auto-detect language
+        lifecycleScope.launch {
+            val streamUrl = currentStreamUrl
+            if (streamUrl == null) {
+                android.util.Log.e("MainActivity", "❌ Cannot start subtitles: No stream URL")
+                displaySubtitle("Error: No stream playing")
+                return@launch
+            }
+            
+            // Get current player position
+            val currentPlayer = if (livePlayer?.isPlaying == true) livePlayer else vodPlayer
+            if (currentPlayer == null) {
+                android.util.Log.e("MainActivity", "❌ Cannot start subtitles: No active player")
+                displaySubtitle("Error: No player active")
+                return@launch
+            }
+            
+            val currentPosition = currentPlayer.currentPosition
+            
+            // START FROM CURRENT POSITION: Backend generates 10 minutes of subtitles starting NOW
+            // Since whisper-cli is 4x faster than real-time, subtitles will be ready before player reaches them
+            // Example: Player at 5:00, request from 5:00, backend generates 5:00-15:00
+            //          After 2.5 minutes, all subtitles for 10 minutes are ready
+            val startPosition = currentPosition
+            
+            // Store request position and time for sync calculation
+            subtitleRequestPosition = startPosition
+            subtitleRequestTime = System.currentTimeMillis()
+            
+            val currentPositionSeconds = currentPosition / 1000
+            val startPositionSeconds = startPosition / 1000
+            
+            android.util.Log.d("MainActivity", "📺 ===== STARTING SUBTITLES =====")
+            android.util.Log.d("MainActivity", "📺 Stream URL: $streamUrl")
+            android.util.Log.d("MainActivity", "📺 Current Position: ${currentPosition}ms (${currentPositionSeconds}s)")
+            android.util.Log.d("MainActivity", "📺 Backend Start Position: ${startPosition}ms (${startPositionSeconds}s) [from current]")
+            android.util.Log.d("MainActivity", "📺 Request Time: $subtitleRequestTime")
+            android.util.Log.d("MainActivity", "📺 Player: ${if (livePlayer?.isPlaying == true) "LIVE" else "VOD"}")
+            android.util.Log.d("MainActivity", "📺 Backend: $backendUrl")
+            
+            val language = "auto"
+            subtitleService?.start(streamUrl, language, startPosition)
+            
+            android.util.Log.d("MainActivity", "✅ Subtitle service request sent, waiting for response...")
+        }
+        
+        android.widget.Toast.makeText(this, "Subtitles starting... (Backend: $backendUrl)", android.widget.Toast.LENGTH_SHORT).show()
+    }
+    
+    private val backendUrl = "192.168.2.69:8765"
+    
+    /**
+     * Handle subtitle events from service
+     */
+    @UnstableApi
+    private fun handleSubtitleEvent(event: SubtitleService.SubtitleEvent) {
+        runOnUiThread {
+            when (event) {
+                is SubtitleService.SubtitleEvent.Started -> {
+                    android.util.Log.d("MainActivity", "📺 Subtitles started: ${event.message}")
+                    displaySubtitle(event.message)
+                }
+                is SubtitleService.SubtitleEvent.TrackReady -> {
+                    val elapsedTime = System.currentTimeMillis() - subtitleRequestTime
+                    android.util.Log.d("MainActivity", "✅ Backend confirmed track ready: ${event.subtitleUrl}")
+                    android.util.Log.d("MainActivity", "📺 Elapsed time since request: ${elapsedTime}ms")
+                    android.util.Log.d("MainActivity", "📺 Starting manual subtitle polling...")
+                    startManualSubtitlePolling(event.subtitleUrl, elapsedTime)
+                }
+                is SubtitleService.SubtitleEvent.Subtitle -> {
+                    android.util.Log.d("MainActivity", "📺 Subtitle received: ${event.text}")
+                    displaySubtitle(event.text)
+                }
+                is SubtitleService.SubtitleEvent.Error -> {
+                    android.util.Log.e("MainActivity", "❌ Subtitle error: ${event.message}")
+                    displaySubtitle("Error: ${event.message}")
+                    isSubtitlesEnabled = false
+                    subtitleButton?.alpha = 0.5f
+                }
+                is SubtitleService.SubtitleEvent.Stopped -> {
+                    android.util.Log.d("MainActivity", "🛑 Subtitles stopped")
+                    liveSubtitleText?.visibility = View.GONE
+                }
+            }
+        }
+    }
+
+    @UnstableApi
+    private fun loadSubtitleTrack(subtitleUrl: String) {
+        try {
+            val currentPlayer = if (livePlayer?.isPlaying == true) livePlayer else vodPlayer
+            
+            if (currentPlayer == null) {
+                android.util.Log.e("MainActivity", "❌ Cannot load subtitle: no active player")
+                displaySubtitle("Error: Player not ready")
+                return
+            }
+            
+            android.util.Log.d("MainActivity", "📺 Loading subtitle track from: $subtitleUrl")
+            android.util.Log.d("MainActivity", "📺 Current position: ${currentPlayer.currentPosition}ms")
+            
+            // Get current media item
+            val currentMediaItem = currentPlayer.currentMediaItem
+            if (currentMediaItem == null) {
+                android.util.Log.e("MainActivity", "❌ No media item currently playing")
+                return
+            }
+            
+            // Save playback state
+            val currentPosition = currentPlayer.currentPosition
+            val isPlaying = currentPlayer.isPlaying
+            
+            android.util.Log.d("MainActivity", "📺 Creating subtitle configuration...")
+            
+            // Create subtitle configuration with proper flags
+            val subtitleConfig = MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitleUrl))
+                .setMimeType(MimeTypes.TEXT_VTT)
+                .setLanguage("en")
+                .setLabel("English")
+                .setSelectionFlags(C.SELECTION_FLAG_DEFAULT or C.SELECTION_FLAG_FORCED)
+                .build()
+            
+            // Create new media item with subtitle
+            val newMediaItem = currentMediaItem.buildUpon()
+                .setSubtitleConfigurations(listOf(subtitleConfig))
+                .build()
+            
+            android.util.Log.d("MainActivity", "📺 Reloading player with subtitle track...")
+            
+            // Reload media item preserving position
+            currentPlayer.setMediaItem(newMediaItem, currentPosition)
+            currentPlayer.prepare()
+            
+            if (isPlaying) {
+                currentPlayer.play()
+            }
+            
+            // Force subtitle track selection
+            lifecycleScope.launch {
+                kotlinx.coroutines.delay(500) // Wait for player to be ready
+                
+                val params = currentPlayer.trackSelectionParameters
+                currentPlayer.trackSelectionParameters = params
+                    .buildUpon()
+                    .setPreferredTextLanguage("en")
+                    .setSelectUndeterminedTextLanguage(true)
+                    .build()
+                
+                android.util.Log.d("MainActivity", "✅ Subtitle track selection parameters set")
+                android.util.Log.d("MainActivity", "📺 Track selection params: ${currentPlayer.trackSelectionParameters}")
+            }
+            
+            displaySubtitle("✅ Subtitles loading...")
+            
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "❌ Error loading subtitle track", e)
+            displaySubtitle("Error loading subtitles")
+        }
+    }
+    
+    /**
+     * Display subtitle text with auto-hide
+     */
+    private fun displaySubtitle(text: String) {
+        liveSubtitleText?.text = text
+        liveSubtitleText?.visibility = View.VISIBLE
+        
+        // Auto-hide after 4 seconds
+        liveSubtitleText?.removeCallbacks(hideSubtitleRunnable)
+        liveSubtitleText?.postDelayed(hideSubtitleRunnable, 4000)
+    }
+    
+    private var subtitlePollingJob: kotlinx.coroutines.Job? = null
+    private var parsedSubtitles: List<SubtitleCue> = emptyList()
+    
+    data class SubtitleCue(val startTimeMs: Long, val endTimeMs: Long, val text: String)
+    
+    /**
+     * Start polling VTT file and displaying subtitles manually
+     */
+    private fun startManualSubtitlePolling(subtitleUrl: String, backendProcessingTime: Long) {
+        // Cancel any existing polling
+        subtitlePollingJob?.cancel()
+        
+        android.util.Log.d("MainActivity", "🎬 Starting manual subtitle polling for: $subtitleUrl")
+        android.util.Log.d("MainActivity", "🎬 Backend processing time: ${backendProcessingTime}ms")
+        android.util.Log.d("MainActivity", "🎬 Subtitle base position: ${subtitleRequestPosition}ms")
+        
+        // Track last displayed subtitle to avoid redundant UI updates
+        var lastDisplayedText: String? = null
+        
+        // Ensure subtitle view is properly positioned above all UI elements
+        runOnUiThread {
+            liveSubtitleText?.apply {
+                elevation = 100f  // High elevation to ensure it's on top
+                bringToFront()
+            }
+        }
+        
+        subtitlePollingJob = lifecycleScope.launch {
+            var lastVttFetchTime = 0L
+            try {
+                while (isActive && isSubtitlesEnabled) {
+                    // Fetch and parse VTT file ONLY every 5 seconds (not every 100ms!)
+                    // This prevents performance degradation as VTT file grows
+                    val currentTime = System.currentTimeMillis()
+                    if (currentTime - lastVttFetchTime > 5000 || parsedSubtitles.isEmpty()) {
+                        try {
+                            val vttContent = fetchVttContent(subtitleUrl)
+                            val newParsedSubtitles = parseVtt(vttContent)
+                            // Only update if we got new subtitles (avoid flashing on empty parse)
+                            if (newParsedSubtitles.isNotEmpty()) {
+                                parsedSubtitles = newParsedSubtitles
+                                lastVttFetchTime = currentTime
+                                android.util.Log.d("MainActivity", "📝 Parsed ${parsedSubtitles.size} subtitle cues")
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("MainActivity", "❌ Failed to fetch/parse VTT from $subtitleUrl: ${e.message}", e)
+                            // Keep existing parsedSubtitles on error - don't clear them
+                        }
+                    }
+                    
+                    // Get current player position
+                    val currentPlayer = if (livePlayer?.isPlaying == true) livePlayer else vodPlayer
+                    val currentPlayerPosition = currentPlayer?.currentPosition ?: 0
+                    
+                    // ALWAYS AHEAD STRATEGY:
+                    // Keep subtitles ahead and only show when player catches up to that exact position
+                    // This ensures perfect sync - subtitles wait for the player
+                    
+                    val currentSubtitle = if (parsedSubtitles.isNotEmpty()) {
+                        // Find subtitle that matches player's EXACT position (no offset)
+                        // Only show when player reaches the subtitle's timestamp
+                        val matchingCue = parsedSubtitles.firstOrNull { cue ->
+                            currentPlayerPosition >= cue.startTimeMs && currentPlayerPosition < cue.endTimeMs
+                        }
+                        
+                        // Debug logging (log occasionally)
+                        if (System.currentTimeMillis() % 3000 < 500) {
+                            val firstCue = parsedSubtitles.first()
+                            val lastCue = parsedSubtitles.last()
+                            val nextCue = parsedSubtitles.firstOrNull { it.startTimeMs > currentPlayerPosition }
+                            val status = when {
+                                matchingCue != null -> "✅ SHOWING"
+                                currentPlayerPosition < firstCue.startTimeMs -> "⏸️ WAITING (${firstCue.startTimeMs - currentPlayerPosition}ms until first)"
+                                nextCue != null -> "⏸️ WAITING (${nextCue.startTimeMs - currentPlayerPosition}ms until next)"
+                                currentPlayerPosition > lastCue.endTimeMs -> "⏩ PAST END"
+                                else -> "🔍 SEARCHING"
+                            }
+                            android.util.Log.d("MainActivity", "Player: ${currentPlayerPosition}ms | VTT: ${firstCue.startTimeMs}-${lastCue.endTimeMs}ms | $status")
+                            if (matchingCue != null) {
+                                android.util.Log.d("MainActivity", "   ↳ \"${matchingCue.text}\" [${matchingCue.startTimeMs}-${matchingCue.endTimeMs}ms]")
+                            }
+                        }
+                        
+                        matchingCue
+                    } else {
+                        null
+                    }
+                    
+                    // Display subtitle if found - ONLY update UI when subtitle changes
+                    val newText = currentSubtitle?.text
+                    if (newText != lastDisplayedText) {
+                        lastDisplayedText = newText
+                        android.util.Log.d("MainActivity", "📺 Subtitle changed: ${newText ?: "(hidden)"}")
+                        runOnUiThread {
+                            if (currentSubtitle != null) {
+                                liveSubtitleText?.apply {
+                                    text = currentSubtitle.text
+                                    visibility = View.VISIBLE
+                                }
+                            } else {
+                                liveSubtitleText?.visibility = View.GONE
+                            }
+                        }
+                    }
+                    
+                    // Poll every 100ms for instant subtitle updates
+                    delay(100)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Subtitle polling error", e)
+            }
+        }
+    }
+    
+    private suspend fun fetchVttContent(url: String): String = withContext(kotlinx.coroutines.Dispatchers.IO) {
+        java.net.URL(url).readText()
+    }
+    
+    private fun parseVtt(vttContent: String): List<SubtitleCue> {
+        val cues = mutableListOf<SubtitleCue>()
+        val lines = vttContent.lines()
+        var i = 0
+        
+        while (i < lines.size) {
+            val line = lines[i].trim()
+            
+            // Look for timestamp line (e.g., "00:00:10.000 --> 00:00:13.000")
+            if (line.contains("-->")) {
+                val parts = line.split("-->").map { it.trim() }
+                if (parts.size == 2) {
+                    val startMs = parseVttTimestamp(parts[0])
+                    val endMs = parseVttTimestamp(parts[1])
+                    
+                    // Next line(s) are the subtitle text
+                    val textLines = mutableListOf<String>()
+                    i++
+                    while (i < lines.size && lines[i].trim().isNotEmpty() && !lines[i].contains("-->")) {
+                        textLines.add(lines[i].trim())
+                        i++
+                    }
+                    
+                    if (textLines.isNotEmpty()) {
+                        cues.add(SubtitleCue(startMs, endMs, textLines.joinToString(" ")))
+                    }
+                    continue
+                }
+            }
+            i++
+        }
+        
+        return cues
+    }
+    
+    private fun parseVttTimestamp(timestamp: String): Long {
+        // Parse format: "00:00:10.000" or "00:10.000"
+        val parts = timestamp.split(":")
+        return try {
+            when (parts.size) {
+                3 -> {
+                    val hours = parts[0].toLong()
+                    val minutes = parts[1].toLong()
+                    val seconds = parts[2].replace(",", ".").toDouble()
+                    (hours * 3600000 + minutes * 60000 + (seconds * 1000).toLong())
+                }
+                2 -> {
+                    val minutes = parts[0].toLong()
+                    val seconds = parts[1].replace(",", ".").toDouble()
+                    (minutes * 60000 + (seconds * 1000).toLong())
+                }
+                else -> 0L
+            }
+        } catch (e: Exception) {
+            0L
+        }
+    }
+    
+    private val hideSubtitleRunnable = Runnable {
+        if (!isSubtitlesEnabled) {
+            liveSubtitleText?.visibility = View.GONE
+        }
+    }
+    
+    // ===== LIFECYCLE =====
     
     override fun onDestroy() {
         super.onDestroy()
@@ -3280,6 +4645,15 @@ class MainActivity : ComponentActivity() {
         } catch (e: IllegalArgumentException) {
             // Receiver was not registered, ignore
         }
+        
+        // Stop subtitle polling
+        subtitlePollingJob?.cancel()
+        subtitlePollingJob = null
+        
+        // Cleanup subtitle service (this stops backend)
+        subtitleService?.stop()
+        subtitleService = null
+        
         liveTVManager?.cleanup()
         liveTVManager = null
         livePlayer?.release()
@@ -3347,5 +4721,9 @@ class MainActivity : ComponentActivity() {
             }
             .setCancelable(true)
             .show()
+    }
+    
+    private fun Int.dpToPx(context: android.content.Context): Int {
+        return (this * context.resources.displayMetrics.density).toInt()
     }
 }
