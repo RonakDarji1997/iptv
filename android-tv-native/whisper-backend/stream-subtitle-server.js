@@ -372,8 +372,8 @@ async function transcribeAudioFile(audioPath, language) {
     return new Promise((resolve, reject) => {
         const modelPath = path.join(__dirname, 'models', 'ggml-tiny.bin');
         const langParam = (language && language !== 'auto') ? language : 'en';
-        // Path to whisper.cpp binary (adjust if needed)
-        const whisperBin = path.join(__dirname, '..', 'whisper.cpp', 'main');
+            // Path to whisper.cpp binary (NAS: ./main in whisper-backend directory)
+            const whisperBin = path.join(__dirname, 'main');
 
         // whisper.cpp command: main -m <model> -f <audio> -l <lang> -otxt
         const whisperProcess = spawn(whisperBin, [
