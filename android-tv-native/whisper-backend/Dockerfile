@@ -1,17 +1,12 @@
 # Dockerfile for whisper-cli
-FROM ubuntu:22.04
+FROM python:3.10-slim
 
-# Install dependencies
-RUN apt-get update && \
-    apt-get install -y git build-essential wget python3 python3-pip
-
-# Install whisper-cli (adjust if you use a different binary)
-RUN pip3 install whisper-cli
-
-# Create directories for models and subtitles
+RUN apt-get update && apt-get install -y git build-essential wget && rm -rf /var/lib/apt/lists/*
+RUN pip install whisper-cli
 RUN mkdir -p /models /subtitles
 
 WORKDIR /subtitles
 
-# Default command
-CMD ["whisper-cli", "--help"]
+# Entrypoint and default command
+ENTRYPOINT ["whisper-cli"]
+CMD ["--help"]
