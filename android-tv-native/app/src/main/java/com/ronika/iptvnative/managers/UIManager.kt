@@ -148,11 +148,11 @@ class UIManager(
         if (logoUrl != null) {
             previewPoster.load(logoUrl) {
                 crossfade(200)
-                placeholder(android.R.drawable.ic_menu_gallery)
-                error(android.R.drawable.ic_menu_gallery)
+                placeholder(R.drawable.ic_movie_placeholder)
+                error(R.drawable.ic_movie_placeholder)
             }
         } else {
-            previewPoster.setImageResource(android.R.drawable.ic_menu_gallery)
+            previewPoster.setImageResource(R.drawable.ic_movie_placeholder)
         }
         
         // Hide movie-specific fields
@@ -184,8 +184,8 @@ class UIManager(
             detailPosterTextGrid.visibility = View.GONE
             detailPosterGrid.load(finalImageUrl) {
                 crossfade(200)
-                placeholder(android.R.drawable.ic_menu_gallery)
-                error(android.R.drawable.ic_menu_gallery)
+                placeholder(R.drawable.ic_movie_placeholder)
+                error(R.drawable.ic_movie_placeholder)
                 listener(
                     onError = { _, _ ->
                         detailPosterGrid.visibility = View.GONE
@@ -260,8 +260,8 @@ class UIManager(
             detailPosterText.visibility = View.GONE
             detailPoster.load(finalImageUrl) {
                 crossfade(200)
-                placeholder(android.R.drawable.ic_menu_gallery)
-                error(android.R.drawable.ic_menu_gallery)
+                placeholder(R.drawable.ic_movie_placeholder)
+                error(R.drawable.ic_movie_placeholder)
                 listener(
                     onError = { _, _ ->
                         detailPoster.visibility = View.GONE

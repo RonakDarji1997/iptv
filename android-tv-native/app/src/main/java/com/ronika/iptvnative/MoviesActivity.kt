@@ -8,8 +8,6 @@ import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.ronika.iptvnative.api.ApiClient
-import com.ronika.iptvnative.api.MoviesRequest
 import com.ronika.iptvnative.api.StalkerClient
 import com.ronika.iptvnative.models.Channel
 import com.ronika.iptvnative.models.Genre
@@ -56,23 +54,21 @@ class MoviesActivity : ComponentActivity() {
 
     private fun setupAdapter() {
         movieCategoryRowAdapter = MovieCategoryRowAdapter(
-            onMovieClick = { movie ->
-                // Play movie
-                val channel = Channel(
-                    id = movie.id,
-                    name = movie.name,
-                    number = "",
-                    logo = movie.getImageUrl() ?: "",
-                    cmd = movie.cmd ?: "",
-                    genreId = movie.categoryId
-                )
-                
-                // Start player activity
-                val intent = Intent(this, MainActivity::class.java).apply {
-                    putExtra("play_movie", true)
-                    putExtra("movie_id", channel.id)
-                    putExtra("movie_name", channel.name)
-                    putExtra("movie_cmd", channel.cmd)
+            onMovieClick = { movie, categoryId, categoryTitle ->
+                // Open movie detail
+                val intent = Intent(this, MovieDetailActivity::class.java).apply {
+                    putExtra("MOVIE_ID", movie.id)
+                    putExtra("MOVIE_NAME", movie.name)
+                    putExtra("POSTER_URL", movie.getImageUrl())
+                    putExtra("DESCRIPTION", movie.description ?: "")
+                    putExtra("ACTORS", movie.actors ?: "")
+                    putExtra("DIRECTOR", movie.director ?: "")
+                    putExtra("YEAR", movie.year ?: "")
+                    putExtra("COUNTRY", movie.country ?: "")
+                    putExtra("GENRES", movie.genresStr ?: "")
+                    putExtra("CMD", movie.cmd)
+                    putExtra("CATEGORY_ID", categoryId)
+                    putExtra("CATEGORY_TITLE", categoryTitle)
                 }
                 startActivity(intent)
             },

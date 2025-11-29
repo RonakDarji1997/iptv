@@ -12,7 +12,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.ronika.iptvnative.api.ApiClient
 import com.ronika.iptvnative.api.StalkerClient
 import com.ronika.iptvnative.api.ChannelsRequest
 import com.ronika.iptvnative.api.GenreRequest
@@ -484,6 +483,13 @@ class LiveTVManager(private val activity: MainActivity) {
         // Hide EPG section for now
         epgTimelineRecycler.visibility = View.GONE
         activity.findViewById<TextView>(R.id.epg_header)?.visibility = View.GONE
+    }
+    
+    fun stopPlayer() {
+        livePlayer?.apply {
+            stop()
+            clearMediaItems()
+        }
     }
     
     fun cleanup() {

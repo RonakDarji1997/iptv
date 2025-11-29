@@ -9,7 +9,6 @@ import androidx.cardview.widget.CardView
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
 import com.ronika.iptvnative.R
-import com.ronika.iptvnative.api.ApiClient
 import com.ronika.iptvnative.models.Episode
 
 class EpisodeHorizontalAdapter(
@@ -74,21 +73,20 @@ class EpisodeHorizontalAdapter(
             val fullUrl = if (imageUrl.startsWith("http")) {
                 imageUrl
             } else {
-                val cleanUrl = ApiClient.portalUrl.replace("/stalker_portal/?", "").replace("/stalker_portal", "")
-                "$cleanUrl$imageUrl"
+                "http://tv.stream4k.cc$imageUrl"
             }
             
             holder.thumbnail.load(fullUrl) {
                 crossfade(false) // Disable for performance
-                placeholder(R.drawable.placeholder_poster)
-                error(R.drawable.placeholder_poster)
+                placeholder(R.drawable.ic_movie_placeholder)
+                error(R.drawable.ic_movie_placeholder)
                 size(250, 375) // Resize for episodes
                 memoryCacheKey(fullUrl)
                 diskCacheKey(fullUrl)
                 allowHardware(true)
             }
         } else {
-            holder.thumbnail.setImageResource(R.drawable.placeholder_poster)
+            holder.thumbnail.setImageResource(R.drawable.ic_movie_placeholder)
         }
     }
 

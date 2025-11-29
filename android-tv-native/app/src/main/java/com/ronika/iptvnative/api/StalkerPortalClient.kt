@@ -147,8 +147,9 @@ class StalkerClient(
      * Get VOD categories (movies/series)
      */
     suspend fun getVodCategories(type: String = "vod"): GenresResponse = withContext(Dispatchers.IO) {
+        // Try without pagination first - some APIs return all data at once
         val url = "http://tv.stream4k.cc/stalker_portal/server/load.php?type=$type&action=get_categories&JsHttpRequest=1-xml"
-        
+
         val request = Request.Builder()
             .url(url)
             .get()
@@ -158,25 +159,39 @@ class StalkerClient(
             .addHeader("Cookie", "mac=00:1a:79:17:f4:f5; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722")
             .addHeader("Connection", "keep-alive")
             .build()
-        
+
         Log.d(TAG, "VOD categories request: ${request.method} ${request.url}")
-        
+
         val response = client.newCall(request).execute()
         val json = response.body?.string() ?: throw Exception("Empty response")
-        Log.d(TAG, "VOD categories response (truncated): ${json.take(500)}")
-        
+        Log.d(TAG, "VOD categories FULL response: $json")
+
         if (!response.isSuccessful) {
             throw Exception("HTTP ${response.code}: $json")
         }
-        
+
         val wrapper: Map<*, *> = gson.fromJson(json, Map::class.java)
         val jsData = wrapper["js"]
-        val genresJson = gson.toJson(jsData)
-        
-        GenresResponse(genres = gson.fromJson(genresJson, Array<Genre>::class.java).toList())
-    }
-    
-    /**
+
+        // Check if jsData is an array (direct categories) or an object (paginated structure)
+        val genres = if (jsData is List<*>) {
+            // Direct array format
+            val genresJson = gson.toJson(jsData)
+            gson.fromJson(genresJson, Array<Genre>::class.java).toList()
+        } else if (jsData is Map<*, *>) {
+            // Check for paginated structure
+            val data = jsData["data"] as? List<*> ?: jsData
+            val genresJson = gson.toJson(data)
+            gson.fromJson(genresJson, Array<Genre>::class.java).toList()
+        } else {
+            // Fallback
+            val genresJson = gson.toJson(jsData)
+            gson.fromJson(genresJson, Array<Genre>::class.java).toList()
+        }
+
+        Log.d(TAG, "Total categories fetched: ${genres.size}")
+        GenresResponse(genres = genres)
+    }    /**
      * Get VOD items (movies/series)
      */
     suspend fun getVodItems(categoryId: String, page: Int = 1, type: String = "vod"): ItemsResponse = withContext(Dispatchers.IO) {
@@ -316,8 +331,7 @@ class StalkerClient(
     }
     
     /**
-     * Get episode file info for playback (OLD - kept for compatibility)
-     * This is a simpler version that returns the first file directly
+     * Get episode file info for series playback
      */
     suspend fun getEpisodeFileInfo(seriesId: String, seasonId: String, episodeId: String): Map<String, Any>? = withContext(Dispatchers.IO) {
         val url = "http://tv.stream4k.cc/stalker_portal/server/load.php?action=get_ordered_list&type=vod&movie_id=$seriesId&season_id=$seasonId&episode_id=$episodeId&JsHttpRequest=1-xml"
@@ -341,5 +355,42 @@ class StalkerClient(
         val data = jsData?.get("data") as? List<*>
         
         data?.firstOrNull() as? Map<String, Any>
+    }
+    
+    /**
+     * Search for movies and series
+     */
+    suspend fun searchContent(query: String, page: Int = 1): ItemsResponse = withContext(Dispatchers.IO) {
+        val url = "http://tv.stream4k.cc/stalker_portal/server/load.php?action=get_ordered_list&type=vod&category=0&search=$query&sortby=name&p=$page&JsHttpRequest=1-xml"
+        
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .addHeader("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3")
+            .addHeader("X-User-Agent", "Model: MAG270; Link: WiFi")
+            .addHeader("Authorization", "Bearer 1E75E91204660B7A876055CE8830130E")
+            .addHeader("Cookie", "mac=00:1a:79:17:f4:f5; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722")
+            .addHeader("Connection", "keep-alive")
+            .build()
+        
+        val response = client.newCall(request).execute()
+        val json = response.body?.string() ?: throw Exception("Empty response")
+        Log.d(TAG, "Search response (truncated): ${json.take(500)}")
+        
+        // Stalker wraps in {"js": {"data": [...], "total_items": N}}
+        val wrapper: Map<*, *> = gson.fromJson(json, Map::class.java)
+        val jsData = wrapper["js"] as? Map<*, *> ?: throw Exception("No js data")
+        val itemsArray = jsData["data"] as? List<*> ?: emptyList<Any>()
+        val totalItems = (jsData["total_items"] as? String)?.toIntOrNull() ?: 0
+        
+        // Convert to expected format
+        val wrappedData = mutableMapOf<String, Any>()
+        val itemsData = mutableMapOf<String, Any>()
+        itemsData["data"] = itemsArray
+        itemsData["total"] = totalItems
+        wrappedData["items"] = itemsData
+        val itemsJson = gson.toJson(wrappedData)
+        
+        gson.fromJson(itemsJson, ItemsResponse::class.java)
     }
 }

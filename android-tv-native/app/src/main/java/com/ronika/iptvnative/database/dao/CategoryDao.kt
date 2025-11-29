@@ -24,6 +24,12 @@ interface CategoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(category: CategoryEntity)
     
+    // Alias for insertAll to match MainActivity usage
+    @Transaction
+    suspend fun insertCategories(categories: List<CategoryEntity>) {
+        insertAll(categories)
+    }
+    
     @Update
     suspend fun update(category: CategoryEntity)
     
@@ -32,6 +38,12 @@ interface CategoryDao {
     
     @Query("DELETE FROM categories")
     suspend fun deleteAll()
+    
+    // Alias for deleteAll to match MainActivity usage
+    @Transaction
+    suspend fun clearAllCategories() {
+        deleteAll()
+    }
     
     @Query("SELECT COUNT(*) FROM categories WHERE type = :type")
     suspend fun getCountByType(type: String): Int

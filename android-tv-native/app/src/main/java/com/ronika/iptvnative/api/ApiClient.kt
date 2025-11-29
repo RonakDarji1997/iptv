@@ -8,7 +8,9 @@ import java.util.concurrent.TimeUnit
 
 object ApiClient {
     // Backend API base URL (use actual IP for real devices, 10.0.2.2 for emulator)
-    private const val BASE_URL = "http://100.68.86.22:2005"
+    // For emulator: use 10.0.2.2 to reach localhost on your Mac
+    // For real device: use your computer's IP address on the network
+    private const val BASE_URL = "http://10.0.2.2:2005"
     
     // Stalker portal credentials
     var macAddress: String = "00:1A:79:XX:XX:XX"

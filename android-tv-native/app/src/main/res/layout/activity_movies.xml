@@ -14,7 +14,7 @@
         <!-- Sidebar Container (hidden to remove left spacing) -->
         <FrameLayout
             android:id="@+id/sidebar_frame"
-            android:layout_width="0dp"
+            android:layout_width="wrap_content"
             android:layout_height="match_parent"
             android:background="#09090b"
             android:visibility="gone">

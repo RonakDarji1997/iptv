@@ -43,20 +43,45 @@ android-tv-native/
    - Android Studio
    - Android SDK API 21-34
    - Java 17+
+   - Connected Android TV device or emulator
 
-2. **Build APK**:
+2. **Quick Build & Run** (Recommended):
    ```bash
    cd android-tv-native
-   ./gradlew assembleDebug
+   ./build-and-run.sh
    ```
+   This will build, install, and automatically launch the app on your connected device.
 
-3. **Install on Emulator**:
+3. **Manual Build & Install**:
    ```bash
-   # Start GoogleTV_ARM64_API34 emulator
-   adb install app/build/outputs/apk/debug/app-debug.apk
+   # Build APK
+   ./gradlew assembleDebug
+   
+   # Install on device
+   ./gradlew installDebug
+   
+   # Launch app
+   ./gradlew runApp
    ```
 
-## Testing Focus Behavior
+4. **Gradle Tasks Available**:
+   - `installAndRunDebug`: Build, install, and run debug version
+   - `installAndRunRelease`: Build, install, and run release version
+   - `runApp`: Just launch the app (if already installed)
+
+5. **Shell Aliases** (Optional):
+   Add these aliases to your `~/.zshrc` or `~/.bash_profile`:
+   ```bash
+   source /Users/ronika/Desktop/iptv/android-tv-native/aliases.sh
+   ```
+   
+   Then use:
+   - `iptv-dev`: Go to project and build/run automatically
+   - `iptv-build`: Just build the project
+   - `iptv-install`: Install current build on device
+   - `iptv-run`: Launch app on device
+
+## Device Setup
 
 1. Launch app on Android TV emulator
 2. Press **UP/DOWN** on D-pad → Tab should show white background + black text (hover state)

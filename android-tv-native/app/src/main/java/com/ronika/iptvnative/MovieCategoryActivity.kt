@@ -10,8 +10,6 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.ronika.iptvnative.adapters.MovieGridAdapter
-import com.ronika.iptvnative.api.ApiClient
-import com.ronika.iptvnative.api.MoviesRequest
 import com.ronika.iptvnative.api.StalkerClient
 import com.ronika.iptvnative.models.Channel
 import com.ronika.iptvnative.models.Movie
@@ -297,21 +295,147 @@ class MovieCategoryActivity : ComponentActivity() {
                 startActivity(intent)
             }
         } else {
-            android.util.Log.d("MovieCategoryActivity", "Playing movie: ${movie.name}")
+            android.util.Log.d("MovieCategoryActivity", "Opening movie detail: ${movie.name}")
             
-            // Launch MainActivity to play the movie
-            val intent = android.content.Intent(this, MainActivity::class.java).apply {
-                flags = android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP
-                putExtra("playMovie", true)
-                putExtra("movieId", movie.id)
-                putExtra("movieName", movie.name)
-                putExtra("movieCmd", movie.cmd ?: "")
-                putExtra("movieLogo", movie.getImageUrl() ?: "")
-                putExtra("categoryId", movie.categoryId)
+            // If movie data is incomplete, fetch full movie metadata from API
+            if (movie.description.isNullOrBlank() || movie.actors.isNullOrBlank()) {
+                // Check cache first
+                val cachedData = seriesMetadataCache[movie.id]
+                if (cachedData != null) {
+                    android.util.Log.d("MovieCategoryActivity", "Using cached movie metadata for: ${movie.name}")
+                    val name = cachedData["name"] as? String ?: movie.name
+                    val description = cachedData["description"] as? String ?: ""
+                    val actors = cachedData["actors"] as? String ?: ""
+                    val director = cachedData["director"] as? String ?: ""
+                    val year = cachedData["year"] as? String ?: ""
+                    val country = cachedData["country"] as? String ?: ""
+                    val genres = cachedData["genres_str"] as? String ?: ""
+                    val cmd = cachedData["cmd"] as? String ?: movie.cmd
+                    val screenshotUri = cachedData["screenshot_uri"] as? String
+                    val screenshot = cachedData["screenshot"] as? String
+                    
+                    val posterUrl = buildImageUrl(screenshotUri ?: screenshot ?: movie.getImageUrl()) ?: ""
+                    
+                    val intent = android.content.Intent(this, MovieDetailActivity::class.java).apply {
+                        putExtra("MOVIE_ID", movie.id)
+                        putExtra("MOVIE_NAME", name)
+                        putExtra("POSTER_URL", posterUrl)
+                        putExtra("DESCRIPTION", description)
+                        putExtra("ACTORS", actors)
+                        putExtra("DIRECTOR", director)
+                        putExtra("YEAR", year)
+                        putExtra("COUNTRY", country)
+                        putExtra("GENRES", genres)
+                        putExtra("CMD", cmd)
+                    }
+                    startActivity(intent)
+                    return
+                }
+                
+                android.util.Log.d("MovieCategoryActivity", "Fetching full movie metadata for: ${movie.name}")
+                lifecycleScope.launch {
+                    try {
+                        // Fetch full movie info using getVodFileInfo
+                        val fileInfo = withContext(Dispatchers.IO) {
+                            stalkerClient.getVodFileInfo(movie.id)
+                        }
+                        
+                        if (fileInfo != null) {
+                            // Cache the fetched data
+                            seriesMetadataCache[movie.id] = fileInfo
+                            
+                            // Extract metadata from file info
+                            val name = fileInfo["name"] as? String ?: movie.name
+                            val description = fileInfo["description"] as? String ?: ""
+                            val actors = fileInfo["actors"] as? String ?: ""
+                            val director = fileInfo["director"] as? String ?: ""
+                            val year = fileInfo["year"] as? String ?: ""
+                            val country = fileInfo["country"] as? String ?: ""
+                            val genres = fileInfo["genres_str"] as? String ?: ""
+                            val cmd = fileInfo["cmd"] as? String ?: movie.cmd
+                            val screenshotUri = fileInfo["screenshot_uri"] as? String
+                            val screenshot = fileInfo["screenshot"] as? String
+                            
+                            // Build proper image URL using the same method as MainActivity
+                            val posterUrl = buildImageUrl(screenshotUri ?: screenshot ?: movie.getImageUrl()) ?: ""
+                            android.util.Log.d("MovieCategoryActivity", "Fetched movie metadata - Poster: $posterUrl")
+                            
+                            val intent = android.content.Intent(this@MovieCategoryActivity, MovieDetailActivity::class.java).apply {
+                                putExtra("MOVIE_ID", movie.id)
+                                putExtra("MOVIE_NAME", name)
+                                putExtra("POSTER_URL", posterUrl)
+                                putExtra("DESCRIPTION", description)
+                                putExtra("ACTORS", actors)
+                                putExtra("DIRECTOR", director)
+                                putExtra("YEAR", year)
+                                putExtra("COUNTRY", country)
+                                putExtra("GENRES", genres)
+                                putExtra("CMD", cmd)
+                                putExtra("CATEGORY_ID", categoryId)
+                                putExtra("CATEGORY_TITLE", categoryTitle)
+                            }
+                            startActivity(intent)
+                        } else {
+                            // Fallback to movie data if API returns null
+                            val posterUrl = buildImageUrl(movie.getImageUrl()) ?: ""
+                            val intent = android.content.Intent(this@MovieCategoryActivity, MovieDetailActivity::class.java).apply {
+                                putExtra("MOVIE_ID", movie.id)
+                                putExtra("MOVIE_NAME", movie.name)
+                                putExtra("POSTER_URL", posterUrl)
+                                putExtra("DESCRIPTION", movie.description ?: "")
+                                putExtra("ACTORS", movie.actors ?: "")
+                                putExtra("DIRECTOR", movie.director ?: "")
+                                putExtra("YEAR", movie.year ?: "")
+                                putExtra("COUNTRY", movie.country ?: "")
+                                putExtra("GENRES", movie.genresStr ?: "")
+                                putExtra("CMD", movie.cmd)
+                                putExtra("CATEGORY_ID", categoryId)
+                                putExtra("CATEGORY_TITLE", categoryTitle)
+                            }
+                            startActivity(intent)
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("MovieCategoryActivity", "Error fetching movie metadata: ${e.message}", e)
+                        // Fallback to movie data
+                        val posterUrl = buildImageUrl(movie.getImageUrl()) ?: ""
+                        val intent = android.content.Intent(this@MovieCategoryActivity, MovieDetailActivity::class.java).apply {
+                            putExtra("MOVIE_ID", movie.id)
+                            putExtra("MOVIE_NAME", movie.name)
+                            putExtra("POSTER_URL", posterUrl)
+                            putExtra("DESCRIPTION", movie.description ?: "")
+                            putExtra("ACTORS", movie.actors ?: "")
+                            putExtra("DIRECTOR", movie.director ?: "")
+                            putExtra("YEAR", movie.year ?: "")
+                            putExtra("COUNTRY", movie.country ?: "")
+                            putExtra("GENRES", movie.genresStr ?: "")
+                            putExtra("CMD", movie.cmd)
+                            putExtra("CATEGORY_ID", categoryId)
+                            putExtra("CATEGORY_TITLE", categoryTitle)
+                        }
+                        startActivity(intent)
+                    }
+                }
+            } else {
+                // Use existing movie data
+                val posterUrl = buildImageUrl(movie.getImageUrl()) ?: ""
+                android.util.Log.d("MovieCategoryActivity", "Using cached data - Poster: $posterUrl")
+                
+                val intent = android.content.Intent(this, MovieDetailActivity::class.java).apply {
+                    putExtra("MOVIE_ID", movie.id)
+                    putExtra("MOVIE_NAME", movie.name)
+                    putExtra("POSTER_URL", posterUrl)
+                    putExtra("DESCRIPTION", movie.description ?: "")
+                    putExtra("ACTORS", movie.actors ?: "")
+                    putExtra("DIRECTOR", movie.director ?: "")
+                    putExtra("YEAR", movie.year ?: "")
+                    putExtra("COUNTRY", movie.country ?: "")
+                    putExtra("GENRES", movie.genresStr ?: "")
+                    putExtra("CMD", movie.cmd)
+                    putExtra("CATEGORY_ID", categoryId)
+                    putExtra("CATEGORY_TITLE", categoryTitle)
+                }
+                startActivity(intent)
             }
-            android.util.Log.d("MovieCategoryActivity", "Launching MainActivity with movie data: ${movie.name}")
-            startActivity(intent)
-            finish()
         }
     }
     

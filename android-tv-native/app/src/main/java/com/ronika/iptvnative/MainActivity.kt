@@ -37,10 +37,11 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
-import com.ronika.iptvnative.adapters.CategoryAdapter
+import coil.Coil
+import coil.request.ImageRequest
 import com.ronika.iptvnative.adapters.ChannelAdapter
 import com.ronika.iptvnative.adapters.ChannelRowAdapter
-import com.ronika.iptvnative.api.ApiClient
+import com.ronika.iptvnative.adapters.CategoryAdapter
 import com.ronika.iptvnative.services.SubtitleService
 import com.ronika.iptvnative.api.ChannelsRequest
 import com.ronika.iptvnative.api.GenreRequest
@@ -50,6 +51,8 @@ import com.ronika.iptvnative.models.Channel
 import com.ronika.iptvnative.models.Movie
 import com.ronika.iptvnative.models.Series
 import kotlinx.coroutines.launch
+import com.ronika.iptvnative.database.AppDatabase
+import com.ronika.iptvnative.database.entities.CategoryEntity
 import com.ronika.iptvnative.managers.NavigationManager
 import com.ronika.iptvnative.controllers.SidebarController
 
@@ -68,8 +71,17 @@ class MainActivity : ComponentActivity() {
     private lateinit var showsText: TextView
     private lateinit var profileNameText: TextView
 
+    // UI Components - Category Sidebar
+    private lateinit var categorySidebar: LinearLayout
+    private lateinit var categoryAdapter: CategoryAdapter
+    private lateinit var categoriesRecycler: RecyclerView
+    private lateinit var categoryHeaderText: TextView
+
     private lateinit var navigationManager: NavigationManager
     private var liveTVManager: LiveTVManager? = null
+    
+    // RoomDB instance
+    private lateinit var database: AppDatabase
     
     // Direct Stalker client for VOD (no backend, no DB, no handshake)
     private val stalkerClient: com.ronika.iptvnative.api.StalkerClient by lazy {
@@ -88,7 +100,13 @@ class MainActivity : ComponentActivity() {
     private val contentCache = mutableMapOf<String, CacheEntry<List<Channel>>>()
     private val seriesCache = mutableMapOf<String, CacheEntry<List<Series>>>() // Cache for series metadata
     private val genresCache = mutableMapOf<String, CacheEntry<List<Genre>>>()
-    private val CACHE_DURATION = 5 * 60 * 1000L // 5 minutes
+    private val movieCategoriesCache = mutableMapOf<String, CacheEntry<List<MovieCategoryRowAdapter.CategoryRow>>>()
+    private val seriesCategoriesCache = mutableMapOf<String, CacheEntry<List<MovieCategoryRowAdapter.CategoryRow>>>()
+    private val categoryTypeCache = mutableMapOf<String, CacheEntry<String>>() // Cache category type: "movie" or "series"
+    private val CACHE_DURATION = 2 * 60 * 60 * 1000L // 2 hours
+    
+    // Cache for movie/series metadata to avoid refetching
+    private val seriesMetadataCache = mutableMapOf<String, Map<String, Any>>()
     
     private fun <T> isCacheValid(entry: CacheEntry<T>?): Boolean {
         return entry != null && (System.currentTimeMillis() - entry.timestamp) < CACHE_DURATION
@@ -98,12 +116,45 @@ class MainActivity : ComponentActivity() {
         contentCache.clear()
         seriesCache.clear()
         genresCache.clear()
+        movieCategoriesCache.clear()
+        seriesCategoriesCache.clear()
+        categoryTypeCache.clear()
+    }
+    
+    private suspend fun determineCategoryType(categoryId: String): String {
+        // Check cache first
+        val cacheKey = "type_$categoryId"
+        val cachedType = categoryTypeCache[cacheKey]
+        if (isCacheValid(cachedType)) {
+            return cachedType!!.data
+        }
+        
+        // Sample first 2 items to determine type
+        return try {
+            val response = stalkerClient.getVodItems(
+                categoryId = categoryId,
+                page = 1,
+                type = "vod"
+            )
+            
+            val sampleItems = response.items.data.take(2)
+            val type = if (sampleItems.isNotEmpty()) {
+                val isSeriesValues = sampleItems.map { it.isSeries ?: "0" }
+                if (isSeriesValues.all { it == "0" }) "movie" else "series"
+            } else {
+                "movie" // Default to movie if no items
+            }
+            
+            // Cache the result
+            categoryTypeCache[cacheKey] = CacheEntry(type)
+            type
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error determining category type for $categoryId: ${e.message}")
+            "movie" // Default fallback
+        }
     }
     
     // UI Components - Sidebar
-    private lateinit var categorySidebar: LinearLayout
-    private lateinit var categoryHeaderText: TextView
-    private lateinit var categoriesRecycler: RecyclerView
     
     // UI Components - Content Area
     private lateinit var playerPreviewContainer: LinearLayout
@@ -189,6 +240,8 @@ class MainActivity : ComponentActivity() {
     private var currentPlayingIndex = 0
     private var isOnMainNavigation = true
     
+    // Adult content access tracking - REMOVED: Show adult content directly in rows
+    
     // Series playback tracking
     private var isPlayingSeries = false
     private var currentSeriesId: String? = null
@@ -208,13 +261,15 @@ class MainActivity : ComponentActivity() {
     private var currentEpisodeNumber: String? = null
     private var currentEpisodeName: String? = null
     
+    // Search tracking
+    private var cameFromSearch = false
+    
     // UI Components - Debug
     private lateinit var debugSelectedTab: TextView
     private lateinit var debugHoverTab: TextView
     private lateinit var debugSidebarState: TextView
     
     // Adapters
-    private lateinit var categoryAdapter: CategoryAdapter
     private lateinit var channelAdapter: ChannelAdapter
     private lateinit var channelRowAdapter: ChannelRowAdapter
     private lateinit var movieCategoryRowAdapter: MovieCategoryRowAdapter
@@ -282,18 +337,188 @@ class MainActivity : ComponentActivity() {
         // Keep screen on to prevent screensaver during playback
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         
-        // Set API credentials with actual values
-        // Using direct IP to bypass DNS issues (tv.stream4k.cc -> 172.66.167.27)
-        ApiClient.setCredentials(
-            mac = "00:1A:79:17:F4:F5",
-            portal = "http://172.66.167.27/stalker_portal/server/load.php"
-        )
+        // Disable focus animations globally for smoother navigation
+        window.decorView.systemUiVisibility = window.decorView.systemUiVisibility or
+            android.view.View.SYSTEM_UI_FLAG_LOW_PROFILE or
+            android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         
         // Initialize views (must be done first)
         initializeViews()
         
-        // Initialize user and database
-        initializeUser()
+        // Setup adapters early to prevent lateinit crashes
+        setupAdapters()
+        
+        // Initialize database
+        database = AppDatabase.getDatabase(this)
+        android.util.Log.d("MainActivity", "Database initialized")
+        
+        // Debug: Log all intent extras in onCreate
+        android.util.Log.d("MainActivity", "===== onCreate INTENT EXTRAS =====")
+        intent?.extras?.keySet()?.forEach { key ->
+            android.util.Log.d("MainActivity", "onCreate Extra '$key': ${intent.getStringExtra(key)}")
+        }
+        android.util.Log.d("MainActivity", "===================================")
+        
+        // Create user with hardcoded credentials
+        // Using direct IP to bypass DNS issues (tv.stream4k.cc -> 172.66.167.27)
+        lifecycleScope.launch {
+            try {
+                val userDao = database.userDao()
+                val existingUser = userDao.getUser()
+                if (existingUser == null) {
+                    val user = com.ronika.iptvnative.database.entities.UserEntity(
+                        username = "admin",
+                        email = "admin@stream4k.cc",
+                        portalUrl = "http://tv.stream4k.cc",
+                        mac = "00:1a:79:17:f4:f5",
+                        bearerToken = "1E75E91204660B7A876055CE8830130E",
+                        tokenExpiry = System.currentTimeMillis() + (24 * 60 * 60 * 1000L) // 24 hours from now
+                    )
+                    userDao.insertUser(user)
+                    android.util.Log.d("MainActivity", "✅ User created with hardcoded credentials")
+                } else {
+                    android.util.Log.d("MainActivity", "ℹ️ User already exists in database")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "❌ Error creating user: ${e.message}", e)
+            }
+        }
+        
+        // Create user with hardcoded credentials
+        // Using direct IP to bypass DNS (tv.stream4k.cc -> 172.66.167.27)
+        lifecycleScope.launch {
+            try {
+                val userDao = database.userDao()
+                val existingUser = userDao.getUser()
+                if (existingUser == null) {
+                    val user = com.ronika.iptvnative.database.entities.UserEntity(
+                        username = "admin",
+                        email = "admin@stream4k.cc",
+                        portalUrl = "http://tv.stream4k.cc",
+                        mac = "00:1a:79:17:f4:f5",
+                        bearerToken = "1E75E91204660B7A876055CE8830130E",
+                        tokenExpiry = System.currentTimeMillis() + (24 * 60 * 60 * 1000L) // 24 hours from now
+                    )
+                    userDao.insertUser(user)
+                    android.util.Log.d("MainActivity", "✅ User created with hardcoded credentials")
+                } else {
+                    android.util.Log.d("MainActivity", "ℹ️ User already exists in database")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "❌ Error creating user: ${e.message}", e)
+            }
+        }
+        
+        // Pre-load categories on app startup (save ALL categories without filtering) - only if database is empty
+        android.util.Log.d("MainActivity", "🚀 STARTING category pre-loading check on app startup...")
+        lifecycleScope.launch {
+            try {
+                val categoryDao = database.categoryDao()
+                
+                // Check if categories already exist in database
+                val existingCategories = categoryDao.getAllCategories()
+                android.util.Log.d("MainActivity", "📊 Found ${existingCategories.size} existing categories in database")
+                
+                if (existingCategories.isNotEmpty()) {
+                    android.util.Log.d("MainActivity", "✅ Categories already exist in database - skipping pre-loading")
+                    return@launch
+                }
+                
+                android.util.Log.d("MainActivity", "🚀 Database is empty - starting category pre-loading...")
+                
+                // Clear any existing categories to ensure we get fresh data
+                android.util.Log.d("MainActivity", "🧹 Clearing existing categories...")
+                categoryDao.clearAllCategories()
+                android.util.Log.d("MainActivity", "✅ Categories cleared successfully")
+                
+                android.util.Log.d("MainActivity", "🔄 Fetching categories from API...")
+
+                // Fetch categories from multiple API types to get all 78 categories
+                val apiTypes = listOf("vod", "itv", "tv", "radio")
+                val allGenres = mutableListOf<Genre>()
+
+                android.util.Log.d("MainActivity", "📥 Fetching categories from types: $apiTypes")
+
+                for (type in apiTypes) {
+                    try {
+                        android.util.Log.d("MainActivity", "📥 Fetching $type categories...")
+                        val response = stalkerClient.getVodCategories(type = type)
+                        android.util.Log.d("MainActivity", "📥 Got ${response.genres.size} $type categories")
+                        allGenres.addAll(response.genres)
+                    } catch (e: Exception) {
+                        android.util.Log.w("MainActivity", "⚠️ Failed to fetch $type categories: ${e.message}")
+                        // Continue with other types
+                    }
+                }
+
+                android.util.Log.d("MainActivity", "📥 Total categories from all types: ${allGenres.size}")
+
+                // Remove duplicates based on ID
+                val uniqueGenres = allGenres.distinctBy { it.id }
+                android.util.Log.d("MainActivity", "📥 Unique categories after deduplication: ${uniqueGenres.size}")
+
+                // Process ALL categories without any filtering
+                val allCategories = uniqueGenres.filter { genre ->
+                    val hasValidId = genre.id.toIntOrNull() != null
+                    hasValidId
+                }
+                
+                android.util.Log.d("MainActivity", "✅ Processing and saving all ${allCategories.size} categories (no adult content filtering applied)")
+                
+                // Determine category types in parallel
+                android.util.Log.d("MainActivity", "🔍 Determining category types in parallel for ${allCategories.size} categories...")
+                val typeTasks = allCategories.map { category ->
+                    async {
+                        android.util.Log.d("MainActivity", "🔍 Determining type for category: ${category.title ?: category.name}")
+                        val type = determineCategoryType(category.id)
+                        android.util.Log.d("MainActivity", "✅ Category ${category.title ?: category.name} is type: $type")
+                        category to type
+                    }
+                }
+                
+                val categoryTypes = typeTasks.awaitAll().toMap()
+                android.util.Log.d("MainActivity", "✅ All category types determined: ${categoryTypes.values.groupingBy { it }.eachCount()}")
+                
+                // Create category entities
+                android.util.Log.d("MainActivity", "🏗️ Creating category entities...")
+                val categoryEntities = allCategories.map { category ->
+                    val contentType = categoryTypes[category] ?: "unknown"
+                    android.util.Log.d("MainActivity", "🏗️ Creating entity for: ${category.title ?: category.name} (type: $contentType)")
+                    com.ronika.iptvnative.database.entities.CategoryEntity(
+                        id = java.util.UUID.randomUUID().toString(),
+                        externalId = category.id,
+                        name = category.title ?: category.name ?: "Unknown",
+                        contentType = contentType,
+                        censored = category.censored ?: 0,
+                        type = if (contentType == "movie") "MOVIE" else "SERIES",
+                        lastUpdated = System.currentTimeMillis()
+                    )
+                }
+                
+                // Save all categories to database
+                android.util.Log.d("MainActivity", "💾 Saving ${categoryEntities.size} categories to database...")
+                if (categoryEntities.isNotEmpty()) {
+                    categoryDao.insertCategories(categoryEntities)
+                    android.util.Log.d("MainActivity", "💾 Saved ${categoryEntities.size} categories to database")
+                    
+                    // Log breakdown by type
+                    val movieCount = categoryEntities.count { it.contentType == "movie" }
+                    val seriesCount = categoryEntities.count { it.contentType == "series" }
+                    android.util.Log.d("MainActivity", "📊 Categories saved: $movieCount movies, $seriesCount series")
+                } else {
+                    android.util.Log.w("MainActivity", "⚠️ No categories to save")
+                }
+                
+                android.util.Log.d("MainActivity", "🎉 Pre-loading categories completed successfully!")
+                
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "❌ Error pre-loading categories: ${e.message}", e)
+                android.util.Log.e("MainActivity", "❌ Stack trace:", e)
+            }
+        }
+        
+        // Debug: Check database contents after initialization
+        checkDatabaseContents()
         
         // Setup modern back press handling
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
@@ -309,14 +534,34 @@ class MainActivity : ComponentActivity() {
             return // Skip normal UI setup
         }
         
+        // Check if we're launching to play a movie from MovieDetailActivity
+        if (playType == "movie") {
+            handleMoviePlayback()
+            return // Skip normal UI setup
+        }
+        
         // Check if we're launching to play a movie from MovieCategoryActivity
         if (intent.getBooleanExtra("playMovie", false)) {
             handleMoviePlaybackIntent(intent)
         }
         
-        // Setup adapters
-        setupAdapters()
-        
+        // Check if we're launching to play a movie from search
+        if (intent.getBooleanExtra("PLAY_MOVIE_FROM_SEARCH", false)) {
+            handleMovieFromSearchIntent(intent)
+        }
+
+        // Check if we're launching with a specific tab selection
+        val selectTab = intent.getStringExtra("SELECT_TAB")
+        if (selectTab != null) {
+            android.util.Log.d("MainActivity", "SELECT_TAB intent received: $selectTab")
+            when (selectTab.uppercase()) {
+                "TV" -> switchTab("TV")
+                "MOVIES" -> switchTab("MOVIES")
+                "SHOWS" -> switchTab("SHOWS")
+                else -> android.util.Log.w("MainActivity", "Unknown SELECT_TAB value: $selectTab")
+            }
+        }
+
         // Setup listeners (keep logic outside of MainActivity for clarity)
         setupTabListeners()
         setupFocusListeners()
@@ -334,7 +579,13 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent) // Update the activity's intent
-        
+
+        android.util.Log.d("MainActivity", "===== onNewIntent CALLED =====")
+        android.util.Log.d("MainActivity", "Intent extras: ${intent?.extras?.keySet()?.joinToString()}")
+        intent?.extras?.keySet()?.forEach { key ->
+            android.util.Log.d("MainActivity", "Extra '$key': ${intent.getStringExtra(key)}")
+        }
+
         // Check if this is a series playback intent
         val playType = intent?.getStringExtra("PLAY_TYPE")
         if (playType == "series") {
@@ -342,11 +593,43 @@ class MainActivity : ComponentActivity() {
             handleSeriesPlayback()
             return
         }
-        
+
+        // Check if this is a movie playback intent
+        if (playType == "movie") {
+            android.util.Log.d("MainActivity", "onNewIntent: Movie playback requested")
+            handleMoviePlayback()
+            return
+        }
+
         // Handle movie playback if launched with movie data
         if (intent?.getBooleanExtra("playMovie", false) == true) {
             android.util.Log.d("MainActivity", "onNewIntent: Movie playback requested")
             handleMoviePlaybackIntent(intent)
+        }
+
+        // Handle movie playback if launched from search
+        if (intent?.getBooleanExtra("PLAY_MOVIE_FROM_SEARCH", false) == true) {
+            android.util.Log.d("MainActivity", "onNewIntent: Movie from search playback requested")
+            handleMovieFromSearchIntent(intent)
+        }
+
+        // Handle returning from search - show sidebar
+        if (intent?.getBooleanExtra("SHOW_SIDEBAR_FROM_SEARCH", false) == true) {
+            android.util.Log.d("MainActivity", "onNewIntent: Returning from search - showing sidebar")
+            showSidebarFromSearch()
+            return  // Return early to avoid other processing
+        }
+
+        // Handle tab selection from intent
+        val selectTab = intent?.getStringExtra("SELECT_TAB")
+        if (selectTab != null) {
+            android.util.Log.d("MainActivity", "onNewIntent: SELECT_TAB received: $selectTab")
+            when (selectTab.uppercase()) {
+                "TV" -> switchTab("TV")
+                "MOVIES" -> switchTab("MOVIES")
+                "SHOWS" -> switchTab("SHOWS")
+                else -> android.util.Log.w("MainActivity", "onNewIntent: Unknown SELECT_TAB value: $selectTab")
+            }
         }
     }
     
@@ -493,6 +776,169 @@ class MainActivity : ComponentActivity() {
         }
     }
     
+    private fun handleMoviePlayback() {
+        android.util.Log.d("MainActivity", "===== handleMoviePlayback CALLED =====")
+
+        val movieId = intent.getStringExtra("MOVIE_ID")
+        val movieName = intent.getStringExtra("MOVIE_NAME")
+        val movieCmd = intent.getStringExtra("CMD")
+        val movieLogo = intent.getStringExtra("POSTER_URL")
+        val categoryId = "" // Not needed for movie playback from detail
+
+        android.util.Log.d("MainActivity", "handleMoviePlayback - MOVIE_ID: $movieId")
+        android.util.Log.d("MainActivity", "handleMoviePlayback - MOVIE_NAME: $movieName")
+        android.util.Log.d("MainActivity", "handleMoviePlayback - CMD: $movieCmd")
+        android.util.Log.d("MainActivity", "handleMoviePlayback - POSTER_URL: $movieLogo")
+
+        if (movieId.isNullOrEmpty()) {
+            android.util.Log.e("MainActivity", "handleMoviePlayback - ERROR: movieId is null or empty!")
+            return
+        }
+        if (movieName.isNullOrEmpty()) {
+            android.util.Log.e("MainActivity", "handleMoviePlayback - ERROR: movieName is null or empty!")
+            return
+        }
+        if (movieCmd.isNullOrEmpty()) {
+            android.util.Log.e("MainActivity", "handleMoviePlayback - ERROR: movieCmd is null or empty!")
+            return
+        }
+
+        android.util.Log.d("MainActivity", "handleMoviePlayback - All required extras present, proceeding...")
+        android.util.Log.d("MainActivity", "Movie: $movieName")
+        android.util.Log.d("MainActivity", "ID: $movieId, CMD: $movieCmd")
+
+        // Set selected tab to MOVIES for proper control behavior
+        selectedTab = "MOVIES"
+
+        // Set up fullscreen UI for movie playback (same as series)
+        android.util.Log.d("MainActivity", "Setting up fullscreen for movie")
+        sidebarContainer.visibility = View.GONE
+        categorySidebar.visibility = View.GONE
+        contentHeader.visibility = View.GONE
+        contentListContainer.visibility = View.GONE
+        previewPanel.visibility = View.GONE
+        movieDetailsHeaderGrid.visibility = View.GONE
+
+        // Make player/preview container take full screen
+        playerPreviewContainer.visibility = View.VISIBLE
+        val containerParams = playerPreviewContainer.layoutParams as LinearLayout.LayoutParams
+        containerParams.weight = 1.0f
+        playerPreviewContainer.layoutParams = containerParams
+
+        // Show player in full screen
+        playerContainer.visibility = View.VISIBLE
+        val params = playerContainer.layoutParams as LinearLayout.LayoutParams
+        params.weight = 1.0f
+        playerContainer.layoutParams = params
+
+        // Ensure PlayerView is visible
+        playerView.visibility = View.VISIBLE
+
+        // Set fullscreen flag
+        isFullscreen = true
+
+        lifecycleScope.launch {
+            try {
+                android.util.Log.d("MainActivity", "Starting movie playback process")
+
+                // Step 1: Get file info for the movie
+                android.util.Log.d("MainActivity", "Getting file info for movie: $movieId")
+                val fileInfo = withContext(Dispatchers.IO) {
+                    stalkerClient.getVodFileInfo(movieId)
+                }
+
+                if (fileInfo != null) {
+                    android.util.Log.d("MainActivity", "Got file info: $fileInfo")
+
+                    // Get the file ID from the response
+                    val fileId = fileInfo["id"] as? String
+
+                    if (fileId != null) {
+                        android.util.Log.d("MainActivity", "Got file ID: $fileId")
+
+                        // Step 2: Construct the cmd parameter as /media/file_{id}.mpg
+                        val cmd = "/media/file_${fileId}.mpg"
+                        android.util.Log.d("MainActivity", "Constructed cmd: $cmd")
+
+                        // Step 3: Call create_link with the file cmd to get authenticated streaming URL
+                        android.util.Log.d("MainActivity", "Calling create_link to get authenticated stream URL")
+                        val streamUrlResponse = stalkerClient.getVodStreamUrl(cmd, type = "vod")
+                        val streamUrl = streamUrlResponse.url
+                        currentStreamUrl = streamUrl  // Track for subtitle service
+
+                        android.util.Log.d("MainActivity", "Got authenticated stream URL: $streamUrl")
+
+                        // Play the movie with authenticated URL
+                        playMovie(streamUrl, movieName)
+                    } else {
+                        android.util.Log.e("MainActivity", "No file ID in file info")
+                        Toast.makeText(this@MainActivity, "Failed to get file ID", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    android.util.Log.e("MainActivity", "No file info returned for movie")
+                    android.widget.Toast.makeText(this@MainActivity, "Movie not available", android.widget.Toast.LENGTH_SHORT).show()
+                    finish()
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Error loading movie", e)
+                android.widget.Toast.makeText(this@MainActivity, "Failed to load movie: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                finish()
+            }
+        }
+    }
+    
+    private fun handleMovieFromSearchIntent(intent: android.content.Intent) {
+        val movieId = intent.getStringExtra("MOVIE_ID") ?: return
+        val movieName = intent.getStringExtra("MOVIE_NAME") ?: return
+        val movieCmd = intent.getStringExtra("MOVIE_CMD") ?: return
+        val moviePoster = intent.getStringExtra("MOVIE_POSTER") ?: ""
+        
+        android.util.Log.d("MainActivity", "===== Movie playback from search =====")
+        android.util.Log.d("MainActivity", "Movie: $movieName")
+        android.util.Log.d("MainActivity", "ID: $movieId, CMD: $movieCmd")
+        
+        // Mark that we came from search
+        cameFromSearch = true
+        
+        // Switch to MOVIES tab first
+        selectedTab = "MOVIES"
+        
+        // Create channel object and play
+        val channel = Channel(
+            id = movieId,
+            name = movieName,
+            number = "",
+            logo = moviePoster,
+            cmd = movieCmd,
+            genreId = "" // No category ID from search
+        )
+        
+        // Play the movie using existing function
+        lifecycleScope.launch {
+            // Small delay to ensure UI is ready
+            kotlinx.coroutines.delay(100)
+            showMovieFullscreen(channel)
+        }
+    }
+    
+    private fun showSidebarFromSearch() {
+        android.util.Log.d("MainActivity", "showSidebarFromSearch: Showing sidebar after returning from search")
+        
+        // Show the sidebar container
+        sidebarContainer.visibility = View.VISIBLE
+        
+        // Expand the sidebar to show navigation items
+        navigationManager.expandSidebar()
+        
+        // Set focus to the search button since we just came from search
+        searchButton.requestFocus()
+        
+        // Reset the cameFromSearch flag
+        cameFromSearch = false
+        
+        android.util.Log.d("MainActivity", "✅ Sidebar shown and focus set to search button")
+    }
+    
     private fun playSeriesEpisode(streamUrl: String, title: String, seasonNumber: String, episodeNumber: String) {
         android.util.Log.d("MainActivity", "===== playSeriesEpisode CALLED =====")
         android.util.Log.d("MainActivity", "Playing series episode: $title")
@@ -561,17 +1007,108 @@ class MainActivity : ComponentActivity() {
             android.util.Log.e("MainActivity", "Error playing series episode: ${e.message}", e)
         }
     }
-    
+
+    private fun playMovie(streamUrl: String, title: String) {
+        android.util.Log.d("MainActivity", "🎬 playMovie called with title: $title")
+        android.util.Log.d("MainActivity", "Stream URL: $streamUrl")
+
+        try {
+            // Stop all other players first
+            android.util.Log.d("MainActivity", "Stopping all players...")
+            livePlayer?.apply {
+                stop()
+                clearMediaItems()
+            }
+            vodPlayer?.apply {
+                stop()
+                clearMediaItems()
+            }
+
+            // Use VOD player for movies
+            val targetPlayer = vodPlayer
+            android.util.Log.d("MainActivity", "Using VOD player for movie playback")
+
+            // Set up movie playback state
+            isPlayingSeries = false
+            currentSeriesId = null
+            currentSeriesName = null
+            currentSeriesPosterUrl = null
+            currentSeriesDescription = null
+            currentSeriesActors = null
+            currentSeriesDirector = null
+            currentSeriesYear = null
+            currentSeriesCountry = null
+            currentSeriesGenres = null
+            currentSeriesTotalSeasons = null
+            currentSeasonId = null
+            currentSeasonNumber = null
+            currentEpisodeId = null
+            currentEpisodeNumber = null
+            currentEpisodeName = null
+
+            // Track current movie info
+            currentPlayingChannel = Channel(
+                id = "movie",
+                name = title,
+                number = "",
+                logo = "",
+                cmd = "",
+                genreId = ""
+            )
+
+            targetPlayer?.apply {
+                currentStreamUrl = streamUrl  // Track for subtitle service
+                android.util.Log.d("MainActivity", "Setting new media item...")
+                val mediaItem = MediaItem.fromUri(streamUrl)
+                setMediaItem(mediaItem)
+                android.util.Log.d("MainActivity", "Preparing player...")
+                prepare()
+            }
+
+            // Switch PlayerView to the VOD player AFTER preparing media
+            playerView.player = targetPlayer
+            android.util.Log.d("MainActivity", "Switched PlayerView to VOD player")
+
+            // Start playback
+            targetPlayer?.apply {
+                android.util.Log.d("MainActivity", "Starting playback...")
+                playWhenReady = true
+            }
+
+            // Update player controls based on content type
+            android.util.Log.d("MainActivity", "Calling updatePlayerControlsForContentType()")
+            updatePlayerControlsForContentType()
+
+            // Show player controller to display custom controls
+            android.util.Log.d("MainActivity", "Calling showController()")
+            playerView.showController()
+
+            // Update episode navigation visibility (should hide next button for movies)
+            android.util.Log.d("MainActivity", "Calling updateEpisodeNavigationVisibility()")
+            updateEpisodeNavigationVisibility()
+
+            // Log control visibility after setup
+            val restartBtn = playerView.findViewById<ImageButton>(R.id.restart_button)
+            val nextBtn = playerView.findViewById<ImageButton>(R.id.next_button)
+            val progressBar = playerView.findViewById<LinearLayout>(R.id.progress_bar_container)
+            val bottomControls = playerView.findViewById<LinearLayout>(R.id.bottom_controls_container)
+            android.util.Log.d("MainActivity", "Controls after setup - restart: ${restartBtn?.visibility}, next: ${nextBtn?.visibility}, progress: ${progressBar?.visibility}, bottom: ${bottomControls?.visibility}")
+
+            android.util.Log.d("MainActivity", "Movie started successfully")
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error playing movie: ${e.message}", e)
+        }
+    }
+
     private fun initializeViews() {
         // Top Navigation
         searchButton = findViewById(R.id.search_button)
         tvTab = findViewById(R.id.tab_tv)
         moviesTab = findViewById(R.id.tab_movies)
         showsTab = findViewById(R.id.tab_shows)
-        sidebarContainer = findViewById(R.id.sidebar_container)
+        sidebarContainer = findViewById<LinearLayout>(R.id.sidebar_container)
         
         // Sidebar
-        categorySidebar = findViewById(R.id.category_sidebar)
         val sidebarDivider = findViewById<View>(R.id.sidebar_divider)
         // labels for expand/collapse
         searchText = findViewById(R.id.search_text)
@@ -581,6 +1118,7 @@ class MainActivity : ComponentActivity() {
         profileNameText = findViewById(R.id.profile_name)
         categoryHeaderText = findViewById(R.id.category_header_text)
         categoriesRecycler = findViewById(R.id.categories_recycler)
+        categorySidebar = findViewById<LinearLayout>(R.id.category_sidebar)
         
         // Content Area
         playerPreviewContainer = findViewById(R.id.player_preview_container)
@@ -673,33 +1211,33 @@ class MainActivity : ComponentActivity() {
         // Initialize navigation manager (handles expand/collapse and styles)
         val sidebarFrame = findViewById<View>(R.id.sidebar_frame)
         navigationManager = NavigationManager(
-            tvTab,
-            moviesTab,
-            showsTab,
-            sidebarFrame,
-            sidebarContainer,
-            categorySidebar,
-            sidebarDivider,
-            searchText,
-            tvText,
-            moviesText,
-            showsText,
-            profileNameText
+            tvTab = tvTab,
+            moviesTab = moviesTab,
+            showsTab = showsTab,
+            sidebarFrame = sidebarFrame,
+            sidebarContainer = sidebarContainer,
+            sidebarDivider = sidebarDivider,
+            searchLabel = searchText,
+            tvLabel = tvText,
+            moviesLabel = moviesText,
+            showsLabel = showsText,
+            profileNameLabel = profileNameText,
+            categorySidebar = categorySidebar
         )
 
         // Create SidebarController to keep MainActivity slim and move focus wiring
         val sidebarController = SidebarController(
-            sidebarContainer,
-            searchButton,
-            tvTab,
-            moviesTab,
-            showsTab,
-            searchText,
-            tvText,
-            moviesText,
-            showsText,
-            profileNameText,
-            navigationManager
+            sidebarContainer = sidebarContainer,
+            searchButton = searchButton,
+            tvTab = tvTab,
+            moviesTab = moviesTab,
+            showsTab = showsTab,
+            searchLabel = searchText,
+            tvLabel = tvText,
+            moviesLabel = moviesText,
+            showsLabel = showsText,
+            profileNameLabel = profileNameText,
+            navigationManager = navigationManager
         )
         sidebarController.setup()
 
@@ -1424,7 +1962,7 @@ class MainActivity : ComponentActivity() {
         val isLive = if (isPlayingSeries) {
             false
         } else {
-            selectedTab == "TV" || currentPlayingChannel?.isLive == true
+            currentPlayingChannel?.isLive == true
         }
         android.util.Log.d("MainActivity", "isLive: $isLive, selectedTab: $selectedTab, isFullscreen: $isFullscreen, isPlayingSeries: $isPlayingSeries")
         
@@ -1551,17 +2089,295 @@ class MainActivity : ComponentActivity() {
         
         // Netflix-style Movie Category Row Adapter
         movieCategoryRowAdapter = MovieCategoryRowAdapter(
-            onMovieClick = { movie ->
-                // Play movie
-                val channel = Channel(
-                    id = movie.id,
-                    name = movie.name,
-                    number = "",
-                    logo = movie.getImageUrl() ?: "",
-                    cmd = movie.cmd ?: "",
-                    genreId = movie.categoryId
-                )
-                onChannelSelected(channel)
+            onMovieClick = { movie, categoryId, categoryTitle ->
+                // Check if we're in series tab and launch appropriate detail activity
+                if (selectedTab == "SHOWS") {
+                    // For series, open SeriesDetailActivity
+                    android.util.Log.d("MainActivity", "📺 Opening series detail: ${movie.name}")
+                    
+                    // If series data is incomplete, fetch full series metadata from API
+                    if (movie.description.isNullOrBlank() || movie.actors.isNullOrBlank()) {
+                        // Check cache first
+                        val cachedData = seriesMetadataCache[movie.id]
+                        if (cachedData != null) {
+                            android.util.Log.d("MainActivity", "Using cached series metadata for: ${movie.name}")
+                            val name = cachedData["name"] as? String ?: movie.name
+                            val description = cachedData["description"] as? String ?: ""
+                            val actors = cachedData["actors"] as? String ?: ""
+                            val director = cachedData["director"] as? String ?: ""
+                            val year = cachedData["year"] as? String ?: ""
+                            val country = cachedData["country"] as? String ?: ""
+                            val genres = cachedData["genres_str"] as? String ?: ""
+                            val totalSeasons = cachedData["total_seasons"] as? String ?: "Unknown"
+                            
+                            val posterUrl = buildImageUrl(cachedData["screenshot_uri"] as? String ?: cachedData["screenshot"] as? String ?: movie.getImageUrl()) ?: ""
+                            
+                            val intent = android.content.Intent(this, SeriesDetailActivity::class.java).apply {
+                                putExtra("SERIES_ID", movie.id)
+                                putExtra("SERIES_NAME", name)
+                                putExtra("POSTER_URL", posterUrl)
+                                putExtra("DESCRIPTION", description)
+                                putExtra("ACTORS", actors)
+                                putExtra("DIRECTOR", director)
+                                putExtra("YEAR", year)
+                                putExtra("COUNTRY", country)
+                                putExtra("GENRES", genres)
+                                putExtra("TOTAL_SEASONS", totalSeasons)
+                                putExtra("CATEGORY_ID", categoryId)
+                                putExtra("CATEGORY_TITLE", categoryTitle)
+                            }
+                            startActivity(intent)
+                            return@MovieCategoryRowAdapter
+                        }
+                        
+                        android.util.Log.d("MainActivity", "Fetching full series metadata for: ${movie.name}")
+                        lifecycleScope.launch {
+                            try {
+                                // Fetch full series info using getVodFileInfo
+                                val fileInfo = withContext(Dispatchers.IO) {
+                                    stalkerClient.getVodFileInfo(movie.id)
+                                }
+                                
+                                if (fileInfo != null) {
+                                    // Cache the fetched data
+                                    seriesMetadataCache[movie.id] = fileInfo
+                                    
+                                    // Extract metadata from file info
+                                    val name = fileInfo["name"] as? String ?: movie.name
+                                    val description = fileInfo["description"] as? String ?: ""
+                                    val actors = fileInfo["actors"] as? String ?: ""
+                                    val director = fileInfo["director"] as? String ?: ""
+                                    val year = fileInfo["year"] as? String ?: ""
+                                    val country = fileInfo["country"] as? String ?: ""
+                                    val genres = fileInfo["genres_str"] as? String ?: ""
+                                    val totalSeasons = fileInfo["total_seasons"] as? String ?: "Unknown"
+                                    
+                                    // Build proper image URL using the same method as MainActivity
+                                    val posterUrl = buildImageUrl(fileInfo["screenshot_uri"] as? String ?: fileInfo["screenshot"] as? String ?: movie.getImageUrl()) ?: ""
+                                    android.util.Log.d("MainActivity", "Fetched series metadata - Poster: $posterUrl")
+                                    
+                                    val intent = android.content.Intent(this@MainActivity, SeriesDetailActivity::class.java).apply {
+                                        putExtra("SERIES_ID", movie.id)
+                                        putExtra("SERIES_NAME", name)
+                                        putExtra("POSTER_URL", posterUrl)
+                                        putExtra("DESCRIPTION", description)
+                                        putExtra("ACTORS", actors)
+                                        putExtra("DIRECTOR", director)
+                                        putExtra("YEAR", year)
+                                        putExtra("COUNTRY", country)
+                                        putExtra("GENRES", genres)
+                                        putExtra("TOTAL_SEASONS", totalSeasons)
+                                        putExtra("CATEGORY_ID", categoryId)
+                                        putExtra("CATEGORY_TITLE", categoryTitle)
+                                    }
+                                    startActivity(intent)
+                                } else {
+                                    // Fallback to movie data if API returns null
+                                    val posterUrl = buildImageUrl(movie.getImageUrl()) ?: ""
+                                    val intent = android.content.Intent(this@MainActivity, SeriesDetailActivity::class.java).apply {
+                                        putExtra("SERIES_ID", movie.id)
+                                        putExtra("SERIES_NAME", movie.name)
+                                        putExtra("POSTER_URL", posterUrl)
+                                        putExtra("DESCRIPTION", movie.description ?: "")
+                                        putExtra("ACTORS", movie.actors ?: "")
+                                        putExtra("DIRECTOR", movie.director ?: "")
+                                        putExtra("YEAR", movie.year ?: "")
+                                        putExtra("COUNTRY", movie.country ?: "")
+                                        putExtra("GENRES", movie.genresStr ?: "")
+                                        putExtra("TOTAL_SEASONS", "Unknown")
+                                        putExtra("CATEGORY_ID", categoryId)
+                                        putExtra("CATEGORY_TITLE", categoryTitle)
+                                    }
+                                    startActivity(intent)
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainActivity", "Error fetching series metadata: ${e.message}", e)
+                                // Fallback to movie data
+                                val posterUrl = buildImageUrl(movie.getImageUrl()) ?: ""
+                                val intent = android.content.Intent(this@MainActivity, SeriesDetailActivity::class.java).apply {
+                                    putExtra("SERIES_ID", movie.id)
+                                    putExtra("SERIES_NAME", movie.name)
+                                    putExtra("POSTER_URL", posterUrl)
+                                    putExtra("DESCRIPTION", movie.description ?: "")
+                                    putExtra("ACTORS", movie.actors ?: "")
+                                    putExtra("DIRECTOR", movie.director ?: "")
+                                    putExtra("YEAR", movie.year ?: "")
+                                    putExtra("COUNTRY", movie.country ?: "")
+                                    putExtra("GENRES", movie.genresStr ?: "")
+                                    putExtra("TOTAL_SEASONS", "Unknown")
+                                    putExtra("CATEGORY_ID", categoryId)
+                                    putExtra("CATEGORY_TITLE", categoryTitle)
+                                }
+                                startActivity(intent)
+                            }
+                        }
+                    } else {
+                        // Use existing series data
+                        val posterUrl = buildImageUrl(movie.getImageUrl()) ?: ""
+                        android.util.Log.d("MainActivity", "Using cached data - Poster: $posterUrl")
+                        
+                        val intent = android.content.Intent(this, SeriesDetailActivity::class.java).apply {
+                            putExtra("SERIES_ID", movie.id)
+                            putExtra("SERIES_NAME", movie.name)
+                            putExtra("POSTER_URL", posterUrl)
+                            putExtra("DESCRIPTION", movie.description ?: "")
+                            putExtra("ACTORS", movie.actors ?: "")
+                            putExtra("DIRECTOR", movie.director ?: "")
+                            putExtra("YEAR", movie.year ?: "")
+                            putExtra("COUNTRY", movie.country ?: "")
+                            putExtra("GENRES", movie.genresStr ?: "")
+                            putExtra("TOTAL_SEASONS", "Unknown")
+                            putExtra("CATEGORY_ID", categoryId)
+                            putExtra("CATEGORY_TITLE", categoryTitle)
+                        }
+                        startActivity(intent)
+                    }
+                } else {
+                    // For movies, open MovieDetailActivity
+                    android.util.Log.d("MainActivity", "🎬 Opening movie detail: ${movie.name}")
+                    
+                    // If movie data is incomplete, fetch full movie metadata from API
+                    if (movie.description.isNullOrBlank() || movie.actors.isNullOrBlank()) {
+                        // Check cache first
+                        val cachedData = seriesMetadataCache[movie.id]
+                        if (cachedData != null) {
+                            android.util.Log.d("MainActivity", "Using cached movie metadata for: ${movie.name}")
+                            val name = cachedData["name"] as? String ?: movie.name
+                            val description = cachedData["description"] as? String ?: ""
+                            val actors = cachedData["actors"] as? String ?: ""
+                            val director = cachedData["director"] as? String ?: ""
+                            val year = cachedData["year"] as? String ?: ""
+                            val country = cachedData["country"] as? String ?: ""
+                            val genres = cachedData["genres_str"] as? String ?: ""
+                            val cmd = cachedData["cmd"] as? String ?: movie.cmd
+                            val screenshotUri = cachedData["screenshot_uri"] as? String
+                            val screenshot = cachedData["screenshot"] as? String
+                            
+                            val posterUrl = buildImageUrl(screenshotUri ?: screenshot ?: movie.getImageUrl()) ?: ""
+                            
+                            val intent = android.content.Intent(this, MovieDetailActivity::class.java).apply {
+                                putExtra("MOVIE_ID", movie.id)
+                                putExtra("MOVIE_NAME", name)
+                                putExtra("POSTER_URL", posterUrl)
+                                putExtra("DESCRIPTION", description)
+                                putExtra("ACTORS", actors)
+                                putExtra("DIRECTOR", director)
+                                putExtra("YEAR", year)
+                                putExtra("COUNTRY", country)
+                                putExtra("GENRES", genres)
+                                putExtra("CMD", cmd)
+                                putExtra("CATEGORY_ID", categoryId)
+                                putExtra("CATEGORY_TITLE", categoryTitle)
+                            }
+                            startActivity(intent)
+                            return@MovieCategoryRowAdapter
+                        }
+                        
+                        android.util.Log.d("MainActivity", "Fetching full movie metadata for: ${movie.name}")
+                        lifecycleScope.launch {
+                            try {
+                                // Fetch full movie info using getVodFileInfo
+                                val fileInfo = withContext(Dispatchers.IO) {
+                                    stalkerClient.getVodFileInfo(movie.id)
+                                }
+                                
+                                if (fileInfo != null) {
+                                    // Cache the fetched data
+                                    seriesMetadataCache[movie.id] = fileInfo
+                                    
+                                    // Extract metadata from file info
+                                    val name = fileInfo["name"] as? String ?: movie.name
+                                    val description = fileInfo["description"] as? String ?: ""
+                                    val actors = fileInfo["actors"] as? String ?: ""
+                                    val director = fileInfo["director"] as? String ?: ""
+                                    val year = fileInfo["year"] as? String ?: ""
+                                    val country = fileInfo["country"] as? String ?: ""
+                                    val genres = fileInfo["genres_str"] as? String ?: ""
+                                    val cmd = fileInfo["cmd"] as? String ?: movie.cmd
+                                    val screenshotUri = fileInfo["screenshot_uri"] as? String
+                                    val screenshot = fileInfo["screenshot"] as? String
+                                    
+                                    // Build proper image URL using the same method as MainActivity
+                                    val posterUrl = buildImageUrl(screenshotUri ?: screenshot ?: movie.getImageUrl()) ?: ""
+                                    android.util.Log.d("MainActivity", "Fetched movie metadata - Poster: $posterUrl")
+                                    
+                                    val intent = android.content.Intent(this@MainActivity, MovieDetailActivity::class.java).apply {
+                                        putExtra("MOVIE_ID", movie.id)
+                                        putExtra("MOVIE_NAME", name)
+                                        putExtra("POSTER_URL", posterUrl)
+                                        putExtra("DESCRIPTION", description)
+                                        putExtra("ACTORS", actors)
+                                        putExtra("DIRECTOR", director)
+                                        putExtra("YEAR", year)
+                                        putExtra("COUNTRY", country)
+                                        putExtra("GENRES", genres)
+                                        putExtra("CMD", cmd)
+                                        putExtra("CATEGORY_ID", categoryId)
+                                        putExtra("CATEGORY_TITLE", categoryTitle)
+                                    }
+                                    startActivity(intent)
+                                } else {
+                                    // Fallback to movie data if API returns null
+                                    val posterUrl = buildImageUrl(movie.getImageUrl()) ?: ""
+                                    val intent = android.content.Intent(this@MainActivity, MovieDetailActivity::class.java).apply {
+                                        putExtra("MOVIE_ID", movie.id)
+                                        putExtra("MOVIE_NAME", movie.name)
+                                        putExtra("POSTER_URL", posterUrl)
+                                        putExtra("DESCRIPTION", movie.description ?: "")
+                                        putExtra("ACTORS", movie.actors ?: "")
+                                        putExtra("DIRECTOR", movie.director ?: "")
+                                        putExtra("YEAR", movie.year ?: "")
+                                        putExtra("COUNTRY", movie.country ?: "")
+                                        putExtra("GENRES", movie.genresStr ?: "")
+                                        putExtra("CMD", movie.cmd)
+                                        putExtra("CATEGORY_ID", categoryId)
+                                        putExtra("CATEGORY_TITLE", categoryTitle)
+                                    }
+                                    startActivity(intent)
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainActivity", "Error fetching movie metadata: ${e.message}", e)
+                                // Fallback to movie data
+                                val posterUrl = buildImageUrl(movie.getImageUrl()) ?: ""
+                                val intent = android.content.Intent(this@MainActivity, MovieDetailActivity::class.java).apply {
+                                    putExtra("MOVIE_ID", movie.id)
+                                    putExtra("MOVIE_NAME", movie.name)
+                                    putExtra("POSTER_URL", posterUrl)
+                                    putExtra("DESCRIPTION", movie.description ?: "")
+                                    putExtra("ACTORS", movie.actors ?: "")
+                                    putExtra("DIRECTOR", movie.director ?: "")
+                                    putExtra("YEAR", movie.year ?: "")
+                                    putExtra("COUNTRY", movie.country ?: "")
+                                    putExtra("GENRES", movie.genresStr ?: "")
+                                    putExtra("CMD", movie.cmd)
+                                    putExtra("CATEGORY_ID", categoryId)
+                                    putExtra("CATEGORY_TITLE", categoryTitle)
+                                }
+                                startActivity(intent)
+                            }
+                        }
+                    } else {
+                        // Use existing movie data
+                        val posterUrl = buildImageUrl(movie.getImageUrl()) ?: ""
+                        android.util.Log.d("MainActivity", "Using cached data - Poster: $posterUrl")
+                        
+                        val intent = android.content.Intent(this, MovieDetailActivity::class.java).apply {
+                            putExtra("MOVIE_ID", movie.id)
+                            putExtra("MOVIE_NAME", movie.name)
+                            putExtra("POSTER_URL", posterUrl)
+                            putExtra("DESCRIPTION", movie.description ?: "")
+                            putExtra("ACTORS", movie.actors ?: "")
+                            putExtra("DIRECTOR", movie.director ?: "")
+                            putExtra("YEAR", movie.year ?: "")
+                            putExtra("COUNTRY", movie.country ?: "")
+                            putExtra("GENRES", movie.genresStr ?: "")
+                            putExtra("CMD", movie.cmd)
+                            putExtra("CATEGORY_ID", categoryId)
+                            putExtra("CATEGORY_TITLE", categoryTitle)
+                        }
+                        startActivity(intent)
+                    }
+                }
             },
             onViewAllClick = { categoryId, categoryTitle ->
                 // Open category detail screen
@@ -1583,6 +2399,80 @@ class MainActivity : ComponentActivity() {
             descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
             setItemViewCacheSize(5) // Cache 5 category rows
             isNestedScrollingEnabled = false // Better performance
+            
+            // Add focus navigation handler to ensure vertical navigation always goes to first item
+            setOnKeyListener { _, keyCode, event ->
+                if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                    when (keyCode) {
+                        android.view.KeyEvent.KEYCODE_DPAD_DOWN, android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                            // Handle vertical navigation to ensure focus goes to first item in target row
+                            val layoutManager = this.layoutManager as LinearLayoutManager
+
+                            // Find the currently focused row position - improved logic
+                            var currentPosition = -1
+                            var focusedView: View? = null
+
+                            // First try to find the focused view directly
+                            for (i in 0 until layoutManager.childCount) {
+                                val child = layoutManager.getChildAt(i)
+                                if (child?.hasFocus() == true || child?.findFocus() != null) {
+                                    currentPosition = layoutManager.getPosition(child)
+                                    focusedView = child
+                                    break
+                                }
+                            }
+
+                            // If no focused view found, try to find the first visible item
+                            if (currentPosition == -1) {
+                                currentPosition = layoutManager.findFirstVisibleItemPosition()
+                                if (currentPosition >= 0) {
+                                    focusedView = layoutManager.findViewByPosition(currentPosition)
+                                }
+                            }
+
+                            // Calculate target position
+                            val targetPosition = if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
+                                currentPosition + 1
+                            } else {
+                                currentPosition - 1
+                            }
+
+                            // If target position is valid, scroll to it and focus first item
+                            if (targetPosition >= 0 && targetPosition < movieCategoryRowAdapter.itemCount) {
+                                post {
+                                    // Scroll to target row
+                                    layoutManager.scrollToPosition(targetPosition)
+
+                                    // Focus first item in the target row with improved logic
+                                    val targetRowView = layoutManager.findViewByPosition(targetPosition)
+                                    targetRowView?.findViewById<RecyclerView>(R.id.movies_recycler)?.let { moviesRecycler ->
+                                        // Use multiple attempts to ensure content is loaded
+                                        moviesRecycler.postDelayed({
+                                            // First try: get first visible child
+                                            var firstItem = moviesRecycler.getChildAt(0)
+                                            if (firstItem != null && firstItem.hasFocusable()) {
+                                                firstItem.requestFocus()
+                                            } else {
+                                                // Second try: find any focusable child
+                                                for (i in 0 until moviesRecycler.childCount) {
+                                                    val child = moviesRecycler.getChildAt(i)
+                                                    if (child != null && child.hasFocusable()) {
+                                                        child.requestFocus()
+                                                        break
+                                                    }
+                                                }
+                                            }
+                                        }, 100) // Wait longer for content to load
+                                    }
+                                }
+                                return@setOnKeyListener true // Consume the event
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            
             android.util.Log.d("MainActivity", "movieRowsRecycler setup complete with adapter and layoutManager")
         }
         
@@ -1593,12 +2483,16 @@ class MainActivity : ComponentActivity() {
     private fun setupContentAdapter() {
         contentRecycler.apply {
             // Optimize view caching for better performance
-            setItemViewCacheSize(10) // Cache 10 off-screen items
+            setItemViewCacheSize(20) // Cache 20 off-screen items for smoother scrolling
             setHasFixedSize(false) // Grid columns can change
             
             if (selectedTab == "TV") {
                 // Use row layout for Live TV
-                layoutManager = LinearLayoutManager(this@MainActivity)
+                layoutManager = LinearLayoutManager(this@MainActivity).apply {
+                    // Prefetch 5 extra items ahead/behind for TV rows
+                    isItemPrefetchEnabled = true
+                    initialPrefetchItemCount = 5
+                }
                 adapter = channelRowAdapter
                 
                 // Intercept key events to prevent LEFT from going to preview
@@ -1625,6 +2519,9 @@ class MainActivity : ComponentActivity() {
                                 loadMoreContent()
                             }
                         }
+                        
+                        // Preload thumbnails for visible items
+                        preloadThumbnailsForVisibleItems()
                     }
                 })
             } else {
@@ -1653,7 +2550,11 @@ class MainActivity : ComponentActivity() {
                 
                 android.util.Log.d("MainActivity", "Grid calculation: screenWidth=$screenWidthPx, available=$availableWidthPx, itemWidth=$itemTotalWidthPx, columns=$columns, categoriesVisible=${categorySidebar.visibility == View.VISIBLE}")
                 
-                layoutManager = GridLayoutManager(this@MainActivity, columns)
+                layoutManager = GridLayoutManager(this@MainActivity, columns).apply {
+                    // Prefetch 10 extra items for grid (Movies/Series)
+                    isItemPrefetchEnabled = true
+                    initialPrefetchItemCount = 10
+                }
                 adapter = channelAdapter
                 
                 // Disable item animations for smoother scrolling
@@ -1685,14 +2586,51 @@ class MainActivity : ComponentActivity() {
                                 loadMoreContent()
                             }
                         }
+                        
+                        // Preload thumbnails for visible items
+                        preloadThumbnailsForVisibleItems()
                     }
                 })
             }
         }
     }
     
+    private fun preloadThumbnailsForVisibleItems() {
+        // Preload images for the next 5-10 items to reduce loading delays during navigation
+        val layoutManager = contentRecycler.layoutManager
+        val firstVisible = when (layoutManager) {
+            is LinearLayoutManager -> layoutManager.findFirstVisibleItemPosition()
+            is GridLayoutManager -> layoutManager.findFirstVisibleItemPosition()
+            else -> 0
+        }
+        val lastVisible = when (layoutManager) {
+            is LinearLayoutManager -> layoutManager.findLastVisibleItemPosition()
+            is GridLayoutManager -> layoutManager.findLastVisibleItemPosition()
+            else -> 0
+        }
+        
+        // Preload ahead (e.g., next 5 items)
+        for (i in lastVisible + 1..lastVisible + 5) {
+            if (i >= 0 && i < allChannels.size) {
+                val channel = allChannels[i]
+                if (!channel.logo.isNullOrEmpty()) {
+                    coil.Coil.imageLoader(this).enqueue(
+                        coil.request.ImageRequest.Builder(this)
+                            .data(channel.logo)
+                            .memoryCacheKey(channel.logo)
+                            .diskCacheKey(channel.logo)
+                            // .priority(Priority.LOW)  // Background preload
+                            .build()
+                    )
+                }
+            }
+        }
+    }
+    
     private fun setupTabListeners() {
         searchButton.setOnClickListener {
+            android.util.Log.d("MainActivity", "🔍 SEARCH clicked - switching to SEARCH tab and stopping all players")
+            switchTab("SEARCH")
             showSearchDialog()
         }
         
@@ -1779,19 +2717,11 @@ class MainActivity : ComponentActivity() {
         tvTab.setOnFocusChangeListener { view, hasFocus ->
             android.util.Log.d("MainActivity", "📺 TV focus changed: hasFocus=$hasFocus")
             if (hasFocus) {
-                hoverTab = "TV"
-                view.setBackgroundResource(R.drawable.nav_item_focused)
-                tvTab.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.BLACK)
-                android.util.Log.d("MainActivity", "📺 TV: Set BLACK tint, tintList=${tvTab.imageTintList}")
-                navigationManager.expandSidebar()
                 updateDebugDisplay()
+                // Avoid heavy operations here; defer to navigationManager
+                navigationManager.expandSidebar()
             } else {
-                view.setBackgroundResource(R.drawable.nav_item_normal)
-                tvTab.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.WHITE)
-                android.util.Log.d("MainActivity", "📺 TV: Set WHITE tint, tintList=${tvTab.imageTintList}")
-                sidebarContainer.postDelayed({
-                    if (!isAnySidebarFocused()) navigationManager.collapseSidebar()
-                }, 200)
+                // Minimal cleanup
             }
         }
         
@@ -1808,19 +2738,11 @@ class MainActivity : ComponentActivity() {
         moviesTab.setOnFocusChangeListener { view, hasFocus ->
             android.util.Log.d("MainActivity", "🎬 MOVIES focus changed: hasFocus=$hasFocus")
             if (hasFocus) {
-                hoverTab = "MOVIES"
-                view.setBackgroundResource(R.drawable.nav_item_focused)
-                moviesTab.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.BLACK)
-                android.util.Log.d("MainActivity", "🎬 MOVIES: Set BLACK tint, tintList=${moviesTab.imageTintList}")
-                navigationManager.expandSidebar()
                 updateDebugDisplay()
+                // Avoid heavy operations here; defer to navigationManager
+                navigationManager.expandSidebar()
             } else {
-                view.setBackgroundResource(R.drawable.nav_item_normal)
-                moviesTab.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.WHITE)
-                android.util.Log.d("MainActivity", "🎬 MOVIES: Set WHITE tint, tintList=${moviesTab.imageTintList}")
-                sidebarContainer.postDelayed({
-                    if (!isAnySidebarFocused()) navigationManager.collapseSidebar()
-                }, 200)
+                // Minimal cleanup
             }
         }
         
@@ -1837,19 +2759,11 @@ class MainActivity : ComponentActivity() {
         showsTab.setOnFocusChangeListener { view, hasFocus ->
             android.util.Log.d("MainActivity", "📺 SHOWS focus changed: hasFocus=$hasFocus")
             if (hasFocus) {
-                hoverTab = "SHOWS"
-                view.setBackgroundResource(R.drawable.nav_item_focused)
-                showsTab.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.BLACK)
-                android.util.Log.d("MainActivity", "📺 SHOWS: Set BLACK tint, tintList=${showsTab.imageTintList}")
-                navigationManager.expandSidebar()
                 updateDebugDisplay()
+                // Avoid heavy operations here; defer to navigationManager
+                navigationManager.expandSidebar()
             } else {
-                view.setBackgroundResource(R.drawable.nav_item_normal)
-                showsTab.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.WHITE)
-                android.util.Log.d("MainActivity", "📺 SHOWS: Set WHITE tint, tintList=${showsTab.imageTintList}")
-                sidebarContainer.postDelayed({
-                    if (!isAnySidebarFocused()) navigationManager.collapseSidebar()
-                }, 200)
+                // Minimal cleanup
             }
         }
         
@@ -1889,12 +2803,50 @@ class MainActivity : ComponentActivity() {
         }
         
         // Stop VOD player if switching away from movies/shows
-        if ((selectedTab == "MOVIES" || selectedTab == "SHOWS") && tab == "TV") {
-            android.util.Log.d("MainActivity", "Switching to TV - stopping VOD player")
+        if ((selectedTab == "MOVIES" || selectedTab == "SHOWS") && tab != "MOVIES" && tab != "SHOWS") {
+            android.util.Log.d("MainActivity", "Switching from ${selectedTab} to $tab - stopping VOD player")
             vodPlayer?.apply {
                 stop()
                 clearMediaItems()
             }
+        }
+        
+        // Special handling for SEARCH tab - stop ALL players
+        if (tab == "SEARCH") {
+            android.util.Log.d("MainActivity", "Switching to SEARCH - stopping ALL players")
+            // Stop live players
+            liveTVManager?.cleanup()
+            livePlayer?.apply {
+                stop()
+                clearMediaItems()
+                release()
+            }
+            livePlayer = null
+            
+            // Stop VOD player
+            vodPlayer?.apply {
+                stop()
+                clearMediaItems()
+                release()
+            }
+            vodPlayer = null
+            
+            // Reset all playing state
+            currentPlayingChannel = null
+            currentPlayingCategoryId = null
+            currentPlayingCategoryIndex = -1
+            currentPlayingIndex = 0
+            isPlayingSeries = false
+            currentSeriesId = null
+            currentSeriesName = null
+            currentSeriesPosterUrl = null
+            currentSeriesDescription = null
+            currentSeriesActors = null
+            currentSeriesDirector = null
+            currentSeriesYear = null
+            currentSeriesCountry = null
+            currentSeriesGenres = null
+            currentSeriesTotalSeasons = null
         }
         
         selectedTab = tab
@@ -1912,6 +2864,11 @@ class MainActivity : ComponentActivity() {
             // Clear adapters play positions
             channelRowAdapter.setPlayingPosition(-1)
             categoryAdapter.setActivePosition(-1)
+            
+            // Reset focus to first category for new tab
+            categoriesRecycler.post {
+                categoriesRecycler.getChildAt(0)?.requestFocus()
+            }
         }
         
         // Handle TV tab with new LiveTVManager
@@ -2006,9 +2963,7 @@ class MainActivity : ComponentActivity() {
                         movieDetailsHeaderGrid.visibility = View.GONE
                         movieDetailsHeader.visibility = View.GONE
                         
-                        val response = ApiClient.apiService.getGenres(
-                            GenreRequest(ApiClient.macAddress, ApiClient.portalUrl)
-                        )
+                        val response = stalkerClient.getVodCategories(type = "vod")
                         // Filter out non-numeric category IDs
                         categories = response.genres.filter { genre ->
                             genre.id.toIntOrNull() != null
@@ -2067,21 +3022,33 @@ class MainActivity : ComponentActivity() {
                         val response = stalkerClient.getVodCategories(type = "vod")
                         android.util.Log.d("MainActivity", "Got ${response.genres.size} VOD categories")
                         
-                        // Filter only non-numeric category IDs - show ALL categories including ADULT
-                        categories = response.genres
-                            .filter { it.id.toIntOrNull() != null }
-                            .sortedWith(compareBy(
-                                { (it.censored ?: 0) != 0 }, // Non-censored first (false < true), treat null as 0
-                                { 
-                                    // Sort English alphabet first, then non-English
-                                    val name = (it.title ?: it.name ?: "").trim()
-                                    val firstChar = name.firstOrNull() ?: ' '
-                                    !firstChar.isLetter() || firstChar.code > 127 // Non-English/special chars = true (sorts after)
-                                },
-                                { (it.title ?: it.name ?: "").lowercase().trim() } // Then alphabetically within each group
-                            ))
+                        // Process categories - show all categories including adult ones directly in rows
+                        val allCategories = response.genres.filter { it.id.toIntOrNull() != null }
+
+                        // Separate adult and non-adult categories, then sort each group
+                        val nonAdultCategories = allCategories.filter { it.censored != 1 }.sortedWith(compareBy(
+                            { 
+                                // Sort English alphabet first, then non-English
+                                val name = (it.title ?: it.name ?: "").trim()
+                                val firstChar = name.firstOrNull() ?: ' '
+                                !firstChar.isLetter() || firstChar.code > 127 // Non-English/special chars = true (sorts after)
+                            },
+                            { (it.title ?: it.name ?: "").lowercase().trim() } // Then alphabetically within each group
+                        ))
+
+                        val adultCategories = allCategories.filter { it.censored == 1 }.sortedWith(compareBy(
+                            { 
+                                // Sort English alphabet first, then non-English
+                                val name = (it.title ?: it.name ?: "").trim()
+                                val firstChar = name.firstOrNull() ?: ' '
+                                !firstChar.isLetter() || firstChar.code > 127 // Non-English/special chars = true (sorts after)
+                            },
+                            { (it.title ?: it.name ?: "").lowercase().trim() } // Then alphabetically within each group
+                        ))
+
+                        categories = nonAdultCategories + adultCategories
                         
-                        android.util.Log.d("MainActivity", "Filtered to ${categories.size} categories (sorted: non-adult first, English alphabet, then other languages, all alphabetical)")
+                        android.util.Log.d("MainActivity", "Filtered to ${categories.size} categories (sorted alphabetically: English first, then other languages)")
                         
                         // Load categories intelligently - check first page to determine content
                         loadMovieRows(categories, contentType = "movie")
@@ -2101,21 +3068,33 @@ class MainActivity : ComponentActivity() {
                         // Get all VOD categories (both movies and series come from type=vod)
                         val response = stalkerClient.getVodCategories(type = "vod")
                         
-                        // Filter only non-numeric category IDs - show ALL categories including ADULT
-                        categories = response.genres
-                            .filter { it.id.toIntOrNull() != null }
-                            .sortedWith(compareBy(
-                                { (it.censored ?: 0) != 0 }, // Non-censored first (false < true), treat null as 0
-                                { 
-                                    // Sort English alphabet first, then non-English
-                                    val name = (it.title ?: it.name ?: "").trim()
-                                    val firstChar = name.firstOrNull() ?: ' '
-                                    !firstChar.isLetter() || firstChar.code > 127 // Non-English/special chars = true (sorts after)
-                                },
-                                { (it.title ?: it.name ?: "").lowercase().trim() } // Then alphabetically within each group
-                            ))
+                        // Process categories - show all categories including adult ones directly in rows
+                        val allCategories = response.genres.filter { it.id.toIntOrNull() != null }
+
+                        // Separate adult and non-adult categories, then sort each group
+                        val nonAdultCategories = allCategories.filter { it.censored != 1 }.sortedWith(compareBy(
+                            { 
+                                // Sort English alphabet first, then non-English
+                                val name = (it.title ?: it.name ?: "").trim()
+                                val firstChar = name.firstOrNull() ?: ' '
+                                !firstChar.isLetter() || firstChar.code > 127 // Non-English/special chars = true (sorts after)
+                            },
+                            { (it.title ?: it.name ?: "").lowercase().trim() } // Then alphabetically within each group
+                        ))
+
+                        val adultCategories = allCategories.filter { it.censored == 1 }.sortedWith(compareBy(
+                            { 
+                                // Sort English alphabet first, then non-English
+                                val name = (it.title ?: it.name ?: "").trim()
+                                val firstChar = name.firstOrNull() ?: ' '
+                                !firstChar.isLetter() || firstChar.code > 127 // Non-English/special chars = true (sorts after)
+                            },
+                            { (it.title ?: it.name ?: "").lowercase().trim() } // Then alphabetically within each group
+                        ))
+
+                        categories = nonAdultCategories + adultCategories
                         
-                        android.util.Log.d("MainActivity", "Filtered to ${categories.size} categories (sorted: non-adult first, English alphabet, then other languages, all alphabetical)")
+                        android.util.Log.d("MainActivity", "Filtered to ${categories.size} categories (sorted alphabetically: English first, then other languages)")
                         
                         // Load categories intelligently - check first page to determine if movie or series
                         loadMovieRows(categories, contentType = "series")
@@ -2135,45 +3114,166 @@ class MainActivity : ComponentActivity() {
     private fun loadMovieRows(categories: List<Genre>, contentType: String = "movie") {
         android.util.Log.d("MainActivity", "loadMovieRows - Loading ${contentType}s for ${categories.size} categories")
         
-        // Clear existing rows immediately
-        movieCategoryRowAdapter.setCategoryRows(emptyList())
-        
-        // Track if we've set focus on the first row
-        var hasSetFocusOnFirstRow = false
-        
-        // Load categories SEQUENTIALLY (not parallel) to reduce lag
-        // Load ALL categories but optimize rendering
+        // Check if we have cached categories from database (within last 24 hours)
+        lifecycleScope.launch {
+            val cachedCategories = loadCategoriesFromDatabase(contentType)
+            val cacheAge = cachedCategories?.firstOrNull()?.lastUpdated ?: 0
+            val isCacheValid = cachedCategories != null && 
+                (System.currentTimeMillis() - cacheAge) < (24 * 60 * 60 * 1000) // 24 hours
+            
+            if (isCacheValid && cachedCategories!!.isNotEmpty()) {
+                android.util.Log.d("MainActivity", "🚀 Using cached categories from database: ${cachedCategories.size} categories")
+                
+                // Sort cached categories: non-adult first (alphabetically), then adult categories (alphabetically)
+                val sortedCachedCategories = cachedCategories.sortedWith(compareBy(
+                    { it.censored == 1 }, // Adult categories (censored == 1) last, then non-adult (censored == 0)
+                    { 
+                        // Sort English alphabet first, then non-English
+                        val name = it.name.trim()
+                        val firstChar = name.firstOrNull() ?: ' '
+                        !firstChar.isLetter() || firstChar.code > 127 // Non-English/special chars = true (sorts after)
+                    },
+                    { it.name.lowercase().trim() } // Then alphabetically within each group
+                ))
+                
+                // Convert database entities back to CategoryRow format
+                val categoryRows = sortedCachedCategories.map { categoryEntity ->
+                    val genre = categories.find { it.id == categoryEntity.externalId }
+                    if (genre != null) {
+                        MovieCategoryRowAdapter.CategoryRow(
+                            categoryId = genre.id,
+                            categoryTitle = (genre.title ?: genre.name) ?: "Unknown",
+                            movies = emptyList() // We'll load content when needed
+                        )
+                    } else {
+                        null
+                    }
+                }.filterNotNull()
+                
+                // Update UI immediately with cached categories
+                runOnUiThread {
+                    movieCategoryRowAdapter.setCategoryRows(categoryRows)
+                    android.util.Log.d("MainActivity", "✅ Instantly loaded ${categoryRows.size} cached category rows")
+                    
+                    // Set focus on first row
+                    movieRowsRecycler.postDelayed({
+                        val firstRowView = movieRowsRecycler.getChildAt(0)
+                        val moviesRecycler = firstRowView?.findViewById<RecyclerView>(R.id.movies_recycler)
+                        moviesRecycler?.postDelayed({
+                            moviesRecycler.getChildAt(0)?.requestFocus()
+                        }, 50)
+                    }, 100)
+                }
+                
+                // Load content for each category in background
+                loadCategoryContentInBackground(categories, contentType, "${contentType}_categories")
+                return@launch
+            }
+            
+            // No valid cache, proceed with normal loading
+            android.util.Log.d("MainActivity", "🔄 No valid cache found, loading categories from API")
+            
+            // IMMEDIATE DISPLAY: Create category rows with empty movies and show them right away
+            val filteredCategories = categories.filter { category ->
+                // Quick filter based on category name patterns (faster than API calls)
+                val title = (category.title ?: category.name ?: "").lowercase()
+                when (contentType) {
+                    "movie" -> !title.contains("series") && !title.contains("tv") && !title.contains("show")
+                    "series" -> title.contains("series") || title.contains("tv") || title.contains("show")
+                    else -> true
+                }
+            }
+            
+            android.util.Log.d("MainActivity", "Quick filtered to ${filteredCategories.size} ${contentType} categories")
+            
+            // Create empty category rows and show immediately
+            val emptyCategoryRows = filteredCategories.map { category ->
+                MovieCategoryRowAdapter.CategoryRow(
+                    categoryId = category.id,
+                    categoryTitle = (category.title ?: category.name) ?: "Unknown",
+                    movies = emptyList() // Empty for now, will load in background
+                )
+            }
+            
+            // Show categories immediately on UI thread
+            withContext(Dispatchers.Main) {
+                movieCategoryRowAdapter.setCategoryRows(emptyCategoryRows)
+                android.util.Log.d("MainActivity", "✅ Instantly showed ${emptyCategoryRows.size} empty category rows")
+                
+                // Set focus on first row
+                movieRowsRecycler.postDelayed({
+                    val firstRowView = movieRowsRecycler.getChildAt(0)
+                    val moviesRecycler = firstRowView?.findViewById<RecyclerView>(R.id.movies_recycler)
+                    moviesRecycler?.postDelayed({
+                        moviesRecycler.getChildAt(0)?.requestFocus()
+                    }, 50)
+                }, 100)
+            }
+            
+            // Now load content for each category in background (don't wait for completion)
+            loadCategoryContentInBackground(filteredCategories, contentType, "${contentType}_categories")
+        }
+    }
+    
+    private suspend fun saveCategoriesToDatabase(categories: List<CategoryEntity>) {
+        try {
+            android.util.Log.d("MainActivity", "💾 Saving ${categories.size} categories to database")
+            database.categoryDao().insertCategories(categories)
+            android.util.Log.d("MainActivity", "✅ Successfully saved categories to database")
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "❌ Error saving categories to database: ${e.message}", e)
+        }
+    }
+    
+    private suspend fun loadCategoriesFromDatabase(contentType: String): List<CategoryEntity>? {
+        return try {
+            android.util.Log.d("MainActivity", "📖 Loading categories from database for contentType: $contentType")
+            val dbType = if (contentType == "movie") "MOVIE" else "SERIES"
+            val categories = database.categoryDao().getCategoriesByType(dbType)
+            android.util.Log.d("MainActivity", "✅ Loaded ${categories.size} categories from database")
+            categories
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "❌ Error loading categories from database: ${e.message}", e)
+            null
+        }
+    }
+    
+    private fun loadCategoryContentInBackground(categories: List<Genre>, contentType: String, cacheKey: String) {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                // Process categories sequentially to avoid overwhelming the system
+                android.util.Log.d("MainActivity", "🔄 Loading category content in background for ${categories.size} categories")
+                
+                // Load content for each category individually and update UI as each completes
                 categories.forEach { category ->
-                    android.util.Log.d("MainActivity", "🚀 Loading category: ${category.title ?: category.name}")
-                    try {
-                        val response = stalkerClient.getVodItems(
-                            categoryId = category.id,
-                            page = 1,
-                            type = "vod"
-                        )
-                        
-                        android.util.Log.d("MainActivity", "Got ${response.items.data.size} items for ${category.title ?: category.name}")
-                        
-                        // Smart filtering: Check first page to determine content type
-                        val filteredItems = if (contentType == "movie") {
-                            response.items.data.filter { item ->
-                                val isSeries = item.isSeries ?: "0"
-                                isSeries == "0" // Only movies
+                    launch {
+                        try {
+                            android.util.Log.d("MainActivity", "🚀 Loading content for category: ${category.title ?: category.name}")
+                            
+                            val response = stalkerClient.getVodItems(
+                                categoryId = category.id,
+                                page = 1,
+                                type = "vod"
+                            )
+                            
+                            android.util.Log.d("MainActivity", "Got ${response.items.data.size} items for ${category.title ?: category.name}")
+                            
+                            // Double-check filtering (should be consistent with type determination)
+                            val filteredItems = if (contentType == "movie") {
+                                response.items.data.filter { item ->
+                                    val isSeries = item.isSeries ?: "0"
+                                    isSeries == "0" // Only movies
+                                }
+                            } else {
+                                response.items.data.filter { item ->
+                                    val isSeries = item.isSeries ?: "0"
+                                    isSeries != "0" // Only series
+                                }
                             }
-                        } else {
-                            response.items.data.filter { item ->
-                                val isSeries = item.isSeries ?: "0"
-                                isSeries != "0" // Only series
-                            }
-                        }
-                        
-                        android.util.Log.d("MainActivity", "Filtered to ${filteredItems.size} ${contentType}s (is_series=${if (contentType == "movie") "0" else "!=0"})")
-                        
-                        // If loading series, populate seriesMap with full metadata
-                        if (contentType == "series" && filteredItems.isNotEmpty()) {
+                            
+                            android.util.Log.d("MainActivity", "Filtered to ${filteredItems.size} ${contentType}s")
+                            
+                            // If loading series, populate seriesMap with full metadata
+                            if (contentType == "series" && filteredItems.isNotEmpty()) {
                                 filteredItems.forEach { movie ->
                                     val series = Series(
                                         id = movie.id,
@@ -2197,42 +3297,31 @@ class MainActivity : ComponentActivity() {
                                     seriesMap[series.id] = series
                                 }
                                 android.util.Log.d("MainActivity", "📚 Added ${filteredItems.size} series to seriesMap from category ${category.title}. Total in map: ${seriesMap.size}")
-                        }
-                        
-                        if (filteredItems.isNotEmpty()) {
-                            val newRow = MovieCategoryRowAdapter.CategoryRow(
-                                categoryId = category.id,
-                                categoryTitle = (category.title ?: category.name) ?: "Unknown",
-                                movies = filteredItems // Show all items with optimized image loading
-                            )
+                            }
                             
-                            // Add row to UI immediately as it loads
-                            withContext(Dispatchers.Main) {
-                                movieCategoryRowAdapter.addCategoryRow(newRow)
-                                android.util.Log.d("MainActivity", "✅ Instantly added category row: ${newRow.categoryTitle} with ${newRow.movies.size} items")
+                            // Update this specific category row in the UI immediately
+                            if (filteredItems.isNotEmpty()) {
+                                val updatedRow = MovieCategoryRowAdapter.CategoryRow(
+                                    categoryId = category.id,
+                                    categoryTitle = (category.title ?: category.name) ?: "Unknown",
+                                    movies = filteredItems
+                                )
                                 
-                                // Set focus on first row only once - focus first movie thumbnail
-                                if (!hasSetFocusOnFirstRow) {
-                                    hasSetFocusOnFirstRow = true
-                                    movieRowsRecycler.postDelayed({
-                                        val firstRowView = movieRowsRecycler.getChildAt(0)
-                                        val moviesRecycler = firstRowView?.findViewById<RecyclerView>(R.id.movies_recycler)
-                                        moviesRecycler?.postDelayed({
-                                            moviesRecycler.getChildAt(0)?.requestFocus()
-                                        }, 50)
-                                    }, 100)
+                                withContext(Dispatchers.Main) {
+                                    movieCategoryRowAdapter.updateCategoryRow(updatedRow)
+                                    android.util.Log.d("MainActivity", "✅ Updated category ${category.title} with ${filteredItems.size} items")
                                 }
                             }
+                        } catch (e: Exception) {
+                            android.util.Log.e("MainActivity", "Error loading content for category ${category.title}: ${e.message}")
                         }
-                    } catch (e: Exception) {
-                        android.util.Log.e("MainActivity", "Error loading items for category ${category.title}: ${e.message}")
                     }
                 }
                 
-                android.util.Log.d("MainActivity", "Finished loading movie rows")
+                android.util.Log.d("MainActivity", "Background loading initiated for all categories")
                 
             } catch (e: Exception) {
-                android.util.Log.e("MainActivity", "Error loading movie rows: ${e.message}", e)
+                android.util.Log.e("MainActivity", "Error loading category content in background: ${e.message}", e)
             }
         }
     }
@@ -2690,13 +3779,9 @@ class MainActivity : ComponentActivity() {
             try {
                 when (selectedTab) {
                     "TV" -> {
-                        val response = ApiClient.apiService.getChannels(
-                            ChannelsRequest(
-                                mac = ApiClient.macAddress,
-                                url = ApiClient.portalUrl,
-                                genre = selectedGenre.id,
-                                page = currentPage
-                            )
+                        val response = stalkerClient.getChannels(
+                            genreId = selectedGenre.id,
+                            page = currentPage
                         )
                         val channels = response.channels.data.map { channel ->
                             channel.copy(logo = buildChannelLogoUrl(channel.logo), isLive = true)
@@ -2911,14 +3996,13 @@ class MainActivity : ComponentActivity() {
             return logo
         }
         
-        // Build full URL for channel logos
-        val portalUrl = ApiClient.portalUrl
-        val domainUrl = portalUrl.replace("/stalker_portal/?$".toRegex(), "")
-        
+        // Build full URL for channel logos using the same domain as StalkerClient
+        // Images must be loaded from tv.stream4k.cc, not the IP address
         return if (logo.startsWith("/")) {
-            "$domainUrl$logo"
+            // logo like "/stalker_portal/misc/logos/320/123.png"
+            "http://tv.stream4k.cc$logo"
         } else {
-            "$domainUrl/stalker_portal/misc/logos/320/$logo"
+            "http://tv.stream4k.cc/stalker_portal/misc/logos/320/$logo"
         }
     }
 
@@ -3031,8 +4115,8 @@ class MainActivity : ComponentActivity() {
             detailPosterTextGrid.visibility = View.GONE
             detailPosterGrid.load(finalImageUrl) {
                 crossfade(200)
-                placeholder(android.R.drawable.ic_menu_gallery)
-                error(android.R.drawable.ic_menu_gallery)
+                placeholder(R.drawable.ic_movie_placeholder)
+                error(R.drawable.ic_movie_placeholder)
                 listener(
                     onError = { _, _ ->
                         // If image fails to load, show title instead
@@ -3097,6 +4181,20 @@ class MainActivity : ComponentActivity() {
         previewPanel.visibility = View.GONE
         movieDetailsHeaderGrid.visibility = View.GONE
         
+        // Hide live TV container to prevent it showing behind movie player
+        findViewById<FrameLayout>(R.id.live_tv_container)?.visibility = View.GONE
+        
+        // Stop any running players before showing movie
+        livePlayer?.apply {
+            stop()
+            clearMediaItems()
+        }
+        vodPlayer?.apply {
+            stop()
+            clearMediaItems()
+        }
+        liveTVManager?.cleanup()
+        
         // Make player/preview container take full screen
         playerPreviewContainer.visibility = View.VISIBLE
         val containerParams = playerPreviewContainer.layoutParams as LinearLayout.LayoutParams
@@ -3144,8 +4242,8 @@ class MainActivity : ComponentActivity() {
             detailPosterText.visibility = View.GONE
             detailPoster.load(finalImageUrl) {
                 crossfade(200)
-                placeholder(android.R.drawable.ic_menu_gallery)
-                error(android.R.drawable.ic_menu_gallery)
+                placeholder(R.drawable.ic_movie_placeholder)
+                error(R.drawable.ic_movie_placeholder)
                 listener(
                     onError = { _, _ ->
                         detailPoster.visibility = View.GONE
@@ -3223,6 +4321,9 @@ class MainActivity : ComponentActivity() {
             clearMediaItems()
         }
         
+        // Reset search tracking when exiting fullscreen normally
+        cameFromSearch = false
+        
         // Check if we were playing a series - go back to series detail screen
         if (isPlayingSeries && currentSeriesId != null) {
             android.util.Log.d("MainActivity", "✓ Exiting SERIES playback - returning to SeriesDetailActivity")
@@ -3261,15 +4362,17 @@ class MainActivity : ComponentActivity() {
             return
         }
         
-        // Restore normal UI for MOVIES - show content WITHOUT sidebar
-        android.util.Log.d("MainActivity", "✓ Exiting MOVIE playback - restoring movie list (NO sidebar)")
+        // Restore normal UI for MOVIES - show Netflix rows WITH sidebar for navigation
+        android.util.Log.d("MainActivity", "✓ Exiting MOVIE playback - restoring Netflix rows WITH sidebar")
         
-        sidebarContainer.visibility = View.GONE
+        // Show sidebar for navigation
+        sidebarContainer.visibility = View.VISIBLE
         val sidebarFrame = findViewById<FrameLayout>(R.id.sidebar_frame)
-        sidebarFrame?.visibility = View.GONE
-        categorySidebar.visibility = View.GONE
-        contentHeader.visibility = View.VISIBLE
-        contentListContainer.visibility = View.VISIBLE
+        sidebarFrame?.visibility = View.VISIBLE
+        categorySidebar.visibility = View.GONE  // Keep categories hidden for movies tab
+        contentHeader.visibility = View.GONE  // Hide content header for Netflix rows
+        contentListContainer.visibility = View.GONE  // Hide grid view
+        movieRowsRecycler.visibility = View.VISIBLE  // Show Netflix rows
         
         // Hide player
         playerPreviewContainer.visibility = View.GONE
@@ -3284,10 +4387,10 @@ class MainActivity : ComponentActivity() {
             setupContentAdapter()
         }
         
-        // Focus on content, NOT sidebar
-        contentRecycler.requestFocus()
+        // Focus on movies tab in sidebar
+        moviesTab.requestFocus()
         
-        android.util.Log.d("MainActivity", "✓ Exited movie fullscreen - restored content WITHOUT sidebar")
+        android.util.Log.d("MainActivity", "✓ Exited movie fullscreen - restored content WITH sidebar")
         android.util.Log.d("MainActivity", "  - sidebarContainer: ${sidebarContainer.visibility}")
         android.util.Log.d("MainActivity", "  - sidebarFrame: ${sidebarFrame?.visibility}")
         android.util.Log.d("MainActivity", "  - contentHeader: ${contentHeader.visibility}")
@@ -3436,6 +4539,16 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.d("MainActivity", "  -> Calling exitMovieFullscreen() for MOVIES/SHOWS")
                 // Exit movie fullscreen view
                 exitMovieFullscreen()
+                
+                // If we came from search, return to SearchActivity instead of staying in MainActivity
+                if (cameFromSearch) {
+                    android.util.Log.d("MainActivity", "  -> Came from search, returning to SearchActivity")
+                    val intent = Intent(this@MainActivity, SearchActivity::class.java)
+                    intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    startActivity(intent)
+                    finish() // Close MainActivity
+                    return
+                }
             }
             return
         }
@@ -4136,41 +5249,51 @@ class MainActivity : ComponentActivity() {
                 
                 var streamUrl = ""
                 
-                // For VOD, first get file info to get the file ID, then call create_link
+                // For VOD, ALWAYS get file info first, then call create_link
                 if (contentType == "vod") {
-                    android.util.Log.d("MainActivity", "Getting VOD file info for movie ID: ${channel.id}")
-                    try {
-                        val fileInfo = stalkerClient.getVodFileInfo(channel.id)
-                        if (fileInfo != null) {
-                            // Get the file ID from the response
-                            val fileId = fileInfo["id"] as? String
-                            if (fileId != null) {
-                                android.util.Log.d("MainActivity", "Got file ID: $fileId, calling create_link...")
-                                
-                                // Now call create_link with the file ID in the correct format
-                                val vodCmd = "/media/file_$fileId.mpg"
-                                val response = stalkerClient.getVodStreamUrl(vodCmd, "vod")
-                                streamUrl = response.url
-                                android.util.Log.d("MainActivity", "Got tokenized stream URL: $streamUrl")
-                            } else {
-                                android.util.Log.w("MainActivity", "No file ID in file info")
-                            }
+                    android.util.Log.d("MainActivity", "🎬 ===== PLAYING MOVIE =====")
+                    android.util.Log.d("MainActivity", "🎬 Movie ID: ${channel.id}, Name: ${channel.name}")
+                    android.util.Log.d("MainActivity", "🎬 Original CMD: $rawCmd")
+                    
+                    // Step 1: Get file info to get the file ID
+                    val fileInfo = stalkerClient.getVodFileInfo(channel.id)
+                    android.util.Log.d("MainActivity", "🎬 File info response: $fileInfo")
+                    
+                    if (fileInfo != null) {
+                        // Step 2: Get the file ID from the response
+                        val fileId = fileInfo["id"] as? String
+                        android.util.Log.d("MainActivity", "🎬 Extracted file ID: $fileId")
+                        
+                        if (fileId != null) {
+                            android.util.Log.d("MainActivity", "🎬 Got file ID: $fileId, calling create_link...")
+                            
+                            // Step 3: Construct cmd parameter in the correct format
+                            val vodCmd = "/media/file_$fileId.mpg"
+                            android.util.Log.d("MainActivity", "🎬 Constructed VOD CMD: $vodCmd")
+                            
+                            // Step 4: Get authenticated stream URL using create_link
+                            val response = stalkerClient.getVodStreamUrl(vodCmd, "vod")
+                            streamUrl = response.url
+                            android.util.Log.d("MainActivity", "🎬 Got tokenized stream URL: $streamUrl")
                         } else {
-                            android.util.Log.w("MainActivity", "No file info returned")
+                            android.util.Log.w("MainActivity", "🎬 No file ID in file info response")
                         }
-                    } catch (e: Exception) {
-                        android.util.Log.e("MainActivity", "Error getting file info: ${e.message}")
+                    } else {
+                        android.util.Log.w("MainActivity", "🎬 No file info returned from getVodFileInfo")
                     }
                 } else {
                     // For live TV, use create_link
-                    android.util.Log.d("MainActivity", "Requesting stream URL with CMD: $finalCmd")
+                    android.util.Log.d("MainActivity", "🎬 Requesting live stream URL with CMD: $finalCmd")
                     val response = stalkerClient.getVodStreamUrl(finalCmd, contentType)
                     streamUrl = response.url
                 }
-                android.util.Log.d("MainActivity", "Got stream URL: $streamUrl")
+                android.util.Log.d("MainActivity", "🎬 Final stream URL: $streamUrl")
                 
                 if (streamUrl.isEmpty()) {
-                    android.util.Log.e("MainActivity", "Received empty stream URL")
+                    android.util.Log.e("MainActivity", "🎬 Failed to get stream URL for movie: ${channel.name}")
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "Failed to load movie: ${channel.name}", Toast.LENGTH_SHORT).show()
+                    }
                     return@launch
                 }
                 
@@ -4181,40 +5304,86 @@ class MainActivity : ComponentActivity() {
                 val mediaItem = MediaItem.Builder()
                     .setUri(streamUrl)
                     .build()
+                android.util.Log.d("MainActivity", "🎬 Created media item with URI: $streamUrl")
                 
                 // Stop BOTH players to prevent overlapping audio
-                android.util.Log.d("MainActivity", "Stopping all players...")
+                android.util.Log.d("MainActivity", "🎬 Stopping all players...")
                 livePlayer?.apply {
+                    android.util.Log.d("MainActivity", "🎬 Stopping livePlayer")
                     stop()
                     clearMediaItems()
                 }
                 vodPlayer?.apply {
+                    android.util.Log.d("MainActivity", "🎬 Stopping vodPlayer")
                     stop()
                     clearMediaItems()
                 }
                     
                 targetPlayer?.apply {
-                    android.util.Log.d("MainActivity", "Setting new media item...")
+                    // Set PlayerView to the target player BEFORE setting media item
+                    android.util.Log.d("MainActivity", "🎬 Switching playerView from ${playerView.player?.javaClass?.simpleName} to ${targetPlayer.javaClass.simpleName}")
+                    playerView.player = targetPlayer
+                    android.util.Log.d("MainActivity", "🎬 PlayerView player is now: ${playerView.player?.javaClass?.simpleName}")
+                    
+                    android.util.Log.d("MainActivity", "🎬 Setting media item on ${if (isLive) "livePlayer" else "vodPlayer"}")
                     setMediaItem(mediaItem)
-                    android.util.Log.d("MainActivity", "Preparing player...")
+                    android.util.Log.d("MainActivity", "🎬 Preparing ${if (isLive) "livePlayer" else "vodPlayer"}")
                     prepare()
+                    
+                    // Add listener to log player state changes
+                    addListener(object : androidx.media3.common.Player.Listener {
+                        override fun onPlaybackStateChanged(playbackState: Int) {
+                            val stateName = when (playbackState) {
+                                androidx.media3.common.Player.STATE_IDLE -> "IDLE"
+                                androidx.media3.common.Player.STATE_BUFFERING -> "BUFFERING"
+                                androidx.media3.common.Player.STATE_READY -> "READY"
+                                androidx.media3.common.Player.STATE_ENDED -> "ENDED"
+                                else -> "UNKNOWN"
+                            }
+                            android.util.Log.d("MainActivity", "🎬 Player state changed to: $stateName")
+                            
+                            if (playbackState == androidx.media3.common.Player.STATE_READY) {
+                                android.util.Log.d("MainActivity", "🎬 Video size: ${videoSize.width}x${videoSize.height}")
+                                android.util.Log.d("MainActivity", "🎬 Player is playing: $isPlaying")
+                                android.util.Log.d("MainActivity", "🎬 Player volume: $volume")
+                            }
+                        }
+                        
+                        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                            android.util.Log.e("MainActivity", "🎬 Player error: ${error.message}", error)
+                            
+                            // Handle HLS parsing errors gracefully
+                            val errorMessage = when {
+                                error.message?.contains("NumberFormatException") == true -> 
+                                    "Video format error - this content may be corrupted or incompatible"
+                                error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ->
+                                    "Network connection failed - please check your internet connection"
+                                error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ->
+                                    "Network timeout - please try again"
+                                else -> "Playback error - please try again"
+                            }
+                            
+                            runOnUiThread {
+                                Toast.makeText(this@MainActivity, errorMessage, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                        
+                        override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                            android.util.Log.d("MainActivity", "🎬 Video size changed: ${videoSize.width}x${videoSize.height}")
+                        }
+                    })
                 }
-                
-                // Switch PlayerView to the appropriate player AFTER preparing media
-                // This ensures the surface is properly attached when playback starts
-                playerView.player = targetPlayer
-                android.util.Log.d("MainActivity", "Switched PlayerView to ${if (isLive) "Live" else "VOD"} player")
                 
                 // Start playback
                 targetPlayer?.apply {
-                    android.util.Log.d("MainActivity", "Starting playback...")
+                    android.util.Log.d("MainActivity", "🎬 Starting playback...")
                     playWhenReady = true
                 }
                 
                 // Update player controls based on content type
                 updatePlayerControlsForContentType()
                 
-                android.util.Log.d("MainActivity", "Player started successfully")
+                android.util.Log.d("MainActivity", "🎬 Player started successfully")
             } catch (e: Exception) {
                 android.util.Log.e("MainActivity", "Error getting stream URL: ${e.message}", e)
                 e.printStackTrace()
@@ -4662,50 +5831,6 @@ class MainActivity : ComponentActivity() {
         vodPlayer = null
     }
     
-    // ===== SYNC & USER INITIALIZATION =====
-    
-    private fun initializeUser() {
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val db = com.ronika.iptvnative.database.AppDatabase.getDatabase(this@MainActivity)
-                val userDao = db.userDao()
-                
-                var user = userDao.getUser()
-                
-                if (user == null) {
-                    // Create user with hardcoded credentials
-                    // Using direct IP to bypass DNS (tv.stream4k.cc -> 172.66.167.27)
-                    user = com.ronika.iptvnative.database.entities.UserEntity(
-                        username = "ronak",
-                        email = "ronakdarji1997@gmail.com",
-                        portalUrl = "http://172.66.167.27/stalker_portal/server/load.php",
-                        mac = "00:1a:79:17:f4:f5",
-                        bearerToken = "1E75E91204660B7A876055CE8830130E",
-                        tokenExpiry = System.currentTimeMillis() + (365L * 24 * 60 * 60 * 1000) // 1 year
-                    )
-                    userDao.insertUser(user)
-                    
-                    // Set ApiClient credentials
-                    com.ronika.iptvnative.api.ApiClient.portalUrl = user.portalUrl
-                    com.ronika.iptvnative.api.ApiClient.macAddress = user.mac
-                    com.ronika.iptvnative.api.ApiClient.bearerToken = user.bearerToken
-                    
-                    android.util.Log.d("MainActivity", "User initialized: ${user.username}")
-                } else {
-                    // Use existing user
-                    com.ronika.iptvnative.api.ApiClient.portalUrl = user.portalUrl
-                    com.ronika.iptvnative.api.ApiClient.macAddress = user.mac
-                    com.ronika.iptvnative.api.ApiClient.bearerToken = user.bearerToken
-                    
-                    android.util.Log.d("MainActivity", "Using existing user: ${user.username}")
-                }
-                
-            } catch (e: Exception) {
-                android.util.Log.e("MainActivity", "Error initializing user: ${e.message}", e)
-            }
-        }
-    }
-    
 
     private fun showExitConfirmationDialog() {
         AlertDialog.Builder(this)
@@ -4722,8 +5847,52 @@ class MainActivity : ComponentActivity() {
             .setCancelable(true)
             .show()
     }
+
+
     
     private fun Int.dpToPx(context: android.content.Context): Int {
         return (this * context.resources.displayMetrics.density).toInt()
+    }
+    
+    // Debug method to check database contents
+    private fun checkDatabaseContents() {
+        lifecycleScope.launch {
+            try {
+                android.util.Log.d("DatabaseCheck", "🔍 Checking database contents...")
+                
+                // Check user
+                val userDao = database.userDao()
+                val user = userDao.getUser()
+                if (user != null) {
+                    android.util.Log.d("DatabaseCheck", "✅ User found: ID=${user.id}, Username=${user.username}, Email=${user.email}")
+                    android.util.Log.d("DatabaseCheck", "   Portal URL: ${user.portalUrl}")
+                    android.util.Log.d("DatabaseCheck", "   MAC: ${user.mac}")
+                    android.util.Log.d("DatabaseCheck", "   Token: ${user.bearerToken.take(10)}...")
+                    android.util.Log.d("DatabaseCheck", "   Token Expiry: ${java.util.Date(user.tokenExpiry)}")
+                } else {
+                    android.util.Log.w("DatabaseCheck", "❌ No user found in database")
+                }
+                
+                // Check categories (all categories saved, no filtering applied)
+                val categoryDao = database.categoryDao()
+                val allCategories = categoryDao.getCategoriesByType("MOVIE") + categoryDao.getCategoriesByType("SERIES") + categoryDao.getCategoriesByType("LIVE")
+                android.util.Log.d("DatabaseCheck", "📂 Found ${allCategories.size} categories in database (all categories saved, no filtering applied):")
+                
+                allCategories.groupBy { it.type }.forEach { (type, categories) ->
+                    android.util.Log.d("DatabaseCheck", "   ${type}: ${categories.size} categories")
+                    categories.take(3).forEach { category ->
+                        android.util.Log.d("DatabaseCheck", "     - ${category.name} (ID: ${category.externalId}, Items: ${category.itemCount})")
+                    }
+                    if (categories.size > 3) {
+                        android.util.Log.d("DatabaseCheck", "     ... and ${categories.size - 3} more")
+                    }
+                }
+                
+                android.util.Log.d("DatabaseCheck", "✅ Database check complete")
+                
+            } catch (e: Exception) {
+                android.util.Log.e("DatabaseCheck", "❌ Error checking database: ${e.message}", e)
+            }
+        }
     }
 }

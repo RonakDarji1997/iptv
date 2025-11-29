@@ -8,11 +8,13 @@ import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
+import coil.request.ImageRequest
 import com.ronika.iptvnative.models.Movie
+import kotlinx.coroutines.Dispatchers
 
 // Category Row Adapter (Netflix-style rows)
 class MovieCategoryRowAdapter(
-    private val onMovieClick: (Movie) -> Unit,
+    private val onMovieClick: (Movie, String, String) -> Unit, // Added categoryId and categoryTitle
     private val onViewAllClick: (String, String) -> Unit // categoryId, categoryTitle
 ) : RecyclerView.Adapter<MovieCategoryRowAdapter.CategoryRowViewHolder>() {
 
@@ -30,6 +32,17 @@ class MovieCategoryRowAdapter(
         categoryRows.addAll(rows)
         notifyDataSetChanged()
         android.util.Log.d("MovieCategoryRowAdapter", "notifyDataSetChanged called, categoryRows.size = ${categoryRows.size}")
+    }
+    
+    fun updateCategoryRow(updatedRow: CategoryRow) {
+        val index = categoryRows.indexOfFirst { it.categoryId == updatedRow.categoryId }
+        if (index != -1) {
+            categoryRows[index] = updatedRow
+            notifyItemChanged(index)
+            android.util.Log.d("MovieCategoryRowAdapter", "Updated row at index $index for category ${updatedRow.categoryTitle} with ${updatedRow.movies.size} movies")
+        } else {
+            android.util.Log.w("MovieCategoryRowAdapter", "Could not find category row to update: ${updatedRow.categoryId}")
+        }
     }
     
     fun addCategoryRow(row: CategoryRow) {
@@ -58,9 +71,10 @@ class MovieCategoryRowAdapter(
         private val categoryIndicator: TextView = itemView.findViewById(R.id.category_indicator)
         private val moviesRecycler: RecyclerView = itemView.findViewById(R.id.movies_recycler)
         
-        private val movieAdapter = MovieThumbnailAdapter(onMovieClick) { categoryId, categoryTitle ->
-            onViewAllClick(categoryId, categoryTitle)
-        }
+        private val movieAdapter = MovieThumbnailAdapter(
+            onMovieClick = { movie, catId, catTitle -> onMovieClick(movie, catId, catTitle) },
+            onViewAllClick = onViewAllClick
+        )
 
         init {
             moviesRecycler.apply {
@@ -69,22 +83,6 @@ class MovieCategoryRowAdapter(
                 setHasFixedSize(true)
                 setItemViewCacheSize(10) // Cache 10 items for faster scrolling
                 isNestedScrollingEnabled = false // Disable for better performance
-                
-                // Override key listener to always focus first item when coming from above/below
-                setOnKeyListener { _, keyCode, event ->
-                    if (event.action == android.view.KeyEvent.ACTION_DOWN) {
-                        when (keyCode) {
-                            android.view.KeyEvent.KEYCODE_DPAD_DOWN, android.view.KeyEvent.KEYCODE_DPAD_UP -> {
-                                // Always focus first item when moving vertically
-                                post {
-                                    getChildAt(0)?.requestFocus()
-                                }
-                                false // Let the event propagate
-                            }
-                            else -> false
-                        }
-                    } else false
-                }
                 
                 // Add child focus listener to change category title color
                 setOnHierarchyChangeListener(object : ViewGroup.OnHierarchyChangeListener {
@@ -149,7 +147,7 @@ class MovieCategoryRowAdapter(
 
 // Movie Thumbnail Adapter (Horizontal scrolling)
 class MovieThumbnailAdapter(
-    private val onMovieClick: (Movie) -> Unit,
+    private val onMovieClick: (Movie, String, String) -> Unit, // Added categoryId and categoryTitle
     private val onViewAllClick: (String, String) -> Unit
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
@@ -250,7 +248,7 @@ class MovieThumbnailAdapter(
             // Handle click to play movie
             itemView.setOnClickListener {
                 if (bindingAdapterPosition < movies.size) {
-                    onMovieClick(movies[bindingAdapterPosition])
+                    onMovieClick(movies[bindingAdapterPosition], categoryId, categoryTitle)
                 }
             }
         }
@@ -270,15 +268,28 @@ class MovieThumbnailAdapter(
                 imageUrl
             }
             
-            // Load poster image using Coil with optimizations
+            // Load poster image using Coil with performance optimizations
             poster.load(fullUrl) {
                 placeholder(R.drawable.ic_movie_placeholder)
                 error(R.drawable.ic_movie_placeholder)
-                crossfade(false) // Disable for performance
-                size(300, 450) // Resize to reasonable dimensions
+                crossfade(false) // Disable crossfade for performance
+                size(140, 210) // Smaller size for better performance
                 memoryCacheKey(fullUrl) // Cache by URL
                 diskCacheKey(fullUrl)
                 allowHardware(true) // Use hardware bitmaps for GPU acceleration
+                memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                // Limit concurrent loads to prevent overwhelming the system
+                fetcherDispatcher(Dispatchers.IO.limitedParallelism(3))
+                decoderDispatcher(Dispatchers.Default.limitedParallelism(2))
+                listener(
+                    onError = { request, result ->
+                        // Don't log coroutine cancellation errors - these are normal during tab switches
+                        if (result.throwable.message?.contains("StandaloneCoroutine was cancelled") != true) {
+                            android.util.Log.w("MovieThumbnailAdapter", "Failed to load poster: ${request.data}", result.throwable)
+                        }
+                    }
+                )
             }
         }
     }

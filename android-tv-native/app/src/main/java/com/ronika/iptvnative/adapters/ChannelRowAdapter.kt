@@ -106,11 +106,11 @@ class ChannelRowAdapter(
             if (!channel.logo.isNullOrEmpty()) {
                 channelLogo.load(channel.logo) {
                     crossfade(true)
-                    placeholder(android.R.drawable.ic_menu_gallery)
-                    error(android.R.drawable.ic_menu_gallery)
+                    placeholder(R.drawable.ic_movie_placeholder)
+                    error(R.drawable.ic_movie_placeholder)
                 }
             } else {
-                channelLogo.setImageResource(android.R.drawable.ic_menu_gallery)
+                channelLogo.setImageResource(R.drawable.ic_movie_placeholder)
             }
             
             updateStyle()

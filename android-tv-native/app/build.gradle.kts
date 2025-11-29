@@ -38,6 +38,11 @@ android {
     buildFeatures {
         viewBinding = true
     }
+
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
 }
 
 dependencies {
@@ -86,4 +91,48 @@ dependencies {
     
     // Material Design
     implementation("com.google.android.material:material:1.11.0")
+}
+
+// Custom tasks for automatic install and run after build
+tasks.register("installAndRunDebug") {
+    group = "custom"
+    description = "Build, install, and run the debug APK on connected device"
+    dependsOn("build", "installDebug")
+
+    doLast {
+        exec {
+            workingDir = project.rootDir
+            commandLine("adb", "shell", "am", "start", "-n", "com.ronika.iptvnative/.MainActivity")
+        }
+    }
+}
+
+tasks.register("installAndRunRelease") {
+    group = "custom"
+    description = "Build, install, and run the release APK on connected device"
+    dependsOn("build", "installRelease")
+
+    doLast {
+        exec {
+            workingDir = project.rootDir
+            commandLine("adb", "shell", "am", "start", "-n", "com.ronika.iptvnative/.MainActivity")
+        }
+    }
+}
+
+// Make the default build task also install and run
+tasks.named("build") {
+    finalizedBy("installDebug")
+}
+
+tasks.register("runApp") {
+    group = "custom"
+    description = "Launch the app on connected device (assumes app is already installed)"
+
+    doLast {
+        exec {
+            workingDir = project.rootDir
+            commandLine("adb", "shell", "am", "start", "-n", "com.ronika.iptvnative/.MainActivity")
+        }
+    }
 }

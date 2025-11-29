@@ -7,12 +7,15 @@ import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
+import coil.request.ImageRequest
 import com.ronika.iptvnative.R
 import com.ronika.iptvnative.models.Channel
 
 class ChannelAdapter(
     private val onChannelSelected: (Channel) -> Unit,
-    private val onChannelFocused: ((Channel) -> Unit)? = null
+    private val onChannelFocused: ((Channel) -> Unit)? = null,
+    private val showContentType: Boolean = false,
+    private val getContentType: ((Channel) -> String?)? = null
 ) : RecyclerView.Adapter<ChannelAdapter.ChannelViewHolder>() {
 
     private var channels: List<Channel> = emptyList()
@@ -72,6 +75,7 @@ class ChannelAdapter(
     inner class ChannelViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         private val channelLogo: ImageView = itemView.findViewById(R.id.channel_logo)
         private val channelName: TextView = itemView.findViewById(R.id.channel_name)
+        private val contentTypeIndicator: TextView = itemView.findViewById(R.id.content_type_indicator)
         private val cardView = itemView as androidx.cardview.widget.CardView
 
         init {
@@ -99,17 +103,43 @@ class ChannelAdapter(
         fun bind(channel: Channel) {
             channelName.text = channel.name
             
-            // Load channel logo using Coil with caching
+            // Show content type indicator if enabled
+            if (showContentType) {
+                val contentType = getContentType?.invoke(channel)
+                if (contentType != null) {
+                    contentTypeIndicator.text = contentType
+                    contentTypeIndicator.visibility = View.VISIBLE
+                } else {
+                    contentTypeIndicator.visibility = View.GONE
+                }
+            } else {
+                contentTypeIndicator.visibility = View.GONE
+            }
+            
+            // Load channel logo with enhanced caching and async priority
             if (!channel.logo.isNullOrEmpty()) {
                 channelLogo.load(channel.logo) {
                     crossfade(false) // Disable crossfade for better performance
-                    placeholder(android.R.drawable.ic_menu_gallery)
-                    error(android.R.drawable.ic_menu_gallery)
+                    placeholder(R.drawable.ic_movie_placeholder)
+                    error(R.drawable.ic_movie_placeholder)
                     memoryCacheKey(channel.logo) // Cache by URL
                     diskCacheKey(channel.logo) // Disk cache by URL
+                    // Add priority for faster loading during navigation
+                    // priority(Priority.HIGH)
+                    // Ensure async loading (default, but explicit)
+                    allowHardware(true) // Use hardware bitmaps for GPU acceleration
+                    // Add listener to avoid blocking UI on errors
+                    listener(
+                        onError = { request, result ->
+                            // Don't log coroutine cancellation errors - these are normal during tab switches
+                            if (result.throwable.message?.contains("StandaloneCoroutine was cancelled") != true) {
+                                android.util.Log.w("ChannelAdapter", "Failed to load image: ${request.data}", result.throwable)
+                            }
+                        }
+                    )
                 }
             } else {
-                channelLogo.setImageResource(android.R.drawable.ic_menu_gallery)
+                channelLogo.setImageResource(R.drawable.ic_movie_placeholder)
             }
             
             updateStyle()
@@ -121,18 +151,19 @@ class ChannelAdapter(
             
             val shouldHighlight = itemView.hasFocus()
             
-            // Only update border when focus state changes
-            if (shouldHighlight) {
-                if (cardView.foreground == null) {
-                    val drawable = android.graphics.drawable.GradientDrawable()
-                    drawable.setStroke(6, android.graphics.Color.WHITE)
-                    drawable.cornerRadius = 24f
-                    cardView.foreground = drawable
-                }
+            // Only update border when focus state changes (avoid redundant calls)
+            val currentForeground = cardView.foreground
+            val needsUpdate = if (shouldHighlight) {
+                currentForeground == null
             } else {
-                if (cardView.foreground != null) {
-                    cardView.foreground = null
-                }
+                currentForeground != null
+            }
+            
+            if (needsUpdate) {
+                val drawable = android.graphics.drawable.GradientDrawable()
+                drawable.setStroke(6, android.graphics.Color.WHITE)
+                drawable.cornerRadius = 24f
+                cardView.foreground = if (shouldHighlight) drawable else null
             }
         }
     }

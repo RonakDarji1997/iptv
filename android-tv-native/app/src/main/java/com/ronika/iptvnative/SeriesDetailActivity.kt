@@ -13,7 +13,6 @@ import androidx.recyclerview.widget.RecyclerView
 import coil.load
 import coil.request.CachePolicy
 import com.ronika.iptvnative.adapters.EpisodeHorizontalAdapter
-import com.ronika.iptvnative.api.ApiClient
 import com.ronika.iptvnative.models.Episode
 import com.ronika.iptvnative.models.Season
 import kotlinx.coroutines.launch
@@ -37,8 +36,12 @@ class SeriesDetailActivity : ComponentActivity() {
         
         fun clearOldCache() {
             val now = System.currentTimeMillis()
-            seriesDataCache.entries.removeIf { (_, cache) ->
-                now - cache.timestamp > CACHE_VALIDITY_MS
+            val iterator = seriesDataCache.entries.iterator()
+            while (iterator.hasNext()) {
+                val (_, cache) = iterator.next()
+                if (now - cache.timestamp > CACHE_VALIDITY_MS) {
+                    iterator.remove()
+                }
             }
         }
     }
@@ -172,18 +175,15 @@ class SeriesDetailActivity : ComponentActivity() {
             val fullUrl = if (currentPosterUrl.startsWith("http")) {
                 currentPosterUrl
             } else {
-                val cleanUrl = ApiClient.portalUrl.replace("/stalker_portal/?", "").replace("/stalker_portal", "").replace("/server/load.php", "")
-                val finalUrl = "$cleanUrl$currentPosterUrl"
-                android.util.Log.d("SeriesDetail", "Constructed full URL: $finalUrl")
-                finalUrl
+                "http://tv.stream4k.cc$currentPosterUrl"
             }
             posterImage.load(fullUrl) {
                 crossfade(false) // Disable for performance
                 size(400, 600) // Optimize size for series detail poster
                 memoryCachePolicy(CachePolicy.ENABLED)
                 diskCachePolicy(CachePolicy.ENABLED)
-                placeholder(R.drawable.placeholder_poster)
-                error(R.drawable.placeholder_poster)
+                placeholder(R.drawable.ic_movie_placeholder)
+                error(R.drawable.ic_movie_placeholder)
                 allowHardware(true) // GPU acceleration
             }
         } else {
@@ -236,8 +236,8 @@ class SeriesDetailActivity : ComponentActivity() {
                 
                 // Use direct Stalker portal call
                 val stalkerClient = com.ronika.iptvnative.api.StalkerClient(
-                    ApiClient.portalUrl,
-                    ApiClient.macAddress
+                    "http://tv.stream4k.cc/stalker_portal/server/load.php",
+                    "00:1a:79:17:f4:f5"
                 )
                 
                 val jsData = stalkerClient.getSeriesSeasons(seriesId)
@@ -291,8 +291,8 @@ class SeriesDetailActivity : ComponentActivity() {
             
             // Use direct Stalker portal call
             val stalkerClient = com.ronika.iptvnative.api.StalkerClient(
-                ApiClient.portalUrl,
-                ApiClient.macAddress
+                "http://tv.stream4k.cc/stalker_portal/server/load.php",
+                "00:1a:79:17:f4:f5"
             )
             
             val jsData = stalkerClient.getSeriesEpisodes(seriesId, season.id)
@@ -433,6 +433,12 @@ class SeriesDetailActivity : ComponentActivity() {
     
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
+            // Always go back to main activity with movie rows, clearing the stack
+            val intent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("SELECT_TAB", "SHOWS") // Go to shows tab since we're in series detail
+            }
+            startActivity(intent)
             finish()
             return true
         }

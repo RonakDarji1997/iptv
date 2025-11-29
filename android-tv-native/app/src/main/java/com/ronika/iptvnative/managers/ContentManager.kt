@@ -1,10 +1,6 @@
 package com.ronika.iptvnative.managers
 
 import android.content.Context
-import com.ronika.iptvnative.api.ApiClient
-import com.ronika.iptvnative.api.ChannelsRequest
-import com.ronika.iptvnative.api.GenreRequest
-import com.ronika.iptvnative.api.MoviesRequest
 import com.ronika.iptvnative.models.Channel
 import com.ronika.iptvnative.models.Genre
 import com.ronika.iptvnative.models.Movie
@@ -15,6 +11,14 @@ class ContentManager(
     private val context: Context,
     private val scope: CoroutineScope
 ) {
+    
+    // Direct Stalker client for VOD (no backend, no DB, no handshake)
+    private val stalkerClient: com.ronika.iptvnative.api.StalkerClient by lazy {
+        com.ronika.iptvnative.api.StalkerClient(
+            portalUrl = "http://tv.stream4k.cc/stalker_portal/server/load.php",
+            macAddress = "00:1a:79:17:f4:f5"
+        )
+    }
     
     // Data storage
     val allChannels = mutableListOf<Channel>()
@@ -29,12 +33,7 @@ class ContentManager(
     suspend fun loadGenres(tab: String): Result<List<Genre>> {
         return try {
             android.util.Log.d("ContentManager", "Loading genres for tab: $tab")
-            val response = ApiClient.apiService.getGenres(
-                GenreRequest(
-                    mac = ApiClient.macAddress,
-                    url = ApiClient.portalUrl
-                )
-            )
+            val response = stalkerClient.getVodCategories(type = "vod")
             
             if (response.genres != null) {
                 android.util.Log.d("ContentManager", "Loaded ${response.genres.size} genres")
@@ -53,14 +52,7 @@ class ContentManager(
         return try {
             android.util.Log.d("ContentManager", "Loading channels for genre: $genreId")
             
-            val response = ApiClient.apiService.getChannels(
-                ChannelsRequest(
-                    mac = ApiClient.macAddress,
-                    url = ApiClient.portalUrl,
-                    genre = genreId,
-                    page = 1
-                )
-            )
+            val response = stalkerClient.getChannels(genreId = genreId, page = 1)
             
             if (response.channels != null && response.channels.data != null) {
                 allChannels.clear()
@@ -80,23 +72,15 @@ class ContentManager(
     suspend fun loadMovies(categoryId: String, page: Int = 1): Result<List<Movie>> {
         return try {
             android.util.Log.d("ContentManager", "Loading movies - category: $categoryId, page: $page")
-            
-            val response = ApiClient.apiService.getMovies(
-                MoviesRequest(
-                    mac = ApiClient.macAddress,
-                    url = ApiClient.portalUrl,
-                    category = categoryId,
-                    page = page,
-                    type = "vod"
-                )
-            )
-            
+
+            val response = stalkerClient.getVodItems(categoryId, page, "vod")
+
             if (response.items != null && response.items.data != null) {
                 if (page == 1) {
                     allMovies.clear()
                 }
                 allMovies.addAll(response.items.data)
-                
+
                 hasMorePages = response.items.data.size >= 20
                 android.util.Log.d("ContentManager", "Loaded ${response.items.data.size} movies, hasMorePages: $hasMorePages")
                 Result.success(response.items.data)
@@ -113,17 +97,9 @@ class ContentManager(
     suspend fun loadSeries(categoryId: String, page: Int = 1): Result<List<Series>> {
         return try {
             android.util.Log.d("ContentManager", "Loading series - category: $categoryId, page: $page")
-            
-            val response = ApiClient.apiService.getSeries(
-                MoviesRequest(
-                    mac = ApiClient.macAddress,
-                    url = ApiClient.portalUrl,
-                    category = categoryId,
-                    page = page,
-                    type = "series"
-                )
-            )
-            
+
+            val response = stalkerClient.getVodItems(categoryId, page, "series")
+
             if (response.items != null && response.items.data != null) {
                 val seriesList = response.items.data.map { movie ->
                     Series(
@@ -146,12 +122,12 @@ class ContentManager(
                         totalEpisodes = movie.duration
                     )
                 }
-                
+
                 if (page == 1) {
                     allSeries.clear()
                 }
                 allSeries.addAll(seriesList)
-                
+
                 hasMorePages = seriesList.size >= 20
                 android.util.Log.d("ContentManager", "Loaded ${seriesList.size} series, hasMorePages: $hasMorePages")
                 Result.success(seriesList)

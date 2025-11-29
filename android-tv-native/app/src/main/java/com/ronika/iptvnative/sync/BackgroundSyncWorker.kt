@@ -4,8 +4,6 @@ import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import com.ronika.iptvnative.api.ApiClient
-import com.ronika.iptvnative.api.MoviesRequest
 import com.ronika.iptvnative.database.AppDatabase
 import com.ronika.iptvnative.database.entities.MovieEntity
 import com.ronika.iptvnative.database.entities.SeriesEntity
