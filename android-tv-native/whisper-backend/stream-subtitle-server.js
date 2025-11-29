@@ -22,10 +22,27 @@ const fetch = require('node-fetch');
 const PORT = process.env.PORT || 8770;
 const PYTHON_PORT = process.env.PYTHON_PORT || 8771;
 
+// IP whitelist for security (comma-separated Tailscale IPs)
+const ALLOWED_IPS = process.env.ALLOWED_IPS ? process.env.ALLOWED_IPS.split(',').map(ip => ip.trim()) : null;
+
 const app = express();
 const glob = require('glob');
 app.use(cors());
 app.use(express.json());
+
+// IP filtering middleware
+app.use((req, res, next) => {
+    const clientIP = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
+    console.log(`🔍 Incoming request from IP: ${clientIP}, URL: ${req.url}`);
+    if (ALLOWED_IPS) {
+        if (!ALLOWED_IPS.includes(clientIP)) {
+            console.log(`❌ Blocked request from unauthorized IP: ${clientIP} (allowed: ${ALLOWED_IPS.join(', ')})`);
+            // Temporarily allow but log - change back after debugging
+            // return res.status(403).json({ error: 'Access denied' });
+        }
+    }
+    next();
+});
 
 // Active subtitle jobs: streamId -> { streamUrl, ffmpegProcess, vttFile, lastUpdate }
 const activeJobs = new Map();

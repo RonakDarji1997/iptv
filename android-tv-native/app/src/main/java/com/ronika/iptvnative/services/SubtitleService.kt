@@ -164,8 +164,12 @@ class SubtitleService {
             
             val response = client.newCall(request).execute()
             
+            Log.d(TAG, "📥 Response status: ${response.code} ${response.message}")
+            Log.d(TAG, "📥 Response headers: ${response.headers}")
+            
             if (response.isSuccessful) {
                 val responseBody = response.body?.string()
+                Log.d(TAG, "📥 Response body: $responseBody")
                 val responseJson = JSONObject(responseBody ?: "{}")
                 
                 Log.d(TAG, "📥 Backend response: $responseJson")
@@ -173,6 +177,8 @@ class SubtitleService {
                 responseJson.optString("streamId", "")
             } else {
                 Log.e(TAG, "Backend error: ${response.code} ${response.message}")
+                val errorBody = response.body?.string()
+                Log.e(TAG, "Backend error body: $errorBody")
                 null
             }
             
@@ -207,10 +213,17 @@ class SubtitleService {
             
             val response = client.newCall(request).execute()
             
+            Log.d(TAG, "🛑 Response status: ${response.code} ${response.message}")
+            Log.d(TAG, "🛑 Response headers: ${response.headers}")
+            
             if (response.isSuccessful) {
+                val responseBody = response.body?.string()
+                Log.d(TAG, "🛑 Response body: $responseBody")
                 Log.d(TAG, "✅ Subtitle generation stopped for stream: $streamId")
             } else {
                 Log.e(TAG, "❌ Failed to stop subtitle generation: ${response.code}")
+                val errorBody = response.body?.string()
+                Log.e(TAG, "❌ Stop error body: $errorBody")
             }
             
         } catch (e: Exception) {
@@ -231,9 +244,15 @@ class SubtitleService {
             val response = client.newCall(request).execute()
             val isHealthy = response.isSuccessful
             
+            Log.d(TAG, "🏥 Health check response status: ${response.code} ${response.message}")
+            Log.d(TAG, "🏥 Health check response headers: ${response.headers}")
+            
             if (isHealthy) {
                 val body = response.body?.string()
-                Log.d(TAG, "Backend health: $body")
+                Log.d(TAG, "🏥 Backend health: $body")
+            } else {
+                val errorBody = response.body?.string()
+                Log.e(TAG, "🏥 Backend health check failed: ${response.code} ${response.message}, body: $errorBody")
             }
             
             isHealthy
