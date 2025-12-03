@@ -4,4 +4,19 @@
         <item name="android:windowBackground">@color/content_bg</item>
         <item name="android:colorPrimary">@color/nav_selected_border</item>
     </style>
+    
+    <!-- Splash theme for launcher activity -->
+    <style name="AppTheme.Splash" parent="AppTheme">
+        <item name="android:windowBackground">@color/content_bg</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
+    
+    <!-- Exit confirmation dialog theme -->
+    <style name="ExitDialogTheme" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:background">@color/nav_bg</item>
+        <item name="android:textColor">@android:color/white</item>
+        <item name="android:windowBackground">@color/nav_bg</item>
+        <item name="android:colorAccent">@color/nav_selected_border</item>
+    </style>
 </resources>
+

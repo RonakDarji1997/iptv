@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="horizontal"
+        android:background="#09090b">
+        
+        <!-- Live Player Container (70%) -->
+        <FrameLayout
+            android:id="@+id/live_player_container"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.7"
+            android:background="#000000">
+            
+            <androidx.media3.ui.PlayerView
+                android:id="@+id/live_player_view"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                app:controller_layout_id="@layout/custom_player_controls"
+                app:show_timeout="5000"
+                app:auto_show="true" />
+            
+        </FrameLayout>
+        
+        <!-- Channels List Container (30%) -->
+        <FrameLayout
+            android:id="@+id/live_content_container"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.3">
+            
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/channels_recycler"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:paddingTop="16dp"
+                android:paddingBottom="16dp"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp" />
+            
+            <ProgressBar
+                android:id="@+id/loading_indicator"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:visibility="gone" />
+            
+            <TextView
+                android:id="@+id/empty_state_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:text="No channels available"
+                android:textColor="#99ffffff"
+                android:textSize="16sp"
+                android:visibility="gone" />
+            
+        </FrameLayout>
+        
+    </LinearLayout>
+    
+</merge>

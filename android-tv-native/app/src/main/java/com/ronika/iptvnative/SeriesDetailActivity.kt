@@ -353,7 +353,7 @@ class SeriesDetailActivity : ComponentActivity() {
         seasonTitle.text = season.name
         
         // Setup horizontal episodes recycler
-        val episodeAdapter = EpisodeHorizontalAdapter(episodes, posterUrl) { episode ->
+        val episodeAdapter = EpisodeHorizontalAdapter(episodes, seriesId, posterUrl) { episode ->
             lastPlayedEpisodeId = episode.id
             playEpisode(episode)
         }

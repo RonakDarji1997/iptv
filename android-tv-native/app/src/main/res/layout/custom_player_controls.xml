@@ -165,10 +165,9 @@
                 android:focusable="true"
                 android:clickable="true"
                 android:contentDescription="Restart"
-                android:nextFocusUp="@id/progress_bar_container"
-                android:nextFocusRight="@id/next_button" />
+                android:nextFocusUp="@id/progress_bar_container" />
 
-            <!-- Next Button (for series) - Smaller Icon -->
+            <!-- Next Button (for series) - Between Restart and Subtitle -->
             <ImageButton
                 android:id="@+id/next_button"
                 android:layout_width="48dp"
@@ -178,12 +177,11 @@
                 android:scaleType="centerInside"
                 android:tint="#ffffff"
                 android:padding="12dp"
+                android:layout_marginEnd="12dp"
                 android:focusable="true"
                 android:clickable="true"
                 android:contentDescription="Next Episode"
                 android:nextFocusUp="@id/progress_bar_container"
-                android:nextFocusLeft="@id/restart_button"
-                android:nextFocusRight="@id/subtitle_button"
                 android:visibility="gone" />
 
             <!-- Subtitle Button - AI Generated Subtitles -->
@@ -201,8 +199,6 @@
                 android:clickable="true"
                 android:contentDescription="Toggle Subtitles"
                 android:nextFocusUp="@id/progress_bar_container"
-                android:nextFocusLeft="@id/next_button"
-                android:nextFocusRight="@id/subtitle_button"
                 android:visibility="visible" />
 
         </LinearLayout>

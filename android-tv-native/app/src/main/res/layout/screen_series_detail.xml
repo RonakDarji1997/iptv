@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/series_detail_container"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF000000"
+    android:visibility="gone"
+    android:focusable="true"
+    android:focusableInTouchMode="true">
+
+    <!-- Full Backdrop with Gradient Overlay -->
+    <ImageView
+        android:id="@+id/series_detail_backdrop"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/gradient_overlay" />
+
+    <!-- Content at Bottom -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="bottom"
+            android:paddingStart="60dp"
+            android:paddingEnd="60dp"
+            android:paddingTop="80dp"
+            android:paddingBottom="60dp">
+
+            <!-- Category Badge -->
+            <TextView
+                android:id="@+id/series_detail_category"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Series"
+                android:textColor="#FFFFFFFF"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:background="@drawable/button_play"
+                android:layout_marginBottom="16dp" />
+
+            <!-- Series Title -->
+            <TextView
+                android:id="@+id/series_detail_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Series Title"
+                android:textColor="#FFFFFFFF"
+                android:textSize="48sp"
+                android:textStyle="bold"
+                android:maxLines="2"
+                android:ellipsize="end"
+                android:shadowColor="#FF000000"
+                android:shadowDx="2"
+                android:shadowDy="2"
+                android:shadowRadius="4"
+                android:layout_marginBottom="8dp" />
+
+            <!-- Year & Seasons -->
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="12dp">
+
+                <TextView
+                    android:id="@+id/series_detail_year"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="2024"
+                    android:textColor="#B3FFFFFF"
+                    android:textSize="18sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="  •  "
+                    android:textColor="#B3FFFFFF"
+                    android:textSize="18sp" />
+
+                <TextView
+                    android:id="@+id/series_detail_seasons"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="3 Seasons"
+                    android:textColor="#B3FFFFFF"
+                    android:textSize="18sp" />
+
+            </LinearLayout>
+
+            <!-- Description -->
+            <TextView
+                android:id="@+id/series_detail_description"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Series description goes here..."
+                android:textColor="#CCFFFFFF"
+                android:textSize="16sp"
+                android:lineSpacingExtra="4dp"
+                android:maxLines="2"
+                android:ellipsize="end"
+                android:layout_marginBottom="8dp" />
+
+            <!-- Cast -->
+            <TextView
+                android:id="@+id/series_detail_cast"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Cast: Actor names"
+                android:textColor="#99FFFFFF"
+                android:textSize="14sp"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:layout_marginBottom="16dp" />
+
+            <!-- Seasons & Episodes Container (Show Episodes First) -->
+            <LinearLayout
+                android:id="@+id/series_seasons_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginBottom="16dp">
+                <!-- Seasons will be dynamically added here -->
+            </LinearLayout>
+
+            <!-- Action Buttons (Hidden - episodes are primary) -->
+            <LinearLayout
+                android:id="@+id/series_action_buttons_container"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="16dp"
+                android:visibility="gone">
+
+                <Button
+                    android:id="@+id/series_detail_play_button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="50dp"
+                    android:text="▶  Play"
+                    android:textColor="#FF000000"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:paddingStart="32dp"
+                    android:paddingEnd="32dp"
+                    android:background="@drawable/button_play"
+                    android:nextFocusRight="@id/series_detail_favorite_button"
+                    android:layout_marginEnd="16dp" />
+
+                <Button
+                    android:id="@+id/series_detail_favorite_button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="50dp"
+                    android:text="♥ Favorite"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:paddingStart="32dp"
+                    android:paddingEnd="32dp"
+                    android:background="@drawable/button_favorite"
+                    android:nextFocusLeft="@id/series_detail_play_button" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+    </ScrollView>
+
+    <!-- Loading Indicator -->
+    <ProgressBar
+        android:id="@+id/series_detail_loading"
+        android:layout_width="60dp"
+        android:layout_height="60dp"
+        android:layout_gravity="center"
+        android:visibility="gone"
+        android:indeterminateTint="#FFFFFFFF" />
+
+</FrameLayout>

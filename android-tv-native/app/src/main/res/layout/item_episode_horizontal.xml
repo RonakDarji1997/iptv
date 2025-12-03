@@ -5,6 +5,7 @@
     android:layout_height="120dp"
     android:layout_marginEnd="12dp"
     android:focusable="true"
+    android:foreground="@drawable/episode_focus_border"
     app:cardCornerRadius="8dp"
     app:cardElevation="4dp"
     app:cardBackgroundColor="#09090b">
@@ -27,6 +28,24 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:background="@drawable/gradient_overlay" />
+
+        <!-- Progress Bar Container -->
+        <FrameLayout
+            android:id="@+id/episode_progress_container"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:layout_gravity="bottom"
+            android:layout_marginBottom="40dp"
+            android:background="#33FFFFFF"
+            android:visibility="gone">
+
+            <View
+                android:id="@+id/episode_progress_bar"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:background="#FFFF0000" />
+
+        </FrameLayout>
 
         <!-- Episode Info -->
         <LinearLayout

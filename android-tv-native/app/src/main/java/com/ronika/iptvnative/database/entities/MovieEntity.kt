@@ -10,9 +10,16 @@ import androidx.room.PrimaryKey
     indices = [
         Index(value = ["externalId"], unique = true),
         Index(value = ["categoryId"]),
+        Index(value = ["providerId"]),
         Index(value = ["name"])
     ],
     foreignKeys = [
+        ForeignKey(
+            entity = ProviderEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["providerId"],
+            onDelete = ForeignKey.CASCADE
+        ),
         ForeignKey(
             entity = CategoryEntity::class,
             parentColumns = ["id"],
@@ -24,6 +31,7 @@ import androidx.room.PrimaryKey
 data class MovieEntity(
     @PrimaryKey
     val id: String, // UUID
+    val providerId: String, // Links to ProviderEntity
     val externalId: String, // Provider's movie ID
     val name: String,
     val originalName: String? = null,

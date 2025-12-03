@@ -18,6 +18,9 @@ interface MovieDao {
     @Query("SELECT * FROM movies WHERE id = :id")
     suspend fun getMovieById(id: String): MovieEntity?
     
+    @Query("SELECT * FROM movies WHERE externalId = :externalId")
+    suspend fun getMovieByExternalId(externalId: String): MovieEntity?
+    
     @Query("SELECT * FROM movies WHERE isFavorite = 1 AND isActive = 1 ORDER BY addedAt DESC")
     suspend fun getFavoriteMovies(): List<MovieEntity>
     

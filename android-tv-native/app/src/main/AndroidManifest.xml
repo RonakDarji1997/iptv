@@ -19,41 +19,38 @@
         android:theme="@style/AppTheme"
         android:networkSecurityConfig="@xml/network_security_config">
         
+        <!-- Launcher Activity - checks if portal is configured -->
         <activity
-            android:name=".MainActivity"
+            android:name=".LauncherActivity"
             android:exported="true"
-            android:screenOrientation="landscape">
+            android:screenOrientation="landscape"
+            android:theme="@style/AppTheme.Splash">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
         </activity>
         
+        <!-- Portal Setup Activity -->
         <activity
-            android:name=".SeriesDetailActivity"
+            android:name=".PortalSetupActivity"
             android:exported="false"
             android:screenOrientation="landscape" />
         
+        <!-- Main Activity - Netflix-style component-based architecture -->
         <activity
-            android:name=".MovieDetailActivity"
+            android:name=".MainActivity"
             android:exported="false"
             android:screenOrientation="landscape" />
         
+        <!-- Live TV Channels Activity -->
         <activity
-            android:name=".SearchActivity"
+            android:name=".LiveTVChannelsActivity"
             android:exported="false"
-            android:screenOrientation="landscape" />
-            
-        <activity
-            android:name=".MoviesActivity"
-            android:exported="false"
-            android:theme="@style/AppTheme"
-            android:screenOrientation="landscape" />
-            
-        <activity
-            android:name=".MovieCategoryActivity"
-            android:exported="false"
-            android:theme="@style/AppTheme"
             android:screenOrientation="landscape" />
     </application>
 

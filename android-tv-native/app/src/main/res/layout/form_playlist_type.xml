@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center_vertical">
+
+    <!-- M3U Playlist Option -->
+    <LinearLayout
+        android:id="@+id/option_m3u"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:background="@drawable/portal_option_selector"
+        android:defaultFocusHighlightEnabled="false">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="M3U playlist"
+            android:textColor="@color/portal_text_color"
+            android:textSize="18sp"
+            android:duplicateParentState="true" />
+
+    </LinearLayout>
+
+    <!-- Xtream Codes Option -->
+    <LinearLayout
+        android:id="@+id/option_xtream"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:layout_marginTop="8dp"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:background="@drawable/portal_option_selector"
+        android:defaultFocusHighlightEnabled="false">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Xtream Codes"
+            android:textColor="@color/portal_text_color"
+            android:textSize="18sp"
+            android:duplicateParentState="true" />
+
+    </LinearLayout>
+
+    <!-- Stalker Portal Option -->
+    <LinearLayout
+        android:id="@+id/option_stalker"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:layout_marginTop="8dp"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:background="@drawable/portal_option_selector"
+        android:defaultFocusHighlightEnabled="false">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Stalker Portal"
+            android:textColor="@color/portal_text_color"
+            android:textSize="18sp"
+            android:duplicateParentState="true" />
+
+    </LinearLayout>
+
+    <!-- Cancel Button -->
+    <TextView
+        android:id="@+id/btn_cancel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="32dp"
+        android:layout_gravity="end"
+        android:padding="16dp"
+        android:text="Cancel"
+        android:textColor="@color/portal_text_color"
+        android:textSize="16sp"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:background="@drawable/portal_option_selector"
+        android:defaultFocusHighlightEnabled="false" />
+
+</LinearLayout>

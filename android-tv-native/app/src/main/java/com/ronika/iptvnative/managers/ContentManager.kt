@@ -1,6 +1,7 @@
 package com.ronika.iptvnative.managers
 
 import android.content.Context
+import com.ronika.iptvnative.api.StalkerClient
 import com.ronika.iptvnative.models.Channel
 import com.ronika.iptvnative.models.Genre
 import com.ronika.iptvnative.models.Movie
@@ -12,12 +13,9 @@ class ContentManager(
     private val scope: CoroutineScope
 ) {
     
-    // Direct Stalker client for VOD (no backend, no DB, no handshake)
-    private val stalkerClient: com.ronika.iptvnative.api.StalkerClient by lazy {
-        com.ronika.iptvnative.api.StalkerClient(
-            portalUrl = "http://tv.stream4k.cc/stalker_portal/server/load.php",
-            macAddress = "00:1a:79:17:f4:f5"
-        )
+    // Stalker client from provider manager - no hardcoded URLs
+    private suspend fun getStalkerClient(): StalkerClient {
+        return ProviderManager.getStalkerClient(context)
     }
     
     // Data storage
@@ -33,6 +31,7 @@ class ContentManager(
     suspend fun loadGenres(tab: String): Result<List<Genre>> {
         return try {
             android.util.Log.d("ContentManager", "Loading genres for tab: $tab")
+            val stalkerClient = getStalkerClient()
             val response = stalkerClient.getVodCategories(type = "vod")
             
             if (response.genres != null) {
@@ -52,6 +51,7 @@ class ContentManager(
         return try {
             android.util.Log.d("ContentManager", "Loading channels for genre: $genreId")
             
+            val stalkerClient = getStalkerClient()
             val response = stalkerClient.getChannels(genreId = genreId, page = 1)
             
             if (response.channels != null && response.channels.data != null) {
@@ -73,6 +73,7 @@ class ContentManager(
         return try {
             android.util.Log.d("ContentManager", "Loading movies - category: $categoryId, page: $page")
 
+            val stalkerClient = getStalkerClient()
             val response = stalkerClient.getVodItems(categoryId, page, "vod")
 
             if (response.items != null && response.items.data != null) {
@@ -98,6 +99,7 @@ class ContentManager(
         return try {
             android.util.Log.d("ContentManager", "Loading series - category: $categoryId, page: $page")
 
+            val stalkerClient = getStalkerClient()
             val response = stalkerClient.getVodItems(categoryId, page, "series")
 
             if (response.items != null && response.items.data != null) {

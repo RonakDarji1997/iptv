@@ -1,0 +1,265 @@
+package com.ronika.iptvnative.components
+
+import android.content.Context
+import android.util.AttributeSet
+import android.util.Log
+import android.view.KeyEvent
+import android.view.LayoutInflater
+import android.widget.FrameLayout
+import android.widget.TextView
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.ronika.iptvnative.R
+import com.ronika.iptvnative.adapters.FastCategoryAdapter
+import com.ronika.iptvnative.cache.CacheManager
+import com.ronika.iptvnative.models.Genre
+import com.ronika.iptvnative.navigation.FocusNavigationHelper
+
+/**
+ * Category sidebar component for filtering content
+ * - Works with Live TV, Movies, and Series
+ * - Fast RecyclerView with optimized ViewHolder pattern
+ * - Remembers selected category
+ * - Netflix-style item styling
+ */
+class CategorySidebarComponent @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0
+) : FrameLayout(context, attrs, defStyleAttr) {
+    
+    private val TAG = "CategorySidebar"
+    
+    // UI Components
+    private lateinit var headerText: TextView
+    private lateinit var categoriesRecycler: RecyclerView
+    
+    // Adapter
+    private lateinit var categoryAdapter: FastCategoryAdapter
+    
+    // State
+    private var categories: List<Genre> = emptyList()
+    private var selectedCategoryIndex = -1
+    private var contentType: ContentType = ContentType.LIVE_TV
+    
+    // Navigation
+    private val focusHelper = FocusNavigationHelper()
+    
+    // Cache
+    private lateinit var cacheManager: CacheManager
+    
+    // Callbacks
+    private var onCategorySelected: ((Genre, Int) -> Unit)? = null
+    private var onNavigateLeft: (() -> Boolean)? = null
+    private var onNavigateRight: (() -> Boolean)? = null
+    
+    enum class ContentType {
+        LIVE_TV, MOVIES, SERIES
+    }
+    
+    init {
+        LayoutInflater.from(context).inflate(R.layout.component_category_sidebar, this, true)
+        cacheManager = CacheManager.getInstance(context)
+        initViews()
+        setupRecyclerView()
+    }
+    
+    private fun initViews() {
+        headerText = findViewById(R.id.category_header_text)
+        categoriesRecycler = findViewById(R.id.categories_recycler)
+    }
+    
+    private fun setupRecyclerView() {
+        // Create adapter
+        categoryAdapter = FastCategoryAdapter(
+            onCategoryClick = { category, position ->
+                selectCategory(position)
+            },
+            onCategoryFocused = { category, position ->
+                // Remember focus position
+                focusHelper.rememberFocusPosition("categories", position)
+            }
+        )
+        
+        // Setup RecyclerView with performance optimizations
+        categoriesRecycler.apply {
+            layoutManager = LinearLayoutManager(context).apply {
+                // Enable prefetching for smoother scrolling
+                isItemPrefetchEnabled = true
+                initialPrefetchItemCount = 5
+            }
+            adapter = categoryAdapter
+            
+            // Performance optimizations
+            setHasFixedSize(true) // All items same size
+            setItemViewCacheSize(20) // Cache 20 off-screen items
+            isNestedScrollingEnabled = false // Not nested
+            
+            // Disable animations for faster rendering
+            itemAnimator = null
+            
+            // Handle DPAD navigation
+            setOnKeyListener { _, keyCode, event ->
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_LEFT -> {
+                            Log.d(TAG, "LEFT pressed - navigating to sidebar")
+                            onNavigateLeft?.invoke() ?: false
+                        }
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                            Log.d(TAG, "RIGHT pressed - navigating to content")
+                            onNavigateRight?.invoke() ?: false
+                        }
+                        else -> false
+                    }
+                } else {
+                    false
+                }
+            }
+        }
+    }
+    
+    /**
+     * Load categories for a specific content type
+     */
+    fun loadCategories(type: ContentType, categories: List<Genre>) {
+        Log.d(TAG, "Loading ${categories.size} categories for $type")
+        
+        this.contentType = type
+        this.categories = categories
+        
+        // Update header text
+        headerText.text = when (type) {
+            ContentType.LIVE_TV -> "All Channels"
+            ContentType.MOVIES -> "Movie Categories"
+            ContentType.SERIES -> "Series Categories"
+        }
+        
+        // Filter categories based on type
+        val filteredCategories = when (type) {
+            ContentType.LIVE_TV -> categories
+            ContentType.MOVIES -> categories.filter { 
+                cacheManager.getCategoryType(it.id) == "movie" 
+            }
+            ContentType.SERIES -> categories.filter { 
+                cacheManager.getCategoryType(it.id) == "series" 
+            }
+        }
+        
+        Log.d(TAG, "Filtered to ${filteredCategories.size} categories")
+        
+        // Update adapter
+        categoryAdapter.setCategories(filteredCategories)
+        
+        // Auto-select first category if none selected
+        if (selectedCategoryIndex == -1 && filteredCategories.isNotEmpty()) {
+            selectCategory(0, notify = false)
+        }
+        
+        // Restore focus if coming back
+        val lastPosition = focusHelper.getLastFocusPosition("categories", 0)
+        if (lastPosition < filteredCategories.size) {
+            categoriesRecycler.scrollToPosition(lastPosition)
+            categoriesRecycler.post {
+                categoriesRecycler.findViewHolderForAdapterPosition(lastPosition)?.itemView?.requestFocus()
+            }
+        }
+    }
+    
+    /**
+     * Select a category by index
+     */
+    fun selectCategory(index: Int, notify: Boolean = true) {
+        if (index < 0 || index >= categories.size) {
+            Log.w(TAG, "Invalid category index: $index")
+            return
+        }
+        
+        Log.d(TAG, "Selecting category at index: $index")
+        selectedCategoryIndex = index
+        categoryAdapter.setActivePosition(index)
+        
+        // Notify callback
+        if (notify) {
+            val category = categories[index]
+            onCategorySelected?.invoke(category, index)
+        }
+    }
+    
+    /**
+     * Get the currently selected category
+     */
+    fun getSelectedCategory(): Genre? {
+        return if (selectedCategoryIndex >= 0 && selectedCategoryIndex < categories.size) {
+            categories[selectedCategoryIndex]
+        } else {
+            null
+        }
+    }
+    
+    /**
+     * Get the selected category index
+     */
+    fun getSelectedIndex(): Int = selectedCategoryIndex
+    
+    /**
+     * Request focus on selected category
+     */
+    fun requestFocusOnSelected() {
+        if (selectedCategoryIndex >= 0) {
+            categoriesRecycler.scrollToPosition(selectedCategoryIndex)
+            categoriesRecycler.post {
+                categoriesRecycler.findViewHolderForAdapterPosition(selectedCategoryIndex)?.itemView?.requestFocus()
+            }
+        } else if (categories.isNotEmpty()) {
+            categoriesRecycler.post {
+                categoriesRecycler.getChildAt(0)?.requestFocus()
+            }
+        }
+    }
+    
+    /**
+     * Request focus on first category
+     */
+    fun requestFocusOnFirst() {
+        categoriesRecycler.post {
+            categoriesRecycler.getChildAt(0)?.requestFocus()
+        }
+    }
+    
+    /**
+     * Clear selected category
+     */
+    fun clearSelection() {
+        selectedCategoryIndex = -1
+        categoryAdapter.setActivePosition(-1)
+    }
+    
+    /**
+     * Set category selected callback
+     */
+    fun setOnCategorySelectedListener(listener: (Genre, Int) -> Unit) {
+        onCategorySelected = listener
+    }
+    
+    /**
+     * Set navigation callbacks
+     */
+    fun setNavigationCallbacks(
+        onLeft: (() -> Boolean)? = null,
+        onRight: (() -> Boolean)? = null
+    ) {
+        onNavigateLeft = onLeft
+        onNavigateRight = onRight
+    }
+    
+    /**
+     * Get all categories
+     */
+    fun getCategories(): List<Genre> = categories
+    
+    /**
+     * Check if categories are loaded
+     */
+    fun hasCategories(): Boolean = categories.isNotEmpty()
+}

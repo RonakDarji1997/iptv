@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="#FF000000">
+
+    <!-- Provider Header (Collapsible) -->
+    <LinearLayout
+        android:id="@+id/provider_header"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:background="@drawable/category_item_background">
+
+        <!-- Expand/Collapse Icon -->
+        <ImageView
+            android:id="@+id/expand_icon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@drawable/ic_expand_more"
+            android:tint="#FFFFFF"
+            android:layout_marginEnd="12dp"
+            android:rotation="0" />
+
+        <!-- Provider Name -->
+        <TextView
+            android:id="@+id/provider_name"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:ellipsize="end"
+            android:maxLines="1" />
+
+    </LinearLayout>
+
+    <!-- Expandable Content Container -->
+    <LinearLayout
+        android:id="@+id/categories_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone"
+        android:paddingStart="24dp">
+
+        <!-- Live TV Section -->
+        <LinearLayout
+            android:id="@+id/live_tv_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <!-- Live TV Header -->
+            <TextView
+                android:id="@+id/live_tv_header"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:gravity="center_vertical"
+                android:paddingStart="16dp"
+                android:text="📺 Live TV"
+                android:textColor="#AAAAAA"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:background="@drawable/category_item_background" />
+
+            <!-- Live TV Categories -->
+            <LinearLayout
+                android:id="@+id/live_tv_categories"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingStart="16dp" />
+        </LinearLayout>
+
+        <!-- Movies Section -->
+        <LinearLayout
+            android:id="@+id/movies_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <!-- Movies Header -->
+            <TextView
+                android:id="@+id/movies_header"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:gravity="center_vertical"
+                android:paddingStart="16dp"
+                android:text="🎬 Movies"
+                android:textColor="#AAAAAA"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:background="@drawable/category_item_background" />
+
+            <!-- Movie Categories -->
+            <LinearLayout
+                android:id="@+id/movies_categories"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingStart="16dp" />
+        </LinearLayout>
+
+        <!-- Series Section -->
+        <LinearLayout
+            android:id="@+id/series_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <!-- Series Header -->
+            <TextView
+                android:id="@+id/series_header"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:gravity="center_vertical"
+                android:paddingStart="16dp"
+                android:text="📺 Series"
+                android:textColor="#AAAAAA"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:background="@drawable/category_item_background" />
+
+            <!-- Series Categories -->
+            <LinearLayout
+                android:id="@+id/series_categories"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingStart="16dp" />
+        </LinearLayout>
+
+    </LinearLayout>
+
+</LinearLayout>

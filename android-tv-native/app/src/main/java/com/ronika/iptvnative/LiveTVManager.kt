@@ -16,6 +16,7 @@ import com.ronika.iptvnative.api.StalkerClient
 import com.ronika.iptvnative.api.ChannelsRequest
 import com.ronika.iptvnative.api.GenreRequest
 import com.ronika.iptvnative.api.StreamUrlRequest
+import com.ronika.iptvnative.managers.ProviderManager
 import com.ronika.iptvnative.models.Channel
 import com.ronika.iptvnative.models.Genre
 import kotlinx.coroutines.Dispatchers
@@ -43,12 +44,9 @@ class LiveTVManager(private val activity: MainActivity) {
     // Player
     private var livePlayer: ExoPlayer? = null
 
-    // Direct Stalker client (no backend, no DB, no handshake)
-    private val stalkerClient: StalkerClient by lazy {
-        StalkerClient(
-            portalUrl = "http://tv.stream4k.cc/stalker_portal/server/load.php",
-            macAddress = "00:1a:79:17:f4:f5"
-        )
+    // Stalker client from provider manager - no hardcoded URLs
+    private suspend fun getStalkerClient(): StalkerClient {
+        return ProviderManager.getStalkerClient(activity)
     }
 
     // Data
@@ -159,7 +157,8 @@ class LiveTVManager(private val activity: MainActivity) {
                 liveChannelsRecycler.visibility = View.GONE
                 liveEmptyState.visibility = View.GONE
 
-                // Direct portal call (no backend, no DB)
+                // Direct portal call using provider credentials
+                val stalkerClient = getStalkerClient()
                 val response = withContext(Dispatchers.IO) {
                     stalkerClient.getGenres()
                 }
@@ -211,7 +210,8 @@ class LiveTVManager(private val activity: MainActivity) {
                 channelsHasMore = true
                 channelsIsLoading = true
 
-                // Load first page - direct portal call
+                // Load first page - using provider credentials
+                val stalkerClient = getStalkerClient()
                 val response = stalkerClient.getChannels(
                     genreId = categoryId,
                     page = channelsCurrentPage
@@ -308,7 +308,8 @@ class LiveTVManager(private val activity: MainActivity) {
                 val nextPage = channelsCurrentPage + 1
                 android.util.Log.d("LiveTVManager", "Loading channels page $nextPage for category $categoryId")
 
-                // Direct portal call
+                // Using provider credentials
+                val stalkerClient = getStalkerClient()
                 val response = stalkerClient.getChannels(
                     genreId = categoryId,
                     page = nextPage
@@ -455,7 +456,8 @@ class LiveTVManager(private val activity: MainActivity) {
         // Create link and play
         activity.lifecycleScope.launch {
             try {
-                // Direct portal call
+                // Using provider credentials
+                val stalkerClient = getStalkerClient()
                 val streamResponse = stalkerClient.getStreamUrl(channel.cmd ?: "")
                 
                 val streamUrl = streamResponse.url

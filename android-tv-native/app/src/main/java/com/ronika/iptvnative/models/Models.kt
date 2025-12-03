@@ -99,7 +99,8 @@ data class ChannelsResponse(
 
 data class ChannelsData(
     @SerializedName("data") val data: List<Channel>,
-    @SerializedName("total") val total: Int
+    @SerializedName("total") val total: Int,
+    @SerializedName("total_items") val totalItems: String? = null
 )
 
 data class ItemsResponse(
@@ -127,4 +128,17 @@ data class MovieFileInfo(
 // Stream URL response
 data class StreamUrlResponse(
     @SerializedName("url") val url: String
+)
+
+// EPG (Electronic Program Guide) models
+data class EpgResponse(
+    val programs: List<EpgProgram>
+)
+
+data class EpgProgram(
+    val id: String,
+    val name: String,
+    val startTimestamp: Long,  // Unix timestamp
+    val endTimestamp: Long,    // Unix timestamp
+    val duration: Int          // Duration in seconds
 )

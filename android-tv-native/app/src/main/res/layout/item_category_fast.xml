@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:paddingStart="20dp"
+    android:paddingEnd="20dp"
+    android:paddingTop="12dp"
+    android:paddingBottom="12dp"
+    android:gravity="center_vertical"
+    android:focusable="true"
+    android:clickable="true">
+    
+    <!-- Red indicator (shown when active) -->
+    <View
+        android:id="@+id/category_indicator"
+        android:layout_width="4dp"
+        android:layout_height="24dp"
+        android:background="#E50914"
+        android:visibility="gone"
+        android:layout_marginEnd="12dp" />
+    
+    <!-- Category name -->
+    <TextView
+        android:id="@+id/category_name"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:text="Category Name"
+        android:textColor="#CCCCCC"
+        android:textSize="15sp"
+        android:maxLines="1"
+        android:ellipsize="end" />
+    
+</LinearLayout>

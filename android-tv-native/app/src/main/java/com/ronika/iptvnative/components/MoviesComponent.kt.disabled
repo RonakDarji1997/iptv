@@ -1,0 +1,407 @@
+package com.ronika.iptvnative.components
+
+import android.content.Context
+import android.util.AttributeSet
+import android.util.Log
+import android.view.KeyEvent
+import android.view.LayoutInflater
+import android.widget.FrameLayout
+import android.widget.ProgressBar
+import android.widget.TextView
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.ronika.iptvnative.R
+import com.ronika.iptvnative.MovieCategoryRowAdapter
+import com.ronika.iptvnative.api.StalkerClient
+import com.ronika.iptvnative.cache.CacheManager
+import com.ronika.iptvnative.models.Genre
+import com.ronika.iptvnative.models.Movie
+import com.ronika.iptvnative.navigation.FocusNavigationHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * Movies component with dedicated VOD player
+ * - Separate ExoPlayer instance for movie playback
+ * - Netflix-style horizontal rows
+ * - Parallel category loading
+ * - Smart pagination
+ * - Aggressive caching
+ */
+class MoviesComponent @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0
+) : FrameLayout(context, attrs, defStyleAttr) {
+    
+    private val TAG = "MoviesComponent"
+    
+    // UI Components
+    private lateinit var playerView: PlayerView
+    private lateinit var movieRowsRecycler: RecyclerView
+    private lateinit var loadingIndicator: ProgressBar
+    private lateinit var emptyStateText: TextView
+    private lateinit var playerContainer: FrameLayout
+    
+    // Player - Dedicated for Movies (VOD)
+    private var vodPlayer: ExoPlayer? = null
+    
+    // Adapter
+    private lateinit var movieRowAdapter: MovieCategoryRowAdapter
+    
+    // State
+    private var categories: List<Genre> = emptyList()
+    private var categoryRows = mutableListOf<MovieCategoryRowAdapter.CategoryRow>()
+    private var isPlayerVisible = false
+    private var currentMovie: Movie? = null
+    
+    // API & Cache
+    private lateinit var stalkerClient: StalkerClient
+    private lateinit var cacheManager: CacheManager
+    
+    // Navigation
+    private val focusHelper = FocusNavigationHelper()
+    
+    // Coroutine jobs
+    private var loadingJob: Job? = null
+    
+    // Callbacks
+    private var onNavigateLeft: (() -> Boolean)? = null
+    private var onMovieSelected: ((Movie) -> Unit)? = null
+    
+    init {
+        LayoutInflater.from(context).inflate(R.layout.component_movies, this, true)
+        initViews()
+        initPlayer()
+        setupRecyclerView()
+        initializeClients()
+    }
+    
+    private fun initViews() {
+        playerView = findViewById(R.id.vod_player_view)
+        movieRowsRecycler = findViewById(R.id.movie_rows_recycler)
+        loadingIndicator = findViewById(R.id.loading_indicator)
+        emptyStateText = findViewById(R.id.empty_state_text)
+        playerContainer = findViewById(R.id.vod_player_container)
+    }
+    
+    private fun initPlayer() {
+        // Create dedicated ExoPlayer for VOD content (movies)
+        vodPlayer = ExoPlayer.Builder(context)
+            .setSeekBackIncrementMs(10000)
+            .setSeekForwardIncrementMs(10000)
+            .build()
+            .apply {
+                addListener(object : Player.Listener {
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        when (playbackState) {
+                            Player.STATE_IDLE -> Log.d(TAG, "VOD Player: IDLE")
+                            Player.STATE_BUFFERING -> Log.d(TAG, "VOD Player: BUFFERING")
+                            Player.STATE_READY -> Log.d(TAG, "VOD Player: READY")
+                            Player.STATE_ENDED -> Log.d(TAG, "VOD Player: ENDED")
+                        }
+                    }
+                    
+                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                        Log.e(TAG, "VOD Player error: ${error.message}", error)
+                    }
+                    
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        Log.d(TAG, "VOD Player isPlaying: $isPlaying")
+                    }
+                })
+            }
+        
+        // Attach player to view
+        playerView.player = vodPlayer
+        playerView.useController = true
+        
+        // Initially hide player
+        playerContainer.visibility = GONE
+    }
+    
+    private fun setupRecyclerView() {
+        movieRowAdapter = MovieCategoryRowAdapter(
+            onMovieClick = { movie, categoryId, categoryTitle ->
+                onMovieSelected?.invoke(movie)
+            },
+            onViewAllClick = { categoryId, categoryTitle ->
+                // Handle view all
+                Log.d(TAG, "View All clicked for: $categoryTitle")
+            }
+        )
+        
+        movieRowsRecycler.apply {
+            layoutManager = LinearLayoutManager(context).apply {
+                isItemPrefetchEnabled = true
+                initialPrefetchItemCount = 4
+            }
+            adapter = movieRowAdapter
+            
+            // Performance optimizations
+            setHasFixedSize(false)
+            setItemViewCacheSize(20) // Cache more rows for instant scroll
+            isNestedScrollingEnabled = false
+            
+            // Handle DPAD navigation
+            setOnKeyListener { _, keyCode, event ->
+                if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    Log.d(TAG, "LEFT pressed - navigating to categories")
+                    onNavigateLeft?.invoke() ?: false
+                } else {
+                    false
+                }
+            }
+        }
+    }
+    
+    private fun initializeClients() {
+        stalkerClient = StalkerClient(
+            portalUrl = "http://tv.stream4k.cc/stalker_portal/server/load.php",
+            macAddress = "00:1a:79:17:f4:f5"
+        )
+        cacheManager = CacheManager.getInstance(context)
+    }
+    
+    /**
+     * Load movie categories
+     */
+    fun loadMovieCategories(categories: List<Genre>, lifecycleOwner: LifecycleOwner) {
+        Log.d(TAG, "Loading movies for ${categories.size} categories")
+        
+        this.categories = categories
+        categoryRows.clear()
+        
+        // Show loading
+        loadingIndicator.visibility = VISIBLE
+        emptyStateText.visibility = GONE
+        
+        // Cancel previous loading job
+        loadingJob?.cancel()
+        
+        // Load first 5 categories in parallel
+        loadingJob = lifecycleOwner.lifecycleScope.launch {
+            try {
+                val categoriesToLoad = categories.filter { 
+                    cacheManager.getCategoryType(it.id) == "movie" 
+                }.take(5)
+                
+                Log.d(TAG, "Loading ${categoriesToLoad.size} movie categories")
+                
+                // Load categories in parallel
+                val rows = categoriesToLoad.map { category ->
+                    async(Dispatchers.IO) {
+                        loadMoviesForCategory(category)
+                    }
+                }.mapNotNull { it.await() }
+                
+                categoryRows.addAll(rows)
+                movieRowAdapter.setCategories(categoryRows)
+                loadingIndicator.visibility = GONE
+                
+                if (categoryRows.isEmpty()) {
+                    emptyStateText.visibility = VISIBLE
+                    emptyStateText.text = "No movies available"
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading movie categories", e)
+                loadingIndicator.visibility = GONE
+                emptyStateText.visibility = VISIBLE
+                emptyStateText.text = "Error loading movies: ${e.message}"
+            }
+        }
+    }
+    
+    /**
+     * Load movies for a single category
+     */
+    private suspend fun loadMoviesForCategory(category: Genre): MovieCategoryRowAdapter.CategoryRow? {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Check cache first
+                val cachedMovies = cacheManager.getMovies(category.id, 1)
+                if (cachedMovies != null) {
+                    Log.d(TAG, "Cache HIT - loaded ${cachedMovies.size} movies for ${category.title}")
+                    return@withContext MovieCategoryRowAdapter.CategoryRow(
+                        categoryId = category.id,
+                        categoryTitle = category.title ?: category.name ?: "Unknown",
+                        movies = cachedMovies
+                    )
+                }
+                
+                // Cache miss - fetch from API
+                Log.d(TAG, "Cache MISS - fetching movies for ${category.title}")
+                val response = stalkerClient.getVodItems(
+                    categoryId = category.id,
+                    page = 1,
+                    type = "vod"
+                )
+                
+                val movies = response.items.data.map { item ->
+                    Movie(
+                        id = item.id ?: "",
+                        name = item.name ?: "Unknown Movie",
+                        cmd = item.cmd ?: "",
+                        logo = item.screenshot ?: "",
+                        year = item.year,
+                        director = item.director,
+                        actors = item.actors,
+                        description = item.description,
+                        country = item.country,
+                        genresStr = item.genre
+                    )
+                }
+                
+                Log.d(TAG, "Fetched ${movies.size} movies for ${category.title}")
+                
+                // Cache the results
+                cacheManager.cacheMovies(category.id, 1, movies)
+                
+                return@withContext MovieCategoryRowAdapter.CategoryRow(
+                    categoryId = category.id,
+                    categoryTitle = category.title ?: category.name ?: "Unknown",
+                    movies = movies
+                )
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading movies for category ${category.title}", e)
+                null
+            }
+        }
+    }
+    
+    /**
+     * Play a movie
+     */
+    fun playMovie(movie: Movie, lifecycleOwner: LifecycleOwner) {
+        Log.d(TAG, "Playing movie: ${movie.name}")
+        currentMovie = movie
+        
+        lifecycleOwner.lifecycleScope.launch {
+            try {
+                // Get file info
+                val fileInfo = withContext(Dispatchers.IO) {
+                    stalkerClient.getVodFileInfo(movie.id)
+                }
+                
+                val fileId = fileInfo?.get("id") as? String
+                if (fileId != null) {
+                    val cmd = "/media/file_${fileId}.mpg"
+                    
+                    // Get stream URL
+                    val streamUrlResponse = withContext(Dispatchers.IO) {
+                        stalkerClient.getVodStreamUrl(cmd, type = "vod")
+                    }
+                    val streamUrl = streamUrlResponse.url
+                    
+                    Log.d(TAG, "Stream URL: $streamUrl")
+                    
+                    // Show player
+                    playerContainer.visibility = VISIBLE
+                    movieRowsRecycler.visibility = GONE
+                    
+                    // Stop and clear previous media
+                    vodPlayer?.apply {
+                        stop()
+                        clearMediaItems()
+                    }
+                    
+                    // Set new media and play
+                    vodPlayer?.apply {
+                        val mediaItem = MediaItem.fromUri(streamUrl)
+                        setMediaItem(mediaItem)
+                        prepare()
+                        playWhenReady = true
+                    }
+                    
+                    isPlayerVisible = true
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error playing movie", e)
+            }
+        }
+    }
+    
+    /**
+     * Stop playback and show movie grid
+     */
+    fun stopPlayback() {
+        Log.d(TAG, "Stopping playback")
+        vodPlayer?.apply {
+            stop()
+            clearMediaItems()
+        }
+        playerContainer.visibility = GONE
+        movieRowsRecycler.visibility = VISIBLE
+        isPlayerVisible = false
+        currentMovie = null
+    }
+    
+    /**
+     * Request focus on movie rows
+     */
+    fun requestFocusOnMovies() {
+        movieRowsRecycler.post {
+            movieRowsRecycler.getChildAt(0)?.findViewById<RecyclerView>(R.id.movies_recycler)?.getChildAt(0)?.requestFocus()
+        }
+    }
+    
+    /**
+     * Set navigation callback
+     */
+    fun setOnNavigateLeftListener(listener: () -> Boolean) {
+        onNavigateLeft = listener
+    }
+    
+    /**
+     * Set movie selected callback
+     */
+    fun setOnMovieSelectedListener(listener: (Movie) -> Unit) {
+        onMovieSelected = listener
+    }
+    
+    /**
+     * Lifecycle: Resume playback
+     */
+    fun onResume() {
+        Log.d(TAG, "Resuming MoviesComponent")
+        vodPlayer?.playWhenReady = true
+    }
+    
+    /**
+     * Lifecycle: Pause playback
+     */
+    fun onPause() {
+        Log.d(TAG, "Pausing MoviesComponent")
+        vodPlayer?.playWhenReady = false
+    }
+    
+    /**
+     * Cleanup resources
+     */
+    fun cleanup() {
+        Log.d(TAG, "Cleaning up MoviesComponent")
+        loadingJob?.cancel()
+        vodPlayer?.apply {
+            stop()
+            release()
+        }
+        vodPlayer = null
+    }
+    
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        cleanup()
+    }
+}

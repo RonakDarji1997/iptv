@@ -1,0 +1,451 @@
+package com.ronika.iptvnative.components
+
+import android.content.Context
+import android.os.Handler
+import android.os.Looper
+import android.util.AttributeSet
+import android.util.Log
+import android.view.LayoutInflater
+import android.widget.LinearLayout
+import android.widget.TextView
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.ronika.iptvnative.R
+import com.ronika.iptvnative.MainActivity
+import com.ronika.iptvnative.data.CategoryRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * Category Sidebar Component
+ * Shows list of categories with focus navigation
+ */
+class CategorySidebarComponent @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0
+) : LinearLayout(context, attrs, defStyleAttr) {
+
+    private val TAG = "CategorySidebar"
+    private lateinit var categoriesRecycler: BoundaryBlockingRecyclerView
+    private lateinit var categoryTitle: TextView
+    private lateinit var categoryAdapter: SimpleCategoryAdapter
+    private var currentSection: Section = Section.LIVE_TV
+    
+    // Repository for fetching categories
+    private val categoryRepository = CategoryRepository(context)
+    private val componentScope = CoroutineScope(Dispatchers.Main)
+    
+    enum class Section {
+        LIVE_TV, MOVIES, SERIES, SEARCH
+    }
+
+    // Cached categories (loaded from API)
+    private var liveTVCategories: List<String> = emptyList()
+    private var moviesCategories: List<String> = emptyList()
+    private var seriesCategories: List<String> = emptyList()
+
+    init {
+        LayoutInflater.from(context).inflate(R.layout.component_category_sidebar, this, true)
+        
+        categoriesRecycler = findViewById(R.id.categories_recycler)
+        categoryTitle = findViewById(R.id.category_title)
+        
+        // Setup RecyclerView with empty list initially
+        categoryAdapter = SimpleCategoryAdapter(emptyList()) { category ->
+            // Category clicked - launch appropriate activity based on current section
+            onCategoryClicked(category)
+        }
+        
+        categoriesRecycler.apply {
+            layoutManager = LinearLayoutManager(context)
+            adapter = categoryAdapter
+            setHasFixedSize(true)  // Fixed size for better performance
+            // Prevent overscroll
+            overScrollMode = OVER_SCROLL_NEVER
+            // Allow RecyclerView to handle navigation normally
+            descendantFocusability = FOCUS_AFTER_DESCENDANTS
+            // Optimized cache for smooth scrolling
+            setItemViewCacheSize(20)
+            // Enable nested scrolling for better performance
+            isNestedScrollingEnabled = true
+            // CRITICAL: Disable prefetch to prevent position 14 crash
+            (layoutManager as? LinearLayoutManager)?.isItemPrefetchEnabled = false
+        }
+        
+        // Prevent entire component from taking focus on init
+        isFocusable = false
+        isFocusableInTouchMode = false
+        
+        // Load categories from API (happens once at app start)
+        loadCategories()
+    }
+    
+    /**
+     * Load all categories from DB once at app start
+     * Categories are loaded from DB and never change during the session
+     * switchToSection() displays them when user selects a tab
+     */
+    private fun loadCategories() {
+        componentScope.launch {
+            try {
+                // Load Live TV categories from DB
+                Log.d(TAG, "Loading Live TV categories...")
+                val liveTVResult = categoryRepository.getLiveTVGenres()
+                if (liveTVResult.isSuccess) {
+                    liveTVCategories = liveTVResult.getOrNull() ?: emptyList()
+                    Log.d(TAG, "Loaded ${liveTVCategories.size} Live TV categories")
+                    // Update UI if we're on Live TV section
+                    withContext(Dispatchers.Main) {
+                        if (currentSection == Section.LIVE_TV) {
+                            categoryAdapter.updateCategories(liveTVCategories)
+                        }
+                    }
+                } else {
+                    Log.e(TAG, "Failed to load Live TV categories", liveTVResult.exceptionOrNull())
+                    liveTVCategories = emptyList()
+                }
+                
+                // Load Movies categories from DB
+                Log.d(TAG, "Loading movie categories (will separate from series)...")
+                val moviesResult = categoryRepository.getMovieCategories()
+                if (moviesResult.isSuccess) {
+                    val categories = moviesResult.getOrNull() ?: emptyList()
+                    // Add "Continue Watching" and "Favourites" as first categories
+                    moviesCategories = listOf("Continue Watching", "Favourites") + categories
+                    Log.d(TAG, "Loaded ${moviesCategories.size} movie categories (including Continue Watching and Favourites)")
+                    // Update UI if we're on Movies section
+                    withContext(Dispatchers.Main) {
+                        if (currentSection == Section.MOVIES) {
+                            categoryAdapter.updateCategories(moviesCategories)
+                        }
+                    }
+                } else {
+                    Log.e(TAG, "Failed to load movie categories", moviesResult.exceptionOrNull())
+                    moviesCategories = listOf("Continue Watching", "Favourites")
+                }
+                
+                // Load Series categories from DB
+                Log.d(TAG, "Loading series categories (from cached separation)...")
+                val seriesResult = categoryRepository.getSeriesCategories()
+                if (seriesResult.isSuccess) {
+                    val categories = seriesResult.getOrNull() ?: emptyList()
+                    // Add "Continue Watching" and "Favourites" as first categories
+                    seriesCategories = listOf("Continue Watching", "Favourites") + categories
+                    Log.d(TAG, "Loaded ${seriesCategories.size} series categories (including Continue Watching and Favourites)")
+                    // Update UI if we're on Series section
+                    withContext(Dispatchers.Main) {
+                        if (currentSection == Section.SERIES) {
+                            categoryAdapter.updateCategories(seriesCategories)
+                        }
+                    }
+                } else {
+                    Log.e(TAG, "Failed to load series categories", seriesResult.exceptionOrNull())
+                    seriesCategories = listOf("Continue Watching", "Favourites")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading categories", e)
+            }
+        }
+    }
+    
+    /**
+     * Public method to refresh categories from DB
+     * Call this after user changes category settings (Manage Categories)
+     */
+    fun refreshCategories() {
+        Log.d(TAG, "refreshCategories: Reloading categories from DB")
+        loadCategories()
+    }
+    
+    /**
+     * Switch categories based on selected section
+     * Categories are loaded once from DB at app start, this just swaps the displayed list
+     */
+    fun switchToSection(section: Section) {
+        // Check if section actually changed AND adapter already has items
+        // (don't skip if adapter is empty - categories might still be loading)
+        if (currentSection == section && categoryAdapter.itemCount > 0) {
+            Log.d(TAG, "switchToSection: skipping, already on $section with ${categoryAdapter.itemCount} items")
+            return
+        }
+        
+        Log.d(TAG, "switchToSection: switching to $section")
+        currentSection = section
+        val categories = when (section) {
+            Section.LIVE_TV -> liveTVCategories
+            Section.MOVIES -> moviesCategories
+            Section.SERIES -> seriesCategories
+            Section.SEARCH -> emptyList() // Search doesn't need categories
+        }
+        
+        categoryTitle.text = when (section) {
+            Section.LIVE_TV -> "Live TV"
+            Section.MOVIES -> "Movies"
+            Section.SERIES -> "Series"
+            Section.SEARCH -> "Search"
+        }
+        
+        // Only update adapter if we have categories to show
+        // If categories are still loading, loadCategories() will update when ready
+        if (categories.isNotEmpty()) {
+            Log.d(TAG, "switchToSection: updating adapter with ${categories.size} items")
+            categoryAdapter.updateCategories(categories)
+            categoriesRecycler.scrollToPosition(0)
+        } else {
+            Log.d(TAG, "switchToSection: categories empty, waiting for loadCategories() to populate")
+        }
+    }
+    
+    /**
+     * Get current section
+     */
+    fun getCurrentSection(): Section = currentSection
+    
+    /**
+     * Request focus on first category
+     */
+    fun focusFirstCategory() {
+        categoriesRecycler.post {
+            if (categoryAdapter.itemCount > 0) {
+                categoriesRecycler.layoutManager?.scrollToPosition(0)
+                categoriesRecycler.post {
+                    val firstChild = categoriesRecycler.getChildAt(0)
+                    if (firstChild != null) {
+                        firstChild.requestFocus()
+                        Log.d(TAG, "Focus requested on first category")
+                    } else {
+                        Log.w(TAG, "First category child not available yet")
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * Focus on a specific category by name
+     */
+    fun focusCategory(categoryName: String) {
+        categoriesRecycler.post {
+            val categories = when (currentSection) {
+                Section.LIVE_TV -> liveTVCategories
+                Section.MOVIES -> moviesCategories
+                Section.SERIES -> seriesCategories
+                Section.SEARCH -> emptyList()
+            }
+            
+            val index = categories.indexOfFirst { it.equals(categoryName, ignoreCase = true) }
+            if (index >= 0) {
+                Log.d(TAG, "Focusing category: $categoryName at index $index")
+                // Scroll to position first
+                (categoriesRecycler.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(index, 0)
+                
+                // Use a second post to ensure layout has completed
+                categoriesRecycler.post {
+                    val viewHolder = categoriesRecycler.findViewHolderForAdapterPosition(index)
+                    if (viewHolder != null) {
+                        viewHolder.itemView.requestFocus()
+                        Log.d(TAG, "Focus requested on category at position $index")
+                    } else {
+                        Log.w(TAG, "ViewHolder not found for position $index, focusing first")
+                        categoriesRecycler.getChildAt(0)?.requestFocus()
+                    }
+                }
+            } else {
+                Log.d(TAG, "Category not found: $categoryName, focusing first")
+                categoriesRecycler.getChildAt(0)?.requestFocus()
+            }
+        }
+    }
+    
+    /**
+     * Handle category click - launch appropriate activity
+     */
+    private fun onCategoryClicked(categoryName: String) {
+        Log.d(TAG, "Category clicked: $categoryName, section: $currentSection")
+        
+        when (currentSection) {
+            Section.LIVE_TV -> {
+                // Show LiveTV channels component in main activity
+                (context as? MainActivity)?.showLiveTVCategory(categoryName)
+            }
+            Section.MOVIES -> {
+                // Show Movies VOD component
+                (context as? MainActivity)?.showMoviesCategory(categoryName)
+            }
+            Section.SERIES -> {
+                // Show Series VOD component
+                (context as? MainActivity)?.showSeriesCategory(categoryName)
+            }
+            Section.SEARCH -> {
+                // Search doesn't have categories
+            }
+        }
+    }
+    
+
+    
+    /**
+     * Set callback for when user presses left/back from categories
+     */
+    private var onNavigateBackCallback: (() -> Unit)? = null
+    
+    fun setOnNavigateBackListener(callback: () -> Unit) {
+        onNavigateBackCallback = callback
+    }
+    
+    /**
+     * Handle key events for navigation - Block LEFT completely since category sidebar is leftmost
+     * Consume UP/DOWN to prevent them from escaping to MainActivity
+     */
+    fun handleKeyEvent(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+            when (keyCode) {
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    // Block LEFT completely - category sidebar is the leftmost component
+                    // Don't allow focus to move to main sidenav
+                    Log.d(TAG, "CategorySidebar handleKeyEvent: LEFT blocked - category sidebar is leftmost")
+                    return true
+                }
+                android.view.KeyEvent.KEYCODE_DPAD_UP,
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    // Consume UP/DOWN to prevent MainActivity from handling them
+                    Log.d(TAG, "CategorySidebar handleKeyEvent: ${if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP) "UP" else "DOWN"} - consuming to prevent escape")
+                    return true
+                }
+            }
+        }
+        return false
+    }
+}
+
+/**
+ * Simple adapter for categories
+ */
+class SimpleCategoryAdapter(
+    private var categories: List<String>,
+    private val onCategoryClick: (String) -> Unit
+) : RecyclerView.Adapter<SimpleCategoryAdapter.CategoryViewHolder>() {
+
+    override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int): CategoryViewHolder {
+        val view = LayoutInflater.from(parent.context)
+            .inflate(R.layout.item_category_simple, parent, false)
+        return CategoryViewHolder(view)
+    }
+
+    override fun onBindViewHolder(holder: CategoryViewHolder, position: Int) {
+        holder.bind(categories[position])
+    }
+
+    override fun getItemCount() = categories.size
+    
+    /**
+     * Get current categories list for comparison
+     */
+    fun getCategoriesList(): List<String> = categories
+    
+    /**
+     * Update categories list - clears RecyclerView state first to prevent crashes
+     */
+    fun updateCategories(newCategories: List<String>) {
+        Log.d("SimpleCategoryAdapter", "Updating categories: ${newCategories.size} items")
+        categories = newCategories
+        notifyDataSetChanged()
+        Log.d("SimpleCategoryAdapter", "After update, adapter size: ${itemCount}")
+    }
+
+    inner class CategoryViewHolder(itemView: android.view.View) : RecyclerView.ViewHolder(itemView) {
+        private val categoryName: TextView = itemView.findViewById(R.id.category_name)
+
+        init {
+            // Make items focusable for scrolling to work
+            itemView.isFocusable = true
+            itemView.isFocusableInTouchMode = true
+            
+            itemView.setOnClickListener {
+                if (bindingAdapterPosition != RecyclerView.NO_POSITION) {
+                    onCategoryClick(categories[bindingAdapterPosition])
+                }
+            }
+            
+            // Handle key events - consume ALL UP/DOWN/LEFT to prevent focus escape
+            itemView.setOnKeyListener { view, keyCode, event ->
+                if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                    val position = bindingAdapterPosition
+                    val itemCount = bindingAdapter?.itemCount ?: 0
+                    val recyclerView = itemView.parent as? RecyclerView
+                    
+                    when (keyCode) {
+                        android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                            // Block LEFT completely - category sidebar is the leftmost component
+                            // Don't allow focus to move to main sidenav
+                            Log.d("CategoryFocus", "LEFT blocked at position $position - category sidebar is leftmost")
+                            true // Consume the event
+                        }
+                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                        android.view.KeyEvent.KEYCODE_ENTER -> {
+                            // Treat RIGHT/CENTER/ENTER as click
+                            itemView.performClick()
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                            // Handle UP navigation ourselves
+                            if (position > 0 && recyclerView != null) {
+                                // Find and focus previous item
+                                val layoutManager = recyclerView.layoutManager as? androidx.recyclerview.widget.LinearLayoutManager
+                                layoutManager?.let { lm ->
+                                    // Smooth scroll to previous item
+                                    lm.scrollToPosition(position - 1)
+                                    recyclerView.post {
+                                        recyclerView.findViewHolderForAdapterPosition(position - 1)?.itemView?.requestFocus()
+                                    }
+                                }
+                            }
+                            true // Always consume to prevent focus escape
+                        }
+                        android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            // Handle DOWN navigation ourselves
+                            if (position < itemCount - 1 && recyclerView != null) {
+                                // Find and focus next item
+                                val layoutManager = recyclerView.layoutManager as? androidx.recyclerview.widget.LinearLayoutManager
+                                layoutManager?.let { lm ->
+                                    // Smooth scroll to next item
+                                    lm.scrollToPosition(position + 1)
+                                    recyclerView.post {
+                                        recyclerView.findViewHolderForAdapterPosition(position + 1)?.itemView?.requestFocus()
+                                    }
+                                }
+                            }
+                            true // Always consume to prevent focus escape
+                        }
+                        else -> false
+                    }
+                } else false
+            }
+            
+            // Focus change listener for styling and logging
+            itemView.setOnFocusChangeListener { _, hasFocus ->
+                val position = bindingAdapterPosition
+                if (hasFocus && position != RecyclerView.NO_POSITION) {
+                    Log.d("CategoryFocus", "Category focused: position=$position, name=${categories[position]}")
+                }
+                categoryName.setTextColor(
+                    if (hasFocus) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
+                )
+                // Enable marquee scrolling when focused
+                if (hasFocus) {
+                    categoryName.isSelected = true
+                } else {
+                    categoryName.isSelected = false
+                }
+            }
+        }
+
+        fun bind(category: String) {
+            categoryName.text = category
+        }
+    }
+}

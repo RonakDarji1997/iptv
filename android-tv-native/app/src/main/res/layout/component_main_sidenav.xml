@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge xmlns:android="http://schemas.android.com/apk/res/android">
+    
+    <LinearLayout
+        android:id="@+id/sidebar_container"
+        android:layout_width="50dp"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="@drawable/sidenav_bg"
+        android:gravity="center_horizontal"
+        android:layout_marginStart="10dp"
+        android:layout_marginTop="80dp"
+        android:layout_marginBottom="80dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp">
+        
+        <!-- Search Row -->
+        <LinearLayout
+            android:id="@+id/row_search"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_marginBottom="24dp">
+            
+            <ImageView
+                android:id="@+id/search_button"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_search"
+                android:padding="8dp"
+                android:scaleType="centerInside"
+                android:focusable="true"
+                android:clickable="true"
+                android:background="@drawable/sidenav_icon_bg"
+                android:tint="#FFFFFF"
+                android:nextFocusDown="@+id/tab_tv"
+                android:contentDescription="Search" />
+            
+            <TextView
+                android:id="@+id/search_text"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Search"
+                android:textColor="#ffffff"
+                android:textSize="14sp"
+                android:paddingStart="14dp"
+                android:visibility="gone"
+                android:ellipsize="end"
+                android:maxLines="1" />
+        </LinearLayout>
+        
+        <!-- Live TV Row -->
+        <LinearLayout
+            android:id="@+id/row_tv"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_marginBottom="24dp">
+            
+            <ImageView
+                android:id="@+id/tab_tv"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_live_tv"
+                android:padding="8dp"
+                android:scaleType="centerInside"
+                android:focusable="true"
+                android:clickable="true"
+                android:background="@drawable/sidenav_icon_bg"
+                android:tint="#FFFFFF"
+                android:nextFocusUp="@+id/search_button"
+                android:nextFocusDown="@+id/tab_movies"
+                android:contentDescription="Live TV" />
+            
+            <TextView
+                android:id="@+id/tv_text"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Live TV"
+                android:textColor="#ffffff"
+                android:textSize="14sp"
+                android:paddingStart="14dp"
+                android:visibility="gone"
+                android:ellipsize="end"
+                android:maxLines="1" />
+        </LinearLayout>
+        
+        <!-- Movies Row -->
+        <LinearLayout
+            android:id="@+id/row_movies"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_marginBottom="24dp">
+            
+            <ImageView
+                android:id="@+id/tab_movies"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_movies"
+                android:padding="8dp"
+                android:scaleType="centerInside"
+                android:focusable="true"
+                android:clickable="true"
+                android:background="@drawable/sidenav_icon_bg"
+                android:tint="#FFFFFF"
+                android:nextFocusUp="@+id/tab_tv"
+                android:nextFocusDown="@+id/tab_shows"
+                android:contentDescription="Movies" />
+            
+            <TextView
+                android:id="@+id/movies_text"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Movies"
+                android:textColor="#ffffff"
+                android:textSize="14sp"
+                android:paddingStart="14dp"
+                android:visibility="gone"
+                android:ellipsize="end"
+                android:maxLines="1" />
+        </LinearLayout>
+        
+        <!-- Series Row -->
+        <LinearLayout
+            android:id="@+id/row_shows"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_marginBottom="24dp">
+            
+            <ImageView
+                android:id="@+id/tab_shows"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_series"
+                android:padding="8dp"
+                android:scaleType="centerInside"
+                android:focusable="true"
+                android:clickable="true"
+                android:background="@drawable/sidenav_icon_bg"
+                android:tint="#FFFFFF"
+                android:nextFocusUp="@+id/tab_movies"
+                android:nextFocusDown="@+id/tab_settings"
+                android:contentDescription="Series" />
+            
+            <TextView
+                android:id="@+id/shows_text"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Series"
+                android:textColor="#ffffff"
+                android:textSize="14sp"
+                android:paddingStart="14dp"
+                android:visibility="gone"
+                android:ellipsize="end"
+                android:maxLines="1" />
+        </LinearLayout>
+        
+        <!-- Settings Row -->
+        <LinearLayout
+            android:id="@+id/row_settings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center">
+            
+            <ImageView
+                android:id="@+id/tab_settings"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_settings"
+                android:padding="8dp"
+                android:scaleType="fitCenter"
+                android:focusable="true"
+                android:clickable="true"
+                android:background="@drawable/sidenav_icon_bg"
+                android:nextFocusUp="@+id/tab_shows"
+                android:contentDescription="Settings" />
+            
+            <TextView
+                android:id="@+id/settings_text"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Settings"
+                android:textColor="#ffffff"
+                android:textSize="14sp"
+                android:paddingStart="14dp"
+                android:visibility="gone"
+                android:ellipsize="end"
+                android:maxLines="1" />
+        </LinearLayout>
+        
+    </LinearLayout>
+    
+</merge>

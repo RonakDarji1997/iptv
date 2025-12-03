@@ -18,6 +18,9 @@ interface SeriesDao {
     @Query("SELECT * FROM series WHERE id = :id")
     suspend fun getSeriesById(id: String): SeriesEntity?
     
+    @Query("SELECT * FROM series WHERE externalId = :externalId")
+    suspend fun getSeriesByExternalId(externalId: String): SeriesEntity?
+    
     @Query("SELECT * FROM series WHERE isFavorite = 1 AND isActive = 1 ORDER BY addedAt DESC")
     suspend fun getFavoriteSeries(): List<SeriesEntity>
     

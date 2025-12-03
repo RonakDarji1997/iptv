@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/vod_player_controls_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/transparent">
+
+    <!-- Top Gradient -->
+    <View
+        android:id="@+id/top_gradient"
+        android:layout_width="match_parent"
+        android:layout_height="150dp"
+        android:layout_gravity="top"
+        android:background="@drawable/gradient_top" />
+
+    <!-- Bottom Gradient -->
+    <View
+        android:id="@+id/bottom_gradient"
+        android:layout_width="match_parent"
+        android:layout_height="250dp"
+        android:layout_gravity="bottom"
+        android:background="@drawable/gradient_bottom" />
+
+    <!-- Top Info -->
+    <LinearLayout
+        android:id="@+id/top_info_bar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:orientation="vertical"
+        android:padding="40dp">
+
+        <TextView
+            android:id="@+id/content_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Movie Title"
+            android:textColor="#FFFFFFFF"
+            android:textSize="32sp"
+            android:textStyle="bold"
+            android:shadowColor="#000000"
+            android:shadowDx="2"
+            android:shadowDy="2"
+            android:shadowRadius="4" />
+
+    </LinearLayout>
+
+    <!-- Bottom Controls -->
+    <LinearLayout
+        android:id="@+id/bottom_controls_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:orientation="vertical"
+        android:paddingTop="20dp"
+        android:paddingBottom="40dp"
+        android:paddingStart="40dp"
+        android:paddingEnd="40dp">
+
+        <!-- Progress Bar -->
+        <LinearLayout
+            android:id="@+id/progress_bar_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginBottom="24dp"
+            android:focusable="true"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp">
+
+            <androidx.media3.ui.DefaultTimeBar
+                android:id="@+id/exo_progress"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:focusable="true"
+                android:layout_marginBottom="12dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/exo_position"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="18sp"
+                    android:text="00:00" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="#888888"
+                    android:textSize="18sp"
+                    android:text=" / "
+                    android:paddingStart="4dp"
+                    android:paddingEnd="4dp" />
+
+                <TextView
+                    android:id="@+id/exo_duration"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="#888888"
+                    android:textSize="18sp"
+                    android:text="00:00" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <!-- Control Buttons -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="start">
+
+            <!-- Restart Button -->
+            <ImageButton
+                android:id="@+id/restart_button"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@drawable/ic_replay"
+                android:background="@drawable/restart_button_bg"
+                android:scaleType="centerInside"
+                android:tint="#FFFFFFFF"
+                android:padding="12dp"
+                android:layout_marginEnd="12dp"
+                android:focusable="true"
+                android:nextFocusUp="@id/progress_bar_container" />
+
+            <!-- Next Button (for series episodes) - Between Restart and Subtitle -->
+            <ImageButton
+                android:id="@+id/next_button"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@android:drawable/ic_media_next"
+                android:background="@drawable/restart_button_bg"
+                android:scaleType="centerInside"
+                android:tint="#FFFFFFFF"
+                android:padding="12dp"
+                android:layout_marginEnd="12dp"
+                android:focusable="true"
+                android:nextFocusUp="@id/progress_bar_container"
+                android:visibility="gone" />
+
+            <!-- Subtitle Button -->
+            <ImageButton
+                android:id="@+id/subtitle_button"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@drawable/ic_subtitles"
+                android:background="@drawable/restart_button_bg"
+                android:scaleType="centerInside"
+                android:tint="#FFFFFFFF"
+                android:padding="12dp"
+                android:layout_marginEnd="12dp"
+                android:focusable="true"
+                android:nextFocusUp="@id/progress_bar_container" />
+
+            <!-- Aspect Ratio Button -->
+            <ImageButton
+                android:id="@+id/aspect_ratio_button"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@drawable/ic_aspect_ratio"
+                android:background="@drawable/restart_button_bg"
+                android:scaleType="centerInside"
+                android:tint="#FFFFFFFF"
+                android:padding="12dp"
+                android:layout_marginEnd="12dp"
+                android:focusable="true"
+                android:nextFocusUp="@id/progress_bar_container" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</FrameLayout>

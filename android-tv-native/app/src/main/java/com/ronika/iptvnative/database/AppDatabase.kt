@@ -9,6 +9,7 @@ import com.ronika.iptvnative.database.entities.*
 
 @Database(
     entities = [
+        ProviderEntity::class,
         CategoryEntity::class,
         ChannelEntity::class,
         MovieEntity::class,
@@ -16,11 +17,12 @@ import com.ronika.iptvnative.database.entities.*
         FavoriteEntity::class,
         UserEntity::class
     ],
-    version = 3,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     
+    abstract fun providerDao(): ProviderDao
     abstract fun categoryDao(): CategoryDao
     abstract fun channelDao(): ChannelDao
     abstract fun movieDao(): MovieDao

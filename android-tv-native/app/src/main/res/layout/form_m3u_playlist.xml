@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center_vertical">
+
+    <!-- URL Input -->
+    <EditText
+        android:id="@+id/input_url"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="16dp"
+        android:hint="Enter URL"
+        android:textColor="@color/portal_input_text_color"
+        android:textColorHint="@color/portal_input_hint_color"
+        android:textSize="16sp"
+        android:inputType="textUri"
+        android:background="@drawable/portal_input_background"
+        android:focusable="true"
+        android:focusableInTouchMode="true" />
+
+    <!-- Paste from clipboard -->
+    <LinearLayout
+        android:id="@+id/btn_paste"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:layout_marginTop="16dp"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:background="@drawable/portal_option_selector">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Paste from clipboard"
+            android:textColor="@color/portal_text_color"
+            android:textSize="16sp"
+            android:duplicateParentState="true" />
+
+    </LinearLayout>
+
+    <!-- Select local playlist -->
+    <LinearLayout
+        android:id="@+id/btn_select_local"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:layout_marginTop="8dp"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:background="@drawable/portal_option_selector">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Select local playlist"
+            android:textColor="@color/portal_text_color"
+            android:textSize="16sp"
+            android:duplicateParentState="true" />
+
+    </LinearLayout>
+
+    <!-- Action Buttons -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="32dp"
+        android:gravity="end">
+
+        <TextView
+            android:id="@+id/btn_next"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="16dp"
+            android:text="Next"
+            android:textColor="@color/portal_text_color"
+            android:textSize="16sp"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:background="@drawable/portal_option_selector"
+            android:drawableEnd="@drawable/ic_arrow_right"
+            android:drawablePadding="8dp" />
+
+        <TextView
+            android:id="@+id/btn_back"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:padding="16dp"
+            android:text="Back"
+            android:textColor="@color/portal_text_color"
+            android:textSize="16sp"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:background="@drawable/portal_option_selector" />
+
+    </LinearLayout>
+
+</LinearLayout>

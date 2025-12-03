@@ -1,0 +1,447 @@
+package com.ronika.iptvnative.components
+
+import android.content.Context
+import android.util.AttributeSet
+import android.util.Log
+import android.view.KeyEvent
+import android.view.LayoutInflater
+import android.widget.FrameLayout
+import android.widget.ProgressBar
+import android.widget.TextView
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.ronika.iptvnative.R
+import com.ronika.iptvnative.MovieCategoryRowAdapter
+import com.ronika.iptvnative.api.StalkerClient
+import com.ronika.iptvnative.cache.CacheManager
+import com.ronika.iptvnative.models.Genre
+import com.ronika.iptvnative.models.Series
+import com.ronika.iptvnative.navigation.FocusNavigationHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * Series component with dedicated VOD player
+ * - Separate ExoPlayer instance for series playback
+ * - Netflix-style horizontal rows
+ * - Episode navigation support
+ * - Parallel category loading
+ * - Aggressive caching
+ */
+class SeriesComponent @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0
+) : FrameLayout(context, attrs, defStyleAttr) {
+    
+    private val TAG = "SeriesComponent"
+    
+    // UI Components
+    private lateinit var playerView: PlayerView
+    private lateinit var seriesRowsRecycler: RecyclerView
+    private lateinit var loadingIndicator: ProgressBar
+    private lateinit var emptyStateText: TextView
+    private lateinit var playerContainer: FrameLayout
+    
+    // Player - Dedicated for Series (VOD)
+    private var vodPlayer: ExoPlayer? = null
+    
+    // Adapter (reuse MovieCategoryRowAdapter)
+    private lateinit var seriesRowAdapter: MovieCategoryRowAdapter
+    
+    // State
+    private var categories: List<Genre> = emptyList()
+    private var categoryRows = mutableListOf<MovieCategoryRowAdapter.CategoryRow>()
+    private var isPlayerVisible = false
+    private var currentSeries: Series? = null
+    private var currentEpisodeId: String? = null
+    
+    // API & Cache
+    private lateinit var stalkerClient: StalkerClient
+    private lateinit var cacheManager: CacheManager
+    
+    // Navigation
+    private val focusHelper = FocusNavigationHelper()
+    
+    // Coroutine jobs
+    private var loadingJob: Job? = null
+    
+    // Callbacks
+    private var onNavigateLeft: (() -> Boolean)? = null
+    private var onSeriesSelected: ((Series) -> Unit)? = null
+    
+    init {
+        LayoutInflater.from(context).inflate(R.layout.component_series, this, true)
+        initViews()
+        initPlayer()
+        setupRecyclerView()
+        initializeClients()
+    }
+    
+    private fun initViews() {
+        playerView = findViewById(R.id.series_player_view)
+        seriesRowsRecycler = findViewById(R.id.series_rows_recycler)
+        loadingIndicator = findViewById(R.id.loading_indicator)
+        emptyStateText = findViewById(R.id.empty_state_text)
+        playerContainer = findViewById(R.id.series_player_container)
+    }
+    
+    private fun initPlayer() {
+        // Create dedicated ExoPlayer for series content
+        vodPlayer = ExoPlayer.Builder(context)
+            .setSeekBackIncrementMs(10000)
+            .setSeekForwardIncrementMs(10000)
+            .build()
+            .apply {
+                addListener(object : Player.Listener {
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        when (playbackState) {
+                            Player.STATE_IDLE -> Log.d(TAG, "Series Player: IDLE")
+                            Player.STATE_BUFFERING -> Log.d(TAG, "Series Player: BUFFERING")
+                            Player.STATE_READY -> Log.d(TAG, "Series Player: READY")
+                            Player.STATE_ENDED -> {
+                                Log.d(TAG, "Series Player: ENDED - could auto-play next episode")
+                                // TODO: Auto-play next episode
+                            }
+                        }
+                    }
+                    
+                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                        Log.e(TAG, "Series Player error: ${error.message}", error)
+                    }
+                    
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        Log.d(TAG, "Series Player isPlaying: $isPlaying")
+                    }
+                })
+            }
+        
+        // Attach player to view
+        playerView.player = vodPlayer
+        playerView.useController = true
+        
+        // Initially hide player
+        playerContainer.visibility = GONE
+    }
+    
+    private fun setupRecyclerView() {
+        seriesRowAdapter = MovieCategoryRowAdapter(
+            onMovieClick = { movie, categoryId, categoryTitle ->
+                // Convert Movie to Series and handle
+                val series = Series(
+                    id = movie.id,
+                    name = movie.name,
+                    cmd = movie.cmd,
+                    logo = movie.logo,
+                    year = movie.year,
+                    director = movie.director,
+                    actors = movie.actors,
+                    description = movie.description,
+                    country = movie.country,
+                    genresStr = movie.genresStr
+                )
+                onSeriesSelected?.invoke(series)
+            },
+            onViewAllClick = { categoryId, categoryTitle ->
+                Log.d(TAG, "View All clicked for: $categoryTitle")
+            }
+        )
+        
+        seriesRowsRecycler.apply {
+            layoutManager = LinearLayoutManager(context).apply {
+                isItemPrefetchEnabled = true
+                initialPrefetchItemCount = 4
+            }
+            adapter = movieRowAdapter
+            
+            // Performance optimizations
+            setHasFixedSize(false)
+            setItemViewCacheSize(20) // Cache more rows for instant scroll
+            isNestedScrollingEnabled = false
+            
+            // Handle DPAD navigation
+            setOnKeyListener { _, keyCode, event ->
+                if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    Log.d(TAG, "LEFT pressed - navigating to categories")
+                    onNavigateLeft?.invoke() ?: false
+                } else {
+                    false
+                }
+            }
+        }
+    }
+    
+    private fun initializeClients() {
+        stalkerClient = StalkerClient(
+            portalUrl = "http://tv.stream4k.cc/stalker_portal/server/load.php",
+            macAddress = "00:1a:79:17:f4:f5"
+        )
+        cacheManager = CacheManager.getInstance(context)
+    }
+    
+    /**
+     * Load series categories
+     */
+    fun loadSeriesCategories(categories: List<Genre>, lifecycleOwner: LifecycleOwner) {
+        Log.d(TAG, "Loading series for ${categories.size} categories")
+        
+        this.categories = categories
+        categoryRows.clear()
+        
+        // Show loading
+        loadingIndicator.visibility = VISIBLE
+        emptyStateText.visibility = GONE
+        
+        // Cancel previous loading job
+        loadingJob?.cancel()
+        
+        // Load first 5 categories in parallel
+        loadingJob = lifecycleOwner.lifecycleScope.launch {
+            try {
+                val categoriesToLoad = categories.filter { 
+                    cacheManager.getCategoryType(it.id) == "series" 
+                }.take(5)
+                
+                Log.d(TAG, "Loading ${categoriesToLoad.size} series categories")
+                
+                // Load categories in parallel
+                val rows = categoriesToLoad.map { category ->
+                    async(Dispatchers.IO) {
+                        loadSeriesForCategory(category)
+                    }
+                }.mapNotNull { it.await() }
+                
+                categoryRows.addAll(rows)
+                seriesRowAdapter.setCategories(categoryRows)
+                loadingIndicator.visibility = GONE
+                
+                if (categoryRows.isEmpty()) {
+                    emptyStateText.visibility = VISIBLE
+                    emptyStateText.text = "No series available"
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading series categories", e)
+                loadingIndicator.visibility = GONE
+                emptyStateText.visibility = VISIBLE
+                emptyStateText.text = "Error loading series: ${e.message}"
+            }
+        }
+    }
+    
+    /**
+     * Load series for a single category
+     */
+    private suspend fun loadSeriesForCategory(category: Genre): MovieCategoryRowAdapter.CategoryRow? {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Check cache first
+                val cachedSeries = cacheManager.getSeries(category.id, 1)
+                if (cachedSeries != null) {
+                    Log.d(TAG, "Cache HIT - loaded ${cachedSeries.size} series for ${category.title}")
+                    // Convert Series to Movie for adapter
+                    val movies = cachedSeries.map { it.toMovie() }
+                    return@withContext MovieCategoryRowAdapter.CategoryRow(
+                        categoryId = category.id,
+                        categoryTitle = category.title ?: category.name ?: "Unknown",
+                        movies = movies
+                    )
+                }
+                
+                // Cache miss - fetch from API
+                Log.d(TAG, "Cache MISS - fetching series for ${category.title}")
+                val response = stalkerClient.getVodItems(
+                    categoryId = category.id,
+                    page = 1,
+                    type = "vod"
+                )
+                
+                val series = response.items.data.map { item ->
+                    Series(
+                        id = item.id ?: "",
+                        name = item.name ?: "Unknown Series",
+                        cmd = item.cmd ?: "",
+                        logo = item.screenshot ?: "",
+                        year = item.year,
+                        director = item.director,
+                        actors = item.actors,
+                        description = item.description,
+                        country = item.country,
+                        genresStr = item.genre
+                    )
+                }
+                
+                Log.d(TAG, "Fetched ${series.size} series for ${category.title}")
+                
+                // Cache the results
+                cacheManager.cacheSeries(category.id, 1, series)
+                
+                // Convert to movies for adapter
+                val movies = series.map { it.toMovie() }
+                
+                return@withContext MovieCategoryRowAdapter.CategoryRow(
+                    categoryId = category.id,
+                    categoryTitle = category.title ?: category.name ?: "Unknown",
+                    movies = movies
+                )
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading series for category ${category.title}", e)
+                null
+            }
+        }
+    }
+    
+    /**
+     * Play an episode
+     */
+    fun playEpisode(seriesId: String, seasonId: String, episodeId: String, lifecycleOwner: LifecycleOwner) {
+        Log.d(TAG, "Playing episode: $episodeId")
+        currentEpisodeId = episodeId
+        
+        lifecycleOwner.lifecycleScope.launch {
+            try {
+                // Get episode file info
+                val fileInfo = withContext(Dispatchers.IO) {
+                    stalkerClient.getEpisodeFileInfo(seriesId, seasonId, episodeId)
+                }
+                
+                val fileId = fileInfo?.get("id") as? String
+                if (fileId != null) {
+                    val cmd = "/media/file_${fileId}.mpg"
+                    
+                    // Get stream URL
+                    val streamUrlResponse = withContext(Dispatchers.IO) {
+                        stalkerClient.getVodStreamUrl(cmd, type = "vod")
+                    }
+                    val streamUrl = streamUrlResponse.url
+                    
+                    Log.d(TAG, "Stream URL: $streamUrl")
+                    
+                    // Show player
+                    playerContainer.visibility = VISIBLE
+                    seriesRowsRecycler.visibility = GONE
+                    
+                    // Stop and clear previous media
+                    vodPlayer?.apply {
+                        stop()
+                        clearMediaItems()
+                    }
+                    
+                    // Set new media and play
+                    vodPlayer?.apply {
+                        val mediaItem = MediaItem.fromUri(streamUrl)
+                        setMediaItem(mediaItem)
+                        prepare()
+                        playWhenReady = true
+                    }
+                    
+                    isPlayerVisible = true
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error playing episode", e)
+            }
+        }
+    }
+    
+    /**
+     * Stop playback and show series grid
+     */
+    fun stopPlayback() {
+        Log.d(TAG, "Stopping playback")
+        vodPlayer?.apply {
+            stop()
+            clearMediaItems()
+        }
+        playerContainer.visibility = GONE
+        seriesRowsRecycler.visibility = VISIBLE
+        isPlayerVisible = false
+        currentSeries = null
+        currentEpisodeId = null
+    }
+    
+    /**
+     * Request focus on series rows
+     */
+    fun requestFocusOnSeries() {
+        seriesRowsRecycler.post {
+            seriesRowsRecycler.getChildAt(0)?.findViewById<RecyclerView>(R.id.movies_recycler)?.getChildAt(0)?.requestFocus()
+        }
+    }
+    
+    /**
+     * Set navigation callback
+     */
+    fun setOnNavigateLeftListener(listener: () -> Boolean) {
+        onNavigateLeft = listener
+    }
+    
+    /**
+     * Set series selected callback
+     */
+    fun setOnSeriesSelectedListener(listener: (Series) -> Unit) {
+        onSeriesSelected = listener
+    }
+    
+    /**
+     * Lifecycle: Resume playback
+     */
+    fun onResume() {
+        Log.d(TAG, "Resuming SeriesComponent")
+        vodPlayer?.playWhenReady = true
+    }
+    
+    /**
+     * Lifecycle: Pause playback
+     */
+    fun onPause() {
+        Log.d(TAG, "Pausing SeriesComponent")
+        vodPlayer?.playWhenReady = false
+    }
+    
+    /**
+     * Cleanup resources
+     */
+    fun cleanup() {
+        Log.d(TAG, "Cleaning up SeriesComponent")
+        loadingJob?.cancel()
+        vodPlayer?.apply {
+            stop()
+            release()
+        }
+        vodPlayer = null
+    }
+    
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        cleanup()
+    }
+}
+
+/**
+ * Extension to convert Series to Movie for adapter compatibility
+ */
+private fun Series.toMovie(): com.ronika.iptvnative.models.Movie {
+    return com.ronika.iptvnative.models.Movie(
+        id = this.id,
+        name = this.name,
+        cmd = this.cmd,
+        logo = this.logo,
+        year = this.year,
+        director = this.director,
+        actors = this.actors,
+        description = this.description,
+        country = this.country,
+        genresStr = this.genresStr
+    )
+}

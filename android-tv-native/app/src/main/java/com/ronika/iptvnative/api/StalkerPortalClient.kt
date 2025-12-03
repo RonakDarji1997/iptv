@@ -8,22 +8,28 @@ import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.logging.HttpLoggingInterceptor
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 /**
  * Direct Stalker Portal Client
  * Handles handshake, token management, and all portal API calls
- * No backend, no Room DB — direct portal communication only
+ * All credentials loaded from provider - no hardcoding
  */
 class StalkerClient(
-    private val portalUrl: String,
-    private val macAddress: String
+    val portalUrl: String,
+    private val macAddress: String,
+    private val token: String = "",
+    private val serialNumber: String = ""
 ) {
     private val TAG = "StalkerClient"
     private val gson = Gson()
     
+    // Computed values
+    private val adid: String = md5(macAddress.replace(":", "").uppercase())
+    
     init {
-        Log.d(TAG, "Initialized with portal: $portalUrl, MAC: $macAddress")
+        Log.d(TAG, "Initialized with portal: $portalUrl, MAC: $macAddress, token: ${token.take(8)}...")
     }
     
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
@@ -37,28 +43,43 @@ class StalkerClient(
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
     
+    private fun md5(input: String): String {
+        val md = MessageDigest.getInstance("MD5")
+        val digest = md.digest(input.toByteArray())
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+    
     private fun getBaseUrl(): String {
-        return portalUrl.substringBeforeLast("/server/load.php")
+        // Ensure URL ends properly for API calls
+        val baseUrl = portalUrl.trimEnd('/')
+        return if (baseUrl.contains("/stalker_portal")) {
+            baseUrl.substringBefore("/stalker_portal") + "/stalker_portal"
+        } else {
+            "$baseUrl/stalker_portal"
+        }
+    }
+    
+    private fun buildRequest(url: String): Request {
+        return Request.Builder()
+            .url(url)
+            .get()
+            .addHeader("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3")
+            .addHeader("X-User-Agent", "Model: MAG270; Link: WiFi")
+            .addHeader("Authorization", "Bearer $token")
+            .addHeader("Cookie", "mac=$macAddress; timezone=America/Toronto; adid=$adid")
+            .addHeader("Connection", "keep-alive")
+            .build()
     }
     
     /**
      * Get live TV genres/categories
      */
     suspend fun getGenres(): GenresResponse = withContext(Dispatchers.IO) {
-        val url = "http://tv.stream4k.cc/stalker_portal/server/load.php?type=itv&action=get_genres&JsHttpRequest=1-xml"
+        val url = "${getBaseUrl()}/server/load.php?type=itv&action=get_genres&JsHttpRequest=1-xml"
         
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .addHeader("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3")
-            .addHeader("X-User-Agent", "Model: MAG270; Link: WiFi")
-            .addHeader("Authorization", "Bearer 1E75E91204660B7A876055CE8830130E")
-            .addHeader("Cookie", "mac=00:1a:79:17:f4:f5; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722")
-            .addHeader("Connection", "keep-alive")
-            .build()
+        val request = buildRequest(url)
         
         Log.d(TAG, "Genres request: ${request.method} ${request.url}")
-        request.headers.forEach { Log.d(TAG, "Header: ${it.first}: ${it.second}") }
 
         val response = client.newCall(request).execute()
         val json = response.body?.string() ?: throw Exception("Empty response")
@@ -82,17 +103,9 @@ class StalkerClient(
      * Get channels for a genre
      */
     suspend fun getChannels(genreId: String, page: Int = 1): ChannelsResponse = withContext(Dispatchers.IO) {
-        val url = "http://tv.stream4k.cc/stalker_portal/server/load.php?type=itv&action=get_ordered_list&genre=$genreId&page=$page&p=$page&sortby=number&JsHttpRequest=1-xml"
+        val url = "${getBaseUrl()}/server/load.php?type=itv&action=get_ordered_list&genre=$genreId&page=$page&p=$page&sortby=number&JsHttpRequest=1-xml"
         
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .addHeader("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3")
-            .addHeader("X-User-Agent", "Model: MAG270; Link: WiFi")
-            .addHeader("Authorization", "Bearer 1E75E91204660B7A876055CE8830130E")
-            .addHeader("Cookie", "mac=00:1a:79:17:f4:f5; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722")
-            .addHeader("Connection", "keep-alive")
-            .build()
+        val request = buildRequest(url)
         
         val response = client.newCall(request).execute()
         val json = response.body?.string() ?: throw Exception("Empty response")
@@ -102,7 +115,14 @@ class StalkerClient(
         val wrapper: Map<*, *> = gson.fromJson(json, Map::class.java)
         val jsData = wrapper["js"] as? Map<*, *> ?: throw Exception("No js data")
         val channelsArray = jsData["data"] as? List<*> ?: emptyList<Any>()
-        val totalItems = (jsData["total_items"] as? String)?.toIntOrNull() ?: 0
+        val totalItemsRaw = jsData["total_items"]
+        Log.d(TAG, "total_items raw value: $totalItemsRaw (type: ${totalItemsRaw?.javaClass?.name})")
+        val totalItems = when (totalItemsRaw) {
+            is String -> totalItemsRaw.toIntOrNull() ?: 0
+            is Number -> totalItemsRaw.toInt()
+            else -> 0
+        }
+        Log.d(TAG, "Parsed totalItems: $totalItems")
         
         // Convert to expected format
         val wrappedData = mutableMapOf<String, Any>()
@@ -119,17 +139,9 @@ class StalkerClient(
      * Get stream URL for a channel
      */
     suspend fun getStreamUrl(cmd: String): StreamUrlResponse = withContext(Dispatchers.IO) {
-        val url = "http://tv.stream4k.cc/stalker_portal/server/load.php?type=itv&action=create_link&cmd=$cmd&forced_storage=undefined&disable_ad=0&JsHttpRequest=1-xml"
+        val url = "${getBaseUrl()}/server/load.php?type=itv&action=create_link&cmd=$cmd&forced_storage=undefined&disable_ad=0&JsHttpRequest=1-xml"
         
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .addHeader("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3")
-            .addHeader("X-User-Agent", "Model: MAG270; Link: WiFi")
-            .addHeader("Authorization", "Bearer 1E75E91204660B7A876055CE8830130E")
-            .addHeader("Cookie", "mac=00:1a:79:17:f4:f5; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722")
-            .addHeader("Connection", "keep-alive")
-            .build()
+        val request = buildRequest(url)
         
         val response = client.newCall(request).execute()
         val json = response.body?.string() ?: throw Exception("Empty response")
@@ -147,18 +159,9 @@ class StalkerClient(
      * Get VOD categories (movies/series)
      */
     suspend fun getVodCategories(type: String = "vod"): GenresResponse = withContext(Dispatchers.IO) {
-        // Try without pagination first - some APIs return all data at once
-        val url = "http://tv.stream4k.cc/stalker_portal/server/load.php?type=$type&action=get_categories&JsHttpRequest=1-xml"
+        val url = "${getBaseUrl()}/server/load.php?type=$type&action=get_categories&JsHttpRequest=1-xml"
 
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .addHeader("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3")
-            .addHeader("X-User-Agent", "Model: MAG270; Link: WiFi")
-            .addHeader("Authorization", "Bearer 1E75E91204660B7A876055CE8830130E")
-            .addHeader("Cookie", "mac=00:1a:79:17:f4:f5; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722")
-            .addHeader("Connection", "keep-alive")
-            .build()
+        val request = buildRequest(url)
 
         Log.d(TAG, "VOD categories request: ${request.method} ${request.url}")
 
@@ -173,6 +176,12 @@ class StalkerClient(
         val wrapper: Map<*, *> = gson.fromJson(json, Map::class.java)
         val jsData = wrapper["js"]
 
+        // Check if jsData is a boolean (error/no data) - return empty list
+        if (jsData is Boolean) {
+            Log.w(TAG, "VOD categories returned boolean: $jsData - returning empty list")
+            return@withContext GenresResponse(genres = emptyList())
+        }
+
         // Check if jsData is an array (direct categories) or an object (paginated structure)
         val genres = if (jsData is List<*>) {
             // Direct array format
@@ -184,28 +193,22 @@ class StalkerClient(
             val genresJson = gson.toJson(data)
             gson.fromJson(genresJson, Array<Genre>::class.java).toList()
         } else {
-            // Fallback
-            val genresJson = gson.toJson(jsData)
-            gson.fromJson(genresJson, Array<Genre>::class.java).toList()
+            // Fallback - return empty list
+            Log.w(TAG, "VOD categories returned unexpected type: ${jsData?.javaClass?.simpleName}")
+            emptyList()
         }
 
         Log.d(TAG, "Total categories fetched: ${genres.size}")
         GenresResponse(genres = genres)
-    }    /**
+    }
+    
+    /**
      * Get VOD items (movies/series)
      */
     suspend fun getVodItems(categoryId: String, page: Int = 1, type: String = "vod"): ItemsResponse = withContext(Dispatchers.IO) {
-        val url = "http://tv.stream4k.cc/stalker_portal/server/load.php?type=$type&action=get_ordered_list&category=$categoryId&page=$page&p=$page&sortby=added&JsHttpRequest=1-xml"
+        val url = "${getBaseUrl()}/server/load.php?type=$type&action=get_ordered_list&category=$categoryId&page=$page&p=$page&sortby=added&JsHttpRequest=1-xml"
         
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .addHeader("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3")
-            .addHeader("X-User-Agent", "Model: MAG270; Link: WiFi")
-            .addHeader("Authorization", "Bearer 1E75E91204660B7A876055CE8830130E")
-            .addHeader("Cookie", "mac=00:1a:79:17:f4:f5; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722")
-            .addHeader("Connection", "keep-alive")
-            .build()
+        val request = buildRequest(url)
         
         val response = client.newCall(request).execute()
         val json = response.body?.string() ?: throw Exception("Empty response")
@@ -232,17 +235,9 @@ class StalkerClient(
      * Get VOD file info for a movie
      */
     suspend fun getVodFileInfo(movieId: String): Map<String, Any>? = withContext(Dispatchers.IO) {
-        val url = "http://tv.stream4k.cc/stalker_portal/server/load.php?action=get_ordered_list&type=vod&movie_id=$movieId&JsHttpRequest=1-xml"
+        val url = "${getBaseUrl()}/server/load.php?action=get_ordered_list&type=vod&movie_id=$movieId&JsHttpRequest=1-xml"
         
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .addHeader("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3")
-            .addHeader("X-User-Agent", "Model: MAG270; Link: WiFi")
-            .addHeader("Authorization", "Bearer 1E75E91204660B7A876055CE8830130E")
-            .addHeader("Cookie", "mac=00:1a:79:17:f4:f5; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722")
-            .addHeader("Connection", "keep-alive")
-            .build()
+        val request = buildRequest(url)
         
         val response = client.newCall(request).execute()
         val json = response.body?.string() ?: throw Exception("Empty response")
@@ -259,17 +254,9 @@ class StalkerClient(
      * Get VOD stream URL using file ID
      */
     suspend fun getVodStreamUrl(cmd: String, type: String = "vod"): StreamUrlResponse = withContext(Dispatchers.IO) {
-        val url = "http://tv.stream4k.cc/stalker_portal/server/load.php?type=$type&action=create_link&cmd=$cmd&forced_storage=undefined&disable_ad=0&JsHttpRequest=1-xml"
+        val url = "${getBaseUrl()}/server/load.php?type=$type&action=create_link&cmd=$cmd&forced_storage=undefined&disable_ad=0&JsHttpRequest=1-xml"
         
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .addHeader("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3")
-            .addHeader("X-User-Agent", "Model: MAG270; Link: WiFi")
-            .addHeader("Authorization", "Bearer 1E75E91204660B7A876055CE8830130E")
-            .addHeader("Cookie", "mac=00:1a:79:17:f4:f5; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722")
-            .addHeader("Connection", "keep-alive")
-            .build()
+        val request = buildRequest(url)
         
         val response = client.newCall(request).execute()
         val json = response.body?.string() ?: throw Exception("Empty response")
@@ -286,17 +273,9 @@ class StalkerClient(
      * Get series seasons - use same approach as vod items
      */
     suspend fun getSeriesSeasons(seriesId: String): Map<String, Any> = withContext(Dispatchers.IO) {
-        val url = "http://tv.stream4k.cc/stalker_portal/server/load.php?action=get_ordered_list&type=vod&movie_id=$seriesId&JsHttpRequest=1-xml"
+        val url = "${getBaseUrl()}/server/load.php?action=get_ordered_list&type=vod&movie_id=$seriesId&JsHttpRequest=1-xml"
         
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .addHeader("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3")
-            .addHeader("X-User-Agent", "Model: MAG270; Link: WiFi")
-            .addHeader("Authorization", "Bearer 1E75E91204660B7A876055CE8830130E")
-            .addHeader("Cookie", "mac=00:1a:79:17:f4:f5; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722")
-            .addHeader("Connection", "keep-alive")
-            .build()
+        val request = buildRequest(url)
         
         val response = client.newCall(request).execute()
         val json = response.body?.string() ?: throw Exception("Empty response")
@@ -310,17 +289,9 @@ class StalkerClient(
      * Get series episodes for a season
      */
     suspend fun getSeriesEpisodes(seriesId: String, seasonId: String): Map<String, Any> = withContext(Dispatchers.IO) {
-        val url = "http://tv.stream4k.cc/stalker_portal/server/load.php?action=get_ordered_list&type=vod&movie_id=$seriesId&season_id=$seasonId&p=1&JsHttpRequest=1-xml"
+        val url = "${getBaseUrl()}/server/load.php?action=get_ordered_list&type=vod&movie_id=$seriesId&season_id=$seasonId&p=1&JsHttpRequest=1-xml"
         
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .addHeader("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3")
-            .addHeader("X-User-Agent", "Model: MAG270; Link: WiFi")
-            .addHeader("Authorization", "Bearer 1E75E91204660B7A876055CE8830130E")
-            .addHeader("Cookie", "mac=00:1a:79:17:f4:f5; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722")
-            .addHeader("Connection", "keep-alive")
-            .build()
+        val request = buildRequest(url)
         
         val response = client.newCall(request).execute()
         val json = response.body?.string() ?: throw Exception("Empty response")
@@ -334,17 +305,9 @@ class StalkerClient(
      * Get episode file info for series playback
      */
     suspend fun getEpisodeFileInfo(seriesId: String, seasonId: String, episodeId: String): Map<String, Any>? = withContext(Dispatchers.IO) {
-        val url = "http://tv.stream4k.cc/stalker_portal/server/load.php?action=get_ordered_list&type=vod&movie_id=$seriesId&season_id=$seasonId&episode_id=$episodeId&JsHttpRequest=1-xml"
+        val url = "${getBaseUrl()}/server/load.php?action=get_ordered_list&type=vod&movie_id=$seriesId&season_id=$seasonId&episode_id=$episodeId&JsHttpRequest=1-xml"
         
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .addHeader("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3")
-            .addHeader("X-User-Agent", "Model: MAG270; Link: WiFi")
-            .addHeader("Authorization", "Bearer 1E75E91204660B7A876055CE8830130E")
-            .addHeader("Cookie", "mac=00:1a:79:17:f4:f5; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722")
-            .addHeader("Connection", "keep-alive")
-            .build()
+        val request = buildRequest(url)
         
         val response = client.newCall(request).execute()
         val json = response.body?.string() ?: throw Exception("Empty response")
@@ -358,20 +321,61 @@ class StalkerClient(
     }
     
     /**
+     * Get short EPG for a channel (current and next programs)
+     * Returns EPG data for the specified channel
+     */
+    suspend fun getShortEpg(channelId: String): EpgResponse = withContext(Dispatchers.IO) {
+        val url = "${getBaseUrl()}/server/load.php?type=itv&action=get_short_epg&ch_id=$channelId&JsHttpRequest=1-xml"
+        
+        val request = buildRequest(url)
+        
+        val response = client.newCall(request).execute()
+        val json = response.body?.string() ?: throw Exception("Empty response")
+        
+        // Stalker returns {"js": [...]} - js is directly an array
+        val wrapper: Map<*, *> = gson.fromJson(json, Map::class.java)
+        val jsData = wrapper["js"]
+        
+        // js can be an array directly or an object with data
+        val epgData: List<*> = when (jsData) {
+            is List<*> -> jsData
+            is Map<*, *> -> jsData["data"] as? List<*> ?: emptyList<Any>()
+            else -> emptyList<Any>()
+        }
+        
+        val programs = epgData.mapNotNull { item ->
+            val epgItem = item as? Map<*, *> ?: return@mapNotNull null
+            EpgProgram(
+                id = (epgItem["id"] as? String) ?: "",
+                name = (epgItem["name"] as? String) ?: "No info",
+                startTimestamp = when (val t = epgItem["start_timestamp"]) {
+                    is String -> t.toLongOrNull() ?: 0L
+                    is Number -> t.toLong()
+                    else -> 0L
+                },
+                endTimestamp = when (val t = epgItem["stop_timestamp"]) {
+                    is String -> t.toLongOrNull() ?: 0L
+                    is Number -> t.toLong()
+                    else -> 0L
+                },
+                duration = when (val d = epgItem["duration"]) {
+                    is String -> d.toIntOrNull() ?: 0
+                    is Number -> d.toInt()
+                    else -> 0
+                }
+            )
+        }
+        
+        EpgResponse(programs = programs)
+    }
+    
+    /**
      * Search for movies and series
      */
     suspend fun searchContent(query: String, page: Int = 1): ItemsResponse = withContext(Dispatchers.IO) {
-        val url = "http://tv.stream4k.cc/stalker_portal/server/load.php?action=get_ordered_list&type=vod&category=0&search=$query&sortby=name&p=$page&JsHttpRequest=1-xml"
+        val url = "${getBaseUrl()}/server/load.php?action=get_ordered_list&type=vod&category=0&search=$query&sortby=name&p=$page&JsHttpRequest=1-xml"
         
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .addHeader("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3")
-            .addHeader("X-User-Agent", "Model: MAG270; Link: WiFi")
-            .addHeader("Authorization", "Bearer 1E75E91204660B7A876055CE8830130E")
-            .addHeader("Cookie", "mac=00:1a:79:17:f4:f5; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722")
-            .addHeader("Connection", "keep-alive")
-            .build()
+        val request = buildRequest(url)
         
         val response = client.newCall(request).execute()
         val json = response.body?.string() ?: throw Exception("Empty response")

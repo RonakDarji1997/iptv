@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merge xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#09090b">
+        
+        <!-- Movie Rows Container -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/movie_rows_recycler"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingTop="20dp"
+            android:paddingBottom="20dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp" />
+        
+        <!-- VOD Player Container (shown when playing movie) -->
+        <FrameLayout
+            android:id="@+id/vod_player_container"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#000000"
+            android:visibility="gone">
+            
+            <androidx.media3.ui.PlayerView
+                android:id="@+id/vod_player_view"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                app:controller_layout_id="@layout/custom_player_controls"
+                app:show_timeout="5000"
+                app:auto_show="true" />
+            
+        </FrameLayout>
+        
+        <ProgressBar
+            android:id="@+id/loading_indicator"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:visibility="gone" />
+        
+        <TextView
+            android:id="@+id/empty_state_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:text="No movies available"
+            android:textColor="#99ffffff"
+            android:textSize="16sp"
+            android:visibility="gone" />
+        
+    </FrameLayout>
+    
+</merge>

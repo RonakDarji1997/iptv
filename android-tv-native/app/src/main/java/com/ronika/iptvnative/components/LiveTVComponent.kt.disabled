@@ -1,0 +1,479 @@
+package com.ronika.iptvnative.components
+
+import android.content.Context
+import android.util.AttributeSet
+import android.util.Log
+import android.view.KeyEvent
+import android.view.LayoutInflater
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.ronika.iptvnative.R
+import com.ronika.iptvnative.adapters.ChannelRowAdapter
+import com.ronika.iptvnative.api.StalkerClient
+import com.ronika.iptvnative.cache.CacheManager
+import com.ronika.iptvnative.models.Channel
+import com.ronika.iptvnative.models.Genre
+import com.ronika.iptvnative.navigation.FocusNavigationHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * Live TV component with dedicated player
+ * - Separate ExoPlayer instance for live streaming
+ * - Fast channel loading with parallel API calls
+ * - Aggressive caching
+ * - Image preloading
+ * - Netflix-style row layout
+ */
+class LiveTVComponent @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0
+) : FrameLayout(context, attrs, defStyleAttr) {
+    
+    private val TAG = "LiveTVComponent"
+    
+    // UI Components
+    private lateinit var playerView: PlayerView
+    private lateinit var channelsRecycler: RecyclerView
+    private lateinit var loadingIndicator: ProgressBar
+    private lateinit var emptyStateText: TextView
+    private lateinit var playerContainer: FrameLayout
+    private lateinit var contentContainer: LinearLayout
+    
+    // Player - Dedicated for Live TV
+    private var livePlayer: ExoPlayer? = null
+    
+    // Adapter
+    private lateinit var channelRowAdapter: ChannelRowAdapter
+    
+    // State
+    private var currentCategory: Genre? = null
+    private var currentChannel: Channel? = null
+    private var channels = mutableListOf<Channel>()
+    private var currentPage = 1
+    private var isLoadingMore = false
+    private var hasMorePages = true
+    
+    // API & Cache
+    private lateinit var stalkerClient: StalkerClient
+    private lateinit var cacheManager: CacheManager
+    
+    // Navigation
+    private val focusHelper = FocusNavigationHelper()
+    
+    // Coroutine jobs
+    private var loadingJob: Job? = null
+    
+    // Callbacks
+    private var onNavigateLeft: (() -> Boolean)? = null
+    private var onChannelPlaying: ((Channel) -> Unit)? = null
+    
+    init {
+        LayoutInflater.from(context).inflate(R.layout.component_live_tv, this, true)
+        initViews()
+        initPlayer()
+        setupRecyclerView()
+        initializeClients()
+    }
+    
+    private fun initViews() {
+        playerView = findViewById(R.id.live_player_view)
+        channelsRecycler = findViewById(R.id.channels_recycler)
+        loadingIndicator = findViewById(R.id.loading_indicator)
+        emptyStateText = findViewById(R.id.empty_state_text)
+        playerContainer = findViewById(R.id.live_player_container)
+        contentContainer = findViewById(R.id.live_content_container)
+    }
+    
+    private fun initPlayer() {
+        // Create dedicated ExoPlayer for live streaming
+        livePlayer = ExoPlayer.Builder(context)
+            .setSeekBackIncrementMs(10000)
+            .setSeekForwardIncrementMs(10000)
+            .build()
+            .apply {
+                addListener(object : Player.Listener {
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        when (playbackState) {
+                            Player.STATE_IDLE -> Log.d(TAG, "Live Player: IDLE")
+                            Player.STATE_BUFFERING -> Log.d(TAG, "Live Player: BUFFERING")
+                            Player.STATE_READY -> Log.d(TAG, "Live Player: READY")
+                            Player.STATE_ENDED -> Log.d(TAG, "Live Player: ENDED")
+                        }
+                    }
+                    
+                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                        Log.e(TAG, "Live Player error: ${error.message}", error)
+                    }
+                    
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        Log.d(TAG, "Live Player isPlaying: $isPlaying")
+                    }
+                })
+            }
+        
+        // Attach player to view
+        playerView.player = livePlayer
+        playerView.useController = true
+        playerView.controllerAutoShow = true
+    }
+    
+    private fun setupRecyclerView() {
+        channelRowAdapter = ChannelRowAdapter(
+            onChannelSelected = { channel ->
+                playChannel(channel)
+            },
+            onChannelFocused = { channel ->
+                focusHelper.rememberFocusView("channels", channelsRecycler.focusedChild ?: return@ChannelRowAdapter)
+                // Could show preview here
+            }
+        )
+        
+        channelsRecycler.apply {
+            layoutManager = LinearLayoutManager(context).apply {
+                isItemPrefetchEnabled = true
+                initialPrefetchItemCount = 5
+            }
+            adapter = channelRowAdapter
+            
+            // Performance optimizations
+            setHasFixedSize(false)
+            setItemViewCacheSize(30) // Cache more for live TV
+            
+            // Pagination on scroll
+            addOnScrollListener(object : RecyclerView.OnScrollListener() {
+                override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                    super.onScrolled(recyclerView, dx, dy)
+                    
+                    val layoutManager = recyclerView.layoutManager as LinearLayoutManager
+                    val visibleItemCount = layoutManager.childCount
+                    val totalItemCount = layoutManager.itemCount
+                    val firstVisibleItemPosition = layoutManager.findFirstVisibleItemPosition()
+                    
+                    if (!isLoadingMore && hasMorePages && dy > 0) {
+                        if ((visibleItemCount + firstVisibleItemPosition) >= totalItemCount - 10) {
+                            loadMoreChannels()
+                        }
+                    }
+                }
+            })
+            
+            // Handle DPAD navigation
+            setOnKeyListener { _, keyCode, event ->
+                if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    Log.d(TAG, "LEFT pressed - navigating to categories")
+                    onNavigateLeft?.invoke() ?: false
+                } else {
+                    false
+                }
+            }
+        }
+    }
+    
+    private fun initializeClients() {
+        stalkerClient = StalkerClient(
+            portalUrl = "http://tv.stream4k.cc/stalker_portal/server/load.php",
+            macAddress = "00:1a:79:17:f4:f5"
+        )
+        cacheManager = CacheManager.getInstance(context)
+    }
+    
+    /**
+     * Load channels for a category
+     */
+    fun loadChannelsForCategory(category: Genre, lifecycleOwner: LifecycleOwner) {
+        Log.d(TAG, "Loading channels for category: ${category.title}")
+        
+        currentCategory = category
+        currentPage = 1
+        hasMorePages = true
+        channels.clear()
+        
+        // Show loading
+        loadingIndicator.visibility = VISIBLE
+        emptyStateText.visibility = GONE
+        
+        // Cancel previous loading job
+        loadingJob?.cancel()
+        
+        // Load channels
+        loadingJob = lifecycleOwner.lifecycleScope.launch {
+            try {
+                // Check cache first
+                val cachedChannels = cacheManager.getChannels(category.id, currentPage)
+                if (cachedChannels != null) {
+                    Log.d(TAG, "Cache HIT - loaded ${cachedChannels.size} channels")
+                    channels.addAll(cachedChannels)
+                    channelRowAdapter.setChannels(channels)
+                    loadingIndicator.visibility = GONE
+                    
+                    // Auto-play first channel
+                    if (channels.isNotEmpty()) {
+                        playChannel(channels[0])
+                    }
+                    return@launch
+                }
+                
+                // Cache miss - fetch from API
+                Log.d(TAG, "Cache MISS - fetching from API")
+                val response = withContext(Dispatchers.IO) {
+                    stalkerClient.getVodItems(
+                        categoryId = category.id,
+                        page = currentPage,
+                        type = "itv" // Live TV type
+                    )
+                }
+                
+                val fetchedChannels = response.items.data.map { item ->
+                    Channel(
+                        id = item.id ?: "",
+                        name = item.name ?: "Unknown Channel",
+                        number = item.num ?: "",
+                        logo = item.screenshot ?: "",
+                        cmd = item.cmd ?: "",
+                        genreId = category.id
+                    )
+                }
+                
+                Log.d(TAG, "Fetched ${fetchedChannels.size} channels")
+                
+                // Cache the results
+                cacheManager.cacheChannels(category.id, currentPage, fetchedChannels)
+                
+                // Update UI
+                channels.addAll(fetchedChannels)
+                channelRowAdapter.setChannels(channels)
+                loadingIndicator.visibility = GONE
+                
+                // Check if more pages exist
+                hasMorePages = fetchedChannels.size >= 14 // Typical page size
+                
+                // Auto-play first channel
+                if (channels.isNotEmpty()) {
+                    playChannel(channels[0])
+                }
+                
+                // Show empty state if no channels
+                if (channels.isEmpty()) {
+                    emptyStateText.visibility = VISIBLE
+                    emptyStateText.text = "No channels available"
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading channels", e)
+                loadingIndicator.visibility = GONE
+                emptyStateText.visibility = VISIBLE
+                emptyStateText.text = "Error loading channels: ${e.message}"
+            }
+        }
+    }
+    
+    /**
+     * Load more channels (pagination)
+     */
+    private fun loadMoreChannels() {
+        val category = currentCategory ?: return
+        if (isLoadingMore || !hasMorePages) return
+        
+        isLoadingMore = true
+        currentPage++
+        
+        Log.d(TAG, "Loading more channels - page $currentPage")
+        
+        (context as? LifecycleOwner)?.lifecycleScope?.launch {
+            try {
+                // Check cache first
+                val cachedChannels = cacheManager.getChannels(category.id, currentPage)
+                if (cachedChannels != null) {
+                    Log.d(TAG, "Cache HIT - loaded ${cachedChannels.size} more channels")
+                    channels.addAll(cachedChannels)
+                    channelRowAdapter.setChannels(channels)
+                    isLoadingMore = false
+                    return@launch
+                }
+                
+                // Fetch from API
+                val response = withContext(Dispatchers.IO) {
+                    stalkerClient.getVodItems(
+                        categoryId = category.id,
+                        page = currentPage,
+                        type = "itv"
+                    )
+                }
+                
+                val fetchedChannels = response.items.data.map { item ->
+                    Channel(
+                        id = item.id ?: "",
+                        name = item.name ?: "Unknown Channel",
+                        number = item.num ?: "",
+                        logo = item.screenshot ?: "",
+                        cmd = item.cmd ?: "",
+                        genreId = category.id
+                    )
+                }
+                
+                Log.d(TAG, "Fetched ${fetchedChannels.size} more channels")
+                
+                // Cache the results
+                cacheManager.cacheChannels(category.id, currentPage, fetchedChannels)
+                
+                // Update UI
+                channels.addAll(fetchedChannels)
+                channelRowAdapter.setChannels(channels)
+                
+                // Check if more pages exist
+                hasMorePages = fetchedChannels.size >= 14
+                
+                isLoadingMore = false
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading more channels", e)
+                isLoadingMore = false
+                currentPage-- // Revert page increment
+            }
+        }
+    }
+    
+    /**
+     * Play a channel
+     */
+    private fun playChannel(channel: Channel) {
+        Log.d(TAG, "Playing channel: ${channel.name}")
+        currentChannel = channel
+        
+        (context as? LifecycleOwner)?.lifecycleScope?.launch {
+            try {
+                // Get stream URL
+                val streamUrlResponse = withContext(Dispatchers.IO) {
+                    stalkerClient.getVodStreamUrl(channel.cmd, type = "itv")
+                }
+                val streamUrl = streamUrlResponse.url
+                
+                Log.d(TAG, "Stream URL: $streamUrl")
+                
+                // Stop and clear previous media
+                livePlayer?.apply {
+                    stop()
+                    clearMediaItems()
+                }
+                
+                // Set new media and play
+                livePlayer?.apply {
+                    val mediaItem = MediaItem.fromUri(streamUrl)
+                    setMediaItem(mediaItem)
+                    prepare()
+                    playWhenReady = true
+                }
+                
+                // Update adapter playing position
+                val index = channels.indexOf(channel)
+                if (index >= 0) {
+                    channelRowAdapter.setPlayingPosition(index)
+                }
+                
+                // Notify callback
+                onChannelPlaying?.invoke(channel)
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error playing channel", e)
+            }
+        }
+    }
+    
+    /**
+     * Stop playback
+     */
+    fun stopPlayback() {
+        Log.d(TAG, "Stopping playback")
+        livePlayer?.apply {
+            stop()
+            clearMediaItems()
+        }
+        currentChannel = null
+        channelRowAdapter.setPlayingPosition(-1)
+    }
+    
+    /**
+     * Pause playback
+     */
+    fun pausePlayback() {
+        livePlayer?.pause()
+    }
+    
+    /**
+     * Resume playback
+     */
+    fun resumePlayback() {
+        livePlayer?.play()
+    }
+    
+    /**
+     * Request focus on channels list
+     */
+    fun requestFocusOnChannels() {
+        channelsRecycler.post {
+            focusHelper.restoreFocus("channels", channelsRecycler.getChildAt(0))
+        }
+    }
+    
+    /**
+     * Set navigation callback
+     */
+    fun setOnNavigateLeftListener(listener: () -> Boolean) {
+        onNavigateLeft = listener
+    }
+    
+    /**
+     * Set channel playing callback
+     */
+    fun setOnChannelPlayingListener(listener: (Channel) -> Unit) {
+        onChannelPlaying = listener
+    }
+    
+    /**
+     * Lifecycle: Resume playback
+     */
+    fun onResume() {
+        Log.d(TAG, "Resuming LiveTVComponent")
+        livePlayer?.playWhenReady = true
+    }
+    
+    /**
+     * Lifecycle: Pause playback
+     */
+    fun onPause() {
+        Log.d(TAG, "Pausing LiveTVComponent")
+        livePlayer?.playWhenReady = false
+    }
+    
+    /**
+     * Cleanup resources
+     */
+    fun cleanup() {
+        Log.d(TAG, "Cleaning up LiveTVComponent")
+        loadingJob?.cancel()
+        livePlayer?.apply {
+            stop()
+            release()
+        }
+        livePlayer = null
+    }
+    
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        cleanup()
+    }
+}

@@ -378,7 +378,7 @@ async function transcribeAudioFile(audioPath, language) {
     console.log(`Transcribing with whisper-cli: ${audioPath} (${language})`);
     
     return new Promise((resolve, reject) => {
-        const modelPath = path.join(__dirname, 'models', 'ggml-tiny.bin');
+        const modelPath = path.join(__dirname, 'models', 'ggml-large-v3-turbo.bin');
         const langParam = (language && language !== 'auto') ? language : 'en';
         
         // Use whisper-cli with Metal acceleration (4x faster than real-time!)

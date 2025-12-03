@@ -15,5 +15,8 @@ data class FavoriteEntity(
     val id: Int = 0,
     val itemId: String, // Channel/Movie/Series ID
     val itemType: String, // LIVE, MOVIE, SERIES
+    val itemName: String = "", // Name of the item
+    val itemPoster: String? = null, // Poster URL
+    val itemCmd: String? = null, // Playback command (for movies)
     val addedAt: Long = System.currentTimeMillis()
 )
