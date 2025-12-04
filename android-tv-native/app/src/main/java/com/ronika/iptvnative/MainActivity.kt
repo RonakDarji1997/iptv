@@ -64,6 +64,10 @@ class MainActivity : ComponentActivity() {
     // Track if playing from series detail
     private var isPlayingFromSeries = false
     
+    // Handler and runnable for managing focus enable delays
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var pendingEnableFocusRunnable: Runnable? = null
+    
     // Track current episode for next episode functionality
     private var currentSeriesId: String? = null
     private var currentSeasonId: String? = null
@@ -140,6 +144,40 @@ class MainActivity : ComponentActivity() {
     // Flag to suppress tab listener during programmatic focus changes
     private var suppressTabListener = false
     
+    /**
+     * Schedule enableFocus with proper cancellation of previous pending calls
+     */
+    private fun scheduleEnableFocus(delayMs: Long = 150) {
+        // Cancel any pending enableFocus call
+        pendingEnableFocusRunnable?.let {
+            mainHandler.removeCallbacks(it)
+            Log.d(TAG, "Cancelled pending enableFocus")
+        }
+        
+        // Schedule new enableFocus call
+        pendingEnableFocusRunnable = Runnable {
+            mainSideNav.enableFocus()
+            suppressTabListener = false
+            Log.d(TAG, "Main sidenav focus re-enabled (scheduled)")
+            pendingEnableFocusRunnable = null
+        }
+        mainHandler.postDelayed(pendingEnableFocusRunnable!!, delayMs)
+        Log.d(TAG, "Scheduled enableFocus in ${delayMs}ms")
+    }
+    
+    /**
+     * Cancel any pending enableFocus and immediately enable focus
+     */
+    private fun cancelAndEnableFocus() {
+        pendingEnableFocusRunnable?.let {
+            mainHandler.removeCallbacks(it)
+            pendingEnableFocusRunnable = null
+            Log.d(TAG, "Cancelled pending enableFocus")
+        }
+        mainSideNav.enableFocus()
+        Log.d(TAG, "Main sidenav focus enabled immediately")
+    }
+    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -164,8 +202,9 @@ class MainActivity : ComponentActivity() {
         initSearchComponent()
         initSettingsComponent()
         
-        // Sync VOD categories from API on app load
-        syncVODCategories()
+        // Don't auto-sync on app start - categories are saved during setup
+        // User can manually sync via "Update Playlist" button in settings
+        // syncVODCategories() // DISABLED - causes category count changes due to API variability
         
         // Initialize navigation stack
         navigationStack.add(NavigationState.MAIN_SIDENAV)
@@ -486,6 +525,9 @@ class MainActivity : ComponentActivity() {
             // Set flag to prevent immediate re-navigation
             justReturnedFromCategories = true
             
+            // Cancel any pending enableFocus and immediately enable focus
+            cancelAndEnableFocus()
+            
             // Return focus to main sidenav on the source item
             val tab = when (currentSourceSection) {
                 NavigationHistoryManager.SourceSection.LIVE_TV -> MainSideNavComponent.Tab.LIVE_TV
@@ -579,9 +621,16 @@ class MainActivity : ComponentActivity() {
                     // Return to VOD grid (thumbnail view) from detail
                     Log.d(TAG, "Returning to VOD grid from detail")
                     
-                    // Show sidebar components
+                    // Suppress tab listener
+                    suppressTabListener = true
+                    
+                    // Show sidebar components but disable main sidenav focus
                     val sideNavContainer = findViewById<FrameLayout>(R.id.sideNavContainer)
                     val categorySidebarContainer = findViewById<FrameLayout>(R.id.categorySidebarContainer)
+                    
+                    // Disable focus on main sidenav buttons to prevent focus stealing
+                    mainSideNav.disableFocus()
+                    mainSideNav.collapse()
                     
                     sideNavContainer.visibility = android.view.View.VISIBLE
                     categorySidebarContainer.visibility = android.view.View.VISIBLE
@@ -599,6 +648,9 @@ class MainActivity : ComponentActivity() {
                     // Return focus to the category
                     categorySidebar.focusCategory(categoryName)
                     
+                    // Re-enable main sidenav focus after settling
+                    scheduleEnableFocus(150)
+                    
                     Log.d(TAG, "VOD minimized, focus returned to category: $categoryName")
                 }
                 NavigationState.CATEGORY_SIDEBAR -> {
@@ -609,11 +661,12 @@ class MainActivity : ComponentActivity() {
                     suppressTabListener = true
                     Log.d(TAG, "Tab listener suppressed")
                     
-                    // Show sidebar components - BOTH must be visible
+                    // Show BOTH sidebars but disable focus on main sidenav to prevent focus stealing
                     val sideNavContainer = findViewById<FrameLayout>(R.id.sideNavContainer)
                     val categorySidebarContainer = findViewById<FrameLayout>(R.id.categorySidebarContainer)
                     
-                    // Collapse main sidenav BEFORE making it visible to prevent focus steal
+                    // Disable focus on main sidenav buttons BEFORE making visible
+                    mainSideNav.disableFocus()
                     mainSideNav.collapse()
                     
                     sideNavContainer.visibility = android.view.View.VISIBLE
@@ -633,11 +686,8 @@ class MainActivity : ComponentActivity() {
                     categorySidebar.focusCategory(categoryName)
                     Log.d(TAG, "Focus set to category: $categoryName, VOD grid still visible at 70% width")
                     
-                    // Re-enable tab listener after everything is settled
-                    vodContainer.postDelayed({
-                        suppressTabListener = false
-                        Log.d(TAG, "Tab listener re-enabled")
-                    }, 100)
+                    // Re-enable main sidenav focus and tab listener after everything is settled
+                    scheduleEnableFocus(150)
                     
                     Log.d(TAG, "Sidebars shown with VOD grid visible")
                 }
@@ -654,11 +704,12 @@ class MainActivity : ComponentActivity() {
                         suppressTabListener = true
                         Log.d(TAG, "Tab listener suppressed")
                         
-                        // Show sidebar components
+                        // Show BOTH sidebars but disable focus on main sidenav to prevent focus stealing
                         val sideNavContainer = findViewById<FrameLayout>(R.id.sideNavContainer)
                         val categorySidebarContainer = findViewById<FrameLayout>(R.id.categorySidebarContainer)
                         
-                        // Collapse main sidenav BEFORE making it visible to prevent focus steal
+                        // Disable focus on main sidenav buttons BEFORE making visible
+                        mainSideNav.disableFocus()
                         mainSideNav.collapse()
                         
                         sideNavContainer.visibility = android.view.View.VISIBLE
@@ -678,11 +729,8 @@ class MainActivity : ComponentActivity() {
                         categorySidebar.focusCategory(categoryName)
                         Log.d(TAG, "Focus set to category: $categoryName, VOD grid still visible at 70% width")
                         
-                        // Re-enable tab listener after everything is settled
-                        vodContainer.postDelayed({
-                            suppressTabListener = false
-                            Log.d(TAG, "Tab listener re-enabled")
-                        }, 100)
+                        // Re-enable main sidenav focus and tab listener after everything is settled
+                        scheduleEnableFocus(150)
                         
                         Log.d(TAG, "Sidebars shown with VOD grid visible")
                     }
@@ -1936,6 +1984,42 @@ class MainActivity : ComponentActivity() {
             
             // Check if we're in category sidebar
             if (navigationHistory.isOnScreen(NavigationHistoryManager.Screen.CATEGORY_SIDEBAR)) {
+                // Check if VOD grid is visible - if so, focus should go to category sidebar, not main sidenav
+                val vodContainer = findViewById<FrameLayout>(R.id.vodContainer)
+                if (vodContainer.visibility == android.view.View.VISIBLE && getCurrentNavigation() == NavigationState.VOD_GRID) {
+                    Log.d(TAG, "Back pressed from VOD grid - returning focus to category sidebar")
+                    
+                    // Make sure category sidebar is visible before requesting focus
+                    val sideNavContainer = findViewById<FrameLayout>(R.id.sideNavContainer)
+                    val categorySidebarContainer = findViewById<FrameLayout>(R.id.categorySidebarContainer)
+                    
+                    Log.d(TAG, "Making sidebars visible: sideNav=${sideNavContainer.visibility}, categorySidebar=${categorySidebarContainer.visibility}")
+                    
+                    mainSideNav.disableFocus()
+                    mainSideNav.collapse()
+                    
+                    sideNavContainer.visibility = android.view.View.VISIBLE
+                    categorySidebarContainer.visibility = android.view.View.VISIBLE
+                    
+                    Log.d(TAG, "Sidebars now visible: sideNav=${sideNavContainer.visibility}, categorySidebar=${categorySidebarContainer.visibility}")
+                    
+                    // Resize VOD to 70% width to show sidebar
+                    val params = vodContainer.layoutParams as android.widget.LinearLayout.LayoutParams
+                    params.weight = 0.7f
+                    params.width = 0
+                    vodContainer.layoutParams = params
+                    
+                    Log.d(TAG, "VOD resized to 70%, requesting focus on category sidebar")
+                    
+                    // Return focus to category sidebar
+                    val focusSuccess = categorySidebar.requestFocus()
+                    Log.d(TAG, "Category sidebar focus request: $focusSuccess")
+                    
+                    // Re-enable main sidenav after a delay
+                    scheduleEnableFocus(150)
+                    return true
+                }
+                
                 Log.d(TAG, "Back pressed in category sidebar, navigating to main sidenav")
                 // Return focus to main sidenav on the source item
                 val tab = when (currentSourceSection) {

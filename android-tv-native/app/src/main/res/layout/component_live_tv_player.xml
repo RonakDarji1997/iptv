@@ -49,4 +49,23 @@
         android:textSize="16sp"
         android:visibility="gone" />
 
+    <!-- Bitrate Info - Top Right Corner (Fullscreen) -->
+    <TextView
+        android:id="@+id/bitrate_info"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="24dp"
+        android:text="1080p • 8.5 Mbps • H.264"
+        android:textColor="#FFFFFFFF"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:shadowColor="#000000"
+        android:shadowDx="2"
+        android:shadowDy="2"
+        android:shadowRadius="4"
+        android:padding="8dp"
+        android:background="#66000000"
+        android:visibility="gone" />
+
 </FrameLayout>

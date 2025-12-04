@@ -58,6 +58,25 @@
 
     </LinearLayout>
 
+    <!-- Bitrate Info - Top Right Corner -->
+    <TextView
+        android:id="@+id/bitrate_info"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="40dp"
+        android:text="1080p • 8.5 Mbps • H.264"
+        android:textColor="#FFFFFFFF"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:shadowColor="#000000"
+        android:shadowDx="2"
+        android:shadowDy="2"
+        android:shadowRadius="4"
+        android:padding="8dp"
+        android:background="#66000000"
+        android:visibility="gone" />
+
     <!-- Center Play/Pause Icon Overlay (shown when clicking center) -->
     <ImageView
         android:id="@+id/play_pause_overlay"

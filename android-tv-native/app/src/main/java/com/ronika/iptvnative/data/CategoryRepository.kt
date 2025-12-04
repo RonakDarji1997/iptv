@@ -12,6 +12,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.withTimeout
 import java.util.UUID
 
 /**
@@ -207,152 +208,202 @@ class CategoryRepository(private val context: Context) {
     
     /**
      * Sync Live TV categories for a specific provider
+     * CONSERVATIVE SYNC: Only deletes categories confirmed NOT in API response
+     * Safety: Won't delete if API returns empty or error
      */
     private suspend fun syncLiveTVCategoriesForProvider(client: StalkerClient, providerId: String) {
-        Log.d(TAG, "Syncing Live TV categories for provider: $providerId")
+        Log.d(TAG, "🔄 Syncing Live TV categories for provider: $providerId")
         
-        // Fetch from API
-        val response = client.getGenres()
-        val apiGenres = response.genres.filter { it.id != "*" && it.id != "dvb" }
-        val apiIds = apiGenres.map { it.id }.toSet()
-        
-        Log.d(TAG, "API has ${apiGenres.size} Live TV categories for provider $providerId")
-        
-        // Get existing from DB for THIS provider only
-        val dbCategories = categoryDao.getCategoriesByProviderAndType(providerId, "LIVE")
-        val dbIds = dbCategories.map { it.externalId }.toSet()
-        
-        Log.d(TAG, "DB has ${dbCategories.size} Live TV categories for provider $providerId")
-        
-        // Check if counts match - skip if no changes
-        if (apiIds == dbIds) {
-            Log.d(TAG, "Live TV categories unchanged for provider $providerId, skipping")
-            return
-        }
-        
-        // Find new categories to add
-        val newGenres = apiGenres.filter { !dbIds.contains(it.id) }
-        if (newGenres.isNotEmpty()) {
-            val entities = newGenres.map { genre ->
-                CategoryEntity(
-                    id = UUID.randomUUID().toString(),
-                    providerId = providerId,
-                    externalId = genre.id,
-                    name = genre.getDisplayName(),
-                    title = genre.title,
-                    contentType = "live",
-                    type = "LIVE",
-                    alias = genre.alias,
-                    censored = genre.censored ?: 0,
-                    isEnabled = true
-                )
+        try {
+            // Fetch from API
+            val response = client.getGenres()
+            val apiGenres = response.genres.filter { it.id != "*" && it.id != "dvb" }
+            val apiIds = apiGenres.map { it.id }.toSet()
+            
+            Log.d(TAG, "📡 API returned ${apiGenres.size} Live TV categories for provider $providerId")
+            
+            // Safety check: Don't proceed if API returned empty or suspiciously few categories
+            if (apiGenres.isEmpty()) {
+                Log.w(TAG, "⚠️ API returned 0 Live TV categories - skipping sync to prevent data loss")
+                return
             }
-            categoryDao.insertAll(entities)
-            Log.d(TAG, "Added ${newGenres.size} new Live TV categories for provider $providerId")
-        }
-        
-        // Find categories to remove (exist in DB but not in API)
-        val removedIds = dbIds - apiIds
-        if (removedIds.isNotEmpty()) {
-            for (externalId in removedIds) {
-                categoryDao.deleteByExternalIdAndProvider(externalId, providerId)
+            
+            // Get existing from DB for THIS provider only
+            val dbCategories = categoryDao.getCategoriesByProviderAndType(providerId, "LIVE")
+            val dbIds = dbCategories.map { it.externalId }.toSet()
+            
+            Log.d(TAG, "💾 DB has ${dbCategories.size} Live TV categories for provider $providerId")
+            
+            // Check if IDs match exactly - skip if no changes
+            if (apiIds == dbIds) {
+                Log.d(TAG, "✅ Live TV categories unchanged for provider $providerId (${apiIds.size} categories match)")
+                return
             }
-            Log.d(TAG, "Removed ${removedIds.size} stale Live TV categories for provider $providerId")
+            
+            // Find new categories to add (in API but not in DB)
+            val newGenres = apiGenres.filter { !dbIds.contains(it.id) }
+            if (newGenres.isNotEmpty()) {
+                Log.d(TAG, "➕ Adding ${newGenres.size} new Live TV categories: ${newGenres.map { it.title }}")
+                val entities = newGenres.map { genre ->
+                    CategoryEntity(
+                        id = UUID.randomUUID().toString(),
+                        providerId = providerId,
+                        externalId = genre.id,
+                        name = genre.getDisplayName(),
+                        title = genre.title,
+                        contentType = "live",
+                        type = "LIVE",
+                        alias = genre.alias,
+                        censored = genre.censored ?: 0,
+                        isEnabled = true
+                    )
+                }
+                categoryDao.insertAll(entities)
+                Log.d(TAG, "✅ Added ${newGenres.size} new Live TV categories for provider $providerId")
+            }
+            
+            // Find categories to remove (in DB but NOT in API)
+            // Only delete if we're CERTAIN they don't exist in API
+            val removedIds = dbIds - apiIds
+            if (removedIds.isNotEmpty()) {
+                // Get names for logging
+                val removedCategories = dbCategories.filter { removedIds.contains(it.externalId) }
+                Log.d(TAG, "➖ Removing ${removedIds.size} stale Live TV categories not in API: ${removedCategories.map { it.name }}")
+                
+                for (externalId in removedIds) {
+                    categoryDao.deleteByExternalIdAndProvider(externalId, providerId)
+                }
+                Log.d(TAG, "✅ Removed ${removedIds.size} stale Live TV categories for provider $providerId")
+            } else {
+                Log.d(TAG, "✅ No Live TV categories to remove - all DB categories exist in API")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error syncing Live TV categories for provider $providerId - skipping to prevent data loss", e)
+            // Don't throw - just skip this provider's sync
         }
     }
     
     /**
      * Sync VOD categories for a specific provider
+     * CONSERVATIVE SYNC: Only deletes categories confirmed NOT in API response
+     * Safety: Won't delete if API returns empty or error
      */
     private suspend fun syncVODCategoriesForProvider(client: StalkerClient, providerId: String) {
-        Log.d(TAG, "Syncing VOD categories for provider: $providerId")
+        Log.d(TAG, "🔄 Syncing VOD categories for provider: $providerId")
         
-        val response = client.getVodCategories()
-        val apiCategories = response.genres.filter { it.id != "*" && it.id != "dvb" }
-        val apiIds = apiCategories.map { it.id }.toSet()
-        
-        Log.d(TAG, "API has ${apiCategories.size} VOD categories for provider $providerId")
-        
-        // Get existing VOD categories (both MOVIE and SERIES) for this provider
-        val dbMovies = categoryDao.getCategoriesByProviderAndType(providerId, "MOVIE")
-        val dbSeries = categoryDao.getCategoriesByProviderAndType(providerId, "SERIES")
-        val dbVOD = dbMovies + dbSeries
-        val dbIds = dbVOD.map { it.externalId }.toSet()
-        
-        Log.d(TAG, "DB has ${dbVOD.size} VOD categories for provider $providerId")
-        
-        if (apiIds == dbIds) {
-            Log.d(TAG, "VOD categories unchanged for provider $providerId, skipping")
-            return
-        }
-        
-        // Find new categories to add
-        val newCategories = apiCategories.filter { !dbIds.contains(it.id) }
-        if (newCategories.isNotEmpty()) {
-            Log.d(TAG, "Found ${newCategories.size} new VOD categories to identify for provider $providerId")
+        try {
+            val response = client.getVodCategories()
+            val apiCategories = response.genres.filter { it.id != "*" && it.id != "dvb" }
+            val apiIds = apiCategories.map { it.id }.toSet()
             
-            // Identify each new category as movie or series
-            val categorizedNew = coroutineScope {
-                newCategories.map { genre ->
-                    async(Dispatchers.IO) {
-                        try {
-                            val itemsResponse = client.getVodItems(genre.id, page = 1)
-                            val items = itemsResponse.items.data
-                            
-                            if (items.isEmpty()) {
-                                Log.d(TAG, "Category ${genre.title} is empty, defaulting to MOVIE")
-                                CategoryEntity(
-                                    id = UUID.randomUUID().toString(),
-                                    providerId = providerId,
-                                    externalId = genre.id,
-                                    name = genre.getDisplayName(),
-                                    title = genre.title,
-                                    contentType = "movie",
-                                    type = "MOVIE",
-                                    alias = genre.alias,
-                                    censored = genre.censored ?: 0,
-                                    isEnabled = true
-                                )
-                            } else {
-                                val isSeries = items.take(3).any { it.isSeries == "1" }
-                                val type = if (isSeries) "SERIES" else "MOVIE"
-                                val contentType = if (isSeries) "series" else "movie"
-                                
-                                CategoryEntity(
-                                    id = UUID.randomUUID().toString(),
-                                    providerId = providerId,
-                                    externalId = genre.id,
-                                    name = genre.getDisplayName(),
-                                    title = genre.title,
-                                    contentType = contentType,
-                                    type = type,
-                                    alias = genre.alias,
-                                    censored = genre.censored ?: 0,
-                                    isEnabled = true
-                                )
+            Log.d(TAG, "📡 API returned ${apiCategories.size} VOD categories for provider $providerId")
+            
+            // Safety check: Don't proceed if API returned empty or suspiciously few categories
+            if (apiCategories.isEmpty()) {
+                Log.w(TAG, "⚠️ API returned 0 VOD categories - skipping sync to prevent data loss")
+                return
+            }
+            
+            // Get existing VOD categories (both MOVIE and SERIES) for this provider
+            val dbMovies = categoryDao.getCategoriesByProviderAndType(providerId, "MOVIE")
+            val dbSeries = categoryDao.getCategoriesByProviderAndType(providerId, "SERIES")
+            val dbVOD = dbMovies + dbSeries
+            val dbIds = dbVOD.map { it.externalId }.toSet()
+            
+            Log.d(TAG, "💾 DB has ${dbVOD.size} VOD categories for provider $providerId (${dbMovies.size} movies, ${dbSeries.size} series)")
+            
+            // Check if IDs match exactly - skip if no changes
+            if (apiIds == dbIds) {
+                Log.d(TAG, "✅ VOD categories unchanged for provider $providerId (${apiIds.size} categories match)")
+                return
+            }
+            
+            // Find new categories to add (in API but not in DB)
+            val newCategories = apiCategories.filter { !dbIds.contains(it.id) }
+            if (newCategories.isNotEmpty()) {
+                Log.d(TAG, "➕ Found ${newCategories.size} new VOD categories to classify: ${newCategories.map { it.title }}")
+                
+                // Identify each new category as movie or series
+                val categorizedNew = coroutineScope {
+                    newCategories.map { genre ->
+                        async(Dispatchers.IO) {
+                            try {
+                                // Use timeout to prevent hanging
+                                withTimeout(5000L) {
+                                    val itemsResponse = client.getVodItems(genre.id, page = 1)
+                                    val items = itemsResponse.items.data
+                                    
+                                    if (items.isEmpty()) {
+                                        Log.d(TAG, "Category ${genre.title} is empty, defaulting to MOVIE")
+                                        CategoryEntity(
+                                            id = UUID.randomUUID().toString(),
+                                            providerId = providerId,
+                                            externalId = genre.id,
+                                            name = genre.getDisplayName(),
+                                            title = genre.title,
+                                            contentType = "movie",
+                                            type = "MOVIE",
+                                            alias = genre.alias,
+                                            censored = genre.censored ?: 0,
+                                            isEnabled = true
+                                        )
+                                    } else {
+                                        val isSeries = items.take(3).any { it.isSeries == "1" }
+                                        val type = if (isSeries) "SERIES" else "MOVIE"
+                                        val contentType = if (isSeries) "series" else "movie"
+                                        
+                                        Log.d(TAG, "✓ ${genre.title} classified as $type")
+                                        CategoryEntity(
+                                            id = UUID.randomUUID().toString(),
+                                            providerId = providerId,
+                                            externalId = genre.id,
+                                            name = genre.getDisplayName(),
+                                            title = genre.title,
+                                            contentType = contentType,
+                                            type = type,
+                                            alias = genre.alias,
+                                            censored = genre.censored ?: 0,
+                                            isEnabled = true
+                                        )
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error identifying category ${genre.title}: ${e.message}")
+                                null
                             }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error identifying category ${genre.title}", e)
-                            null
                         }
-                    }
-                }.awaitAll()
+                    }.awaitAll()
+                }
+                
+                val entitiesToInsert = categorizedNew.filterNotNull()
+                if (entitiesToInsert.isNotEmpty()) {
+                    categoryDao.insertAll(entitiesToInsert)
+                    val movieCount = entitiesToInsert.count { it.type == "MOVIE" }
+                    val seriesCount = entitiesToInsert.count { it.type == "SERIES" }
+                    Log.d(TAG, "✅ Added ${entitiesToInsert.size} new VOD categories ($movieCount movies, $seriesCount series)")
+                } else {
+                    Log.w(TAG, "⚠️ Failed to classify any of the ${newCategories.size} new categories")
+                }
             }
             
-            val entitiesToInsert = categorizedNew.filterNotNull()
-            if (entitiesToInsert.isNotEmpty()) {
-                categoryDao.insertAll(entitiesToInsert)
-                Log.d(TAG, "Added ${entitiesToInsert.size} new VOD categories for provider $providerId")
+            // Find categories to remove (in DB but NOT in API)
+            // Only delete if we're CERTAIN they don't exist in API
+            val removedIds = dbIds.subtract(apiIds)
+            if (removedIds.isNotEmpty()) {
+                // Get names for logging
+                val removedCategories = dbVOD.filter { removedIds.contains(it.externalId) }
+                Log.d(TAG, "➖ Removing ${removedIds.size} stale VOD categories not in API: ${removedCategories.map { "${it.name} (${it.type})" }}")
+                
+                for (externalId in removedIds) {
+                    categoryDao.deleteByExternalIdAndProvider(externalId, providerId)
+                }
+                Log.d(TAG, "✅ Removed ${removedIds.size} stale VOD categories for provider $providerId")
+            } else {
+                Log.d(TAG, "✅ No VOD categories to remove - all DB categories exist in API")
             }
-        }
-        
-        // Find categories to remove
-        val removedIds = dbIds.subtract(apiIds)
-        if (removedIds.isNotEmpty()) {
-            for (externalId in removedIds) {
-                categoryDao.deleteByExternalIdAndProvider(externalId, providerId)
-            }
-            Log.d(TAG, "Removed ${removedIds.size} stale VOD categories for provider $providerId")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error syncing VOD categories for provider $providerId - skipping to prevent data loss", e)
+            // Don't throw - just skip this provider's sync
         }
     }
     

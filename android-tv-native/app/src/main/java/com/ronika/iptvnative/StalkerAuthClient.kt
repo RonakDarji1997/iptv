@@ -527,19 +527,44 @@ class StalkerAuthClient(
             val response = client.newCall(request).execute()
             val json = response.body?.string() ?: throw Exception("Empty response")
             
+            Log.d(TAG, "Category $categoryId response status: ${response.code}, successful: ${response.isSuccessful}")
+            
             if (response.isSuccessful) {
                 val jsonResponse = JSONObject(json)
                 val js = jsonResponse.optJSONObject("js")
                 val dataArray = js?.optJSONArray("data")
                 
+                val dataLength = dataArray?.length() ?: 0
+                Log.d(TAG, "Category $categoryId: js=${js != null}, data=${ if (dataArray != null) "array[$dataLength]" else "null"}")
+                
+                if (dataLength == 0) {
+                    Log.w(TAG, "Category $categoryId response preview: ${json.take(300)}")
+                }
+                
                 if (dataArray != null && dataArray.length() > 0) {
-                    val firstItem = dataArray.getJSONObject(0)
-                    val isSeries = firstItem.optString("is_series", "0") == "1"
-                    Log.d(TAG, "Category $categoryId is_series: $isSeries")
-                    return@withContext isSeries
+                    // Check first 3 items (or all if less than 3) for series indicator
+                    val itemsToCheck = minOf(3, dataArray.length())
+                    var seriesCount = 0
+                    var movieCount = 0
+                    
+                    for (i in 0 until itemsToCheck) {
+                        val item = dataArray.getJSONObject(i)
+                        val isSeries = item.optString("is_series", "0") == "1"
+                        if (isSeries) {
+                            seriesCount++
+                        } else {
+                            movieCount++
+                        }
+                    }
+                    
+                    // If ANY item is a series, classify as series category
+                    val isSeriesCategory = seriesCount > 0
+                    Log.d(TAG, "Category $categoryId checked $itemsToCheck items: $seriesCount series, $movieCount movies -> ${if (isSeriesCategory) "SERIES" else "MOVIE"}")
+                    return@withContext isSeriesCategory
                 }
             }
             
+            Log.d(TAG, "Category $categoryId has no items, defaulting to MOVIE")
             return@withContext false
             
         } catch (e: Exception) {

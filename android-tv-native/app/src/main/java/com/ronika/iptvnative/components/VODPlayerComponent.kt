@@ -14,6 +14,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -21,6 +22,7 @@ import androidx.media3.ui.PlayerView
 import com.ronika.iptvnative.R
 import com.ronika.iptvnative.repository.WatchProgressRepository
 import com.ronika.iptvnative.services.SubtitleService
+import com.ronika.iptvnative.utils.AppPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -49,6 +51,7 @@ class VODPlayerComponent @JvmOverloads constructor(
     private lateinit var nextButton: ImageButton
     private lateinit var aspectRatioButton: ImageButton
     private lateinit var subtitleText: TextView
+    private lateinit var bitrateInfo: TextView
     
     // ExoPlayer
     private var player: ExoPlayer? = null
@@ -140,6 +143,7 @@ class VODPlayerComponent @JvmOverloads constructor(
         subtitleButton = playerView.findViewById(R.id.subtitle_button)
         nextButton = playerView.findViewById(R.id.next_button)
         aspectRatioButton = playerView.findViewById(R.id.aspect_ratio_button)
+        bitrateInfo = playerView.findViewById(R.id.bitrate_info)
         
         // Style the seek bar
         val timeBar = playerView.findViewById<androidx.media3.ui.DefaultTimeBar>(R.id.exo_progress)
@@ -172,10 +176,51 @@ class VODPlayerComponent @JvmOverloads constructor(
         aspectRatioButton.nextFocusUpId = View.NO_ID
     }
 
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun setupPlayer() {
+        Log.d(TAG, "setupPlayer() called - initializing ExoPlayer")
+        
         player = ExoPlayer.Builder(context).build().apply {
             playWhenReady = true
             playerView.player = this
+            
+            // Configure adaptive quality based on device capabilities
+            Log.d(TAG, "Configuring adaptive quality...")
+            val displayMetrics = context.resources.displayMetrics
+            val screenWidth = displayMetrics.widthPixels
+            val screenHeight = displayMetrics.heightPixels
+            
+            // Determine max quality based on screen resolution
+            val (maxWidth, maxHeight, qualityLabel, maxBitrate) = when {
+                screenHeight <= 720 -> {
+                    Tuple4(1280, 720, "720p", 3_000_000)
+                }
+                screenHeight <= 1080 -> {
+                    Tuple4(1920, 1080, "1080p", 8_000_000)
+                }
+                screenHeight <= 1440 -> {
+                    Tuple4(2560, 1440, "1440p", 16_000_000)
+                }
+                else -> {
+                    Tuple4(3840, 2160, "4K", 25_000_000)
+                }
+            }
+            
+            Log.d(TAG, "📺 Device screen: ${screenWidth}x${screenHeight}")
+            Log.d(TAG, "📺 Setting max video quality: $qualityLabel ($maxWidth x $maxHeight) @ ${maxBitrate / 1_000_000}Mbps")
+            
+            // Set track selection parameters with strict constraints
+            // The issue is that maxVideoSize is a preference, not a hard limit
+            // We need to be more aggressive about limiting resolution
+            trackSelectionParameters = TrackSelectionParameters.Builder(context)
+                .setMaxVideoSize(maxWidth, maxHeight)
+                .setMaxVideoBitrate(maxBitrate)
+                .setViewportSize(maxWidth, maxHeight, true)  // Use max resolution as viewport
+                .setForceHighestSupportedBitrate(false)
+                .setForceLowestBitrate(false)
+                .build()
+            
+            Log.d(TAG, "✅ Adaptive quality configured - max ${maxWidth}x${maxHeight} @ ${maxBitrate / 1_000_000}Mbps")
             
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
@@ -191,6 +236,8 @@ class VODPlayerComponent @JvmOverloads constructor(
                             Log.d(TAG, "Player READY")
                             loadingIndicator.visibility = GONE
                             errorText.visibility = GONE
+                            // Update bitrate info when ready
+                            updateBitrateInfo()
                         }
                         Player.STATE_ENDED -> {
                             Log.d(TAG, "Player ENDED")
@@ -200,38 +247,44 @@ class VODPlayerComponent @JvmOverloads constructor(
                     }
                 }
                 
+                override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                    super.onTracksChanged(tracks)
+                    // Update bitrate display when tracks change (e.g., quality adaptation)
+                    updateBitrateInfo()
+                }
+                
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                     Log.e(TAG, "Playback error: ${error.message}", error)
                     loadingIndicator.visibility = GONE
                     
-                    // Check if it's a codec/format error
                     val errorMessage = error.message ?: ""
-                    val isCodecError = errorMessage.contains("Decoder init failed") ||
-                            errorMessage.contains("NO_EXCEEDS_CAPABILITIES") ||
-                            errorMessage.contains("4K") ||
-                            errorMessage.contains("MediaCodec") ||
-                            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED ||
-                            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED
                     
-                    if (isCodecError) {
-                        // Show friendly popup for unsupported content
-                        android.app.AlertDialog.Builder(context)
-                            .setTitle("Content Unsupported")
-                            .setMessage("This video format is not supported by your device. It may be 4K content that requires a compatible device.")
-                            .setPositiveButton("OK") { dialog, _ ->
-                                dialog.dismiss()
-                                onBackPressed?.invoke()
-                            }
-                            .setCancelable(false)
-                            .show()
-                    } else {
-                        errorText.text = "Playback error: ${error.message}"
+                    // Check if error is due to video exceeding device capabilities
+                    if (errorMessage.contains("NO_EXCEEDS_CAPABILITIES") || 
+                        errorMessage.contains("DecoderInitializationException") ||
+                        error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED) {
+                        
+                        Log.w(TAG, "Video quality exceeds device capabilities - device cannot decode this format")
+                        errorText.text = "This video quality is not supported by your device.\nPlease try a different video."
                         errorText.visibility = VISIBLE
+                        
+                        // Stop playback attempt
+                        player?.stop()
+                    } else {
+                        Log.w(TAG, "Player error - ExoPlayer will attempt to recover: $errorMessage")
+                        
+                        // Only show error for non-recoverable issues
+                        if (error.errorCode != androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED) {
+                            errorText.text = "Playback error: ${error.message}"
+                            errorText.visibility = VISIBLE
+                        }
                     }
                 }
             })
         }
     }
+    
+    private data class Tuple4<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 
     private fun setupControlListeners() {
         // Restart button
@@ -372,12 +425,12 @@ class VODPlayerComponent @JvmOverloads constructor(
         vttRefreshRunnable = object : Runnable {
             override fun run() {
                 fetchAndParseVtt(subtitleUrl)
-                vttRefreshHandler?.postDelayed(this, 5000) // Refresh VTT every 5 seconds
+                vttRefreshHandler?.postDelayed(this, 2000) // Refresh VTT every 2 seconds for real-time subtitles
             }
         }
         // Initial fetch immediately
         vttRefreshHandler?.post(vttRefreshRunnable!!)
-        Log.d(TAG, "Started VTT refresh polling")
+        Log.d(TAG, "Started VTT refresh polling (every 2s)")
     }
     
     private fun stopVttRefreshPolling() {
@@ -394,7 +447,23 @@ class VODPlayerComponent @JvmOverloads constructor(
                 if (newCues.size != subtitleCues.size) {
                     Log.d(TAG, "VTT refreshed: ${newCues.size} cues (was ${subtitleCues.size}), content length: ${vttContent.length}")
                     if (newCues.isNotEmpty()) {
-                        Log.d(TAG, "First cue: ${newCues.first().startMs}ms-${newCues.first().endMs}ms: ${newCues.first().text}")
+                        val firstCue = newCues.first()
+                        val lastCue = newCues.last()
+                        Log.d(TAG, "First cue: ${firstCue.startMs}ms-${firstCue.endMs}ms: ${firstCue.text}")
+                        Log.d(TAG, "Last cue: ${lastCue.startMs}ms-${lastCue.endMs}ms: ${lastCue.text}")
+                        
+                        // Show toast only on first load
+                        if (subtitleCues.isEmpty()) {
+                            handler.post {
+                                val firstMin = firstCue.startMs / 60000
+                                val firstSec = (firstCue.startMs % 60000) / 1000
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "✅ ${newCues.size} subtitles loaded (starts at ${firstMin}:${firstSec.toString().padStart(2, '0')})",
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
                     }
                 }
                 subtitleCues = newCues
@@ -501,12 +570,9 @@ class VODPlayerComponent @JvmOverloads constructor(
     private fun updateSubtitleDisplay() {
         val currentPosition = player?.currentPosition ?: return
         
-        // Log periodically (every ~2 seconds based on 100ms polling)
-        if (subtitleCues.isNotEmpty() && currentPosition % 2000 < 200) {
-            Log.d(TAG, "Subtitle check: pos=${currentPosition}ms, cues=${subtitleCues.size}, first=${subtitleCues.firstOrNull()?.startMs}ms")
-        }
+        if (subtitleCues.isEmpty()) return
         
-        // Find the cue that matches current position
+        // Simple: match player position with VTT timestamps
         val matchingCue = subtitleCues.find { cue ->
             currentPosition >= cue.startMs && currentPosition <= cue.endMs
         }
@@ -514,16 +580,15 @@ class VODPlayerComponent @JvmOverloads constructor(
         if (matchingCue != null) {
             val cueIndex = subtitleCues.indexOf(matchingCue)
             if (cueIndex != lastDisplayedCueIndex) {
-                // New cue to display
                 lastDisplayedCueIndex = cueIndex
                 subtitleText.text = matchingCue.text
                 subtitleText.visibility = VISIBLE
-                Log.d(TAG, "Displaying subtitle at ${currentPosition}ms: ${matchingCue.text}")
+                Log.d(TAG, "✅ [${matchingCue.startMs}-${matchingCue.endMs}ms]: ${matchingCue.text}")
             }
         } else {
-            // No matching cue, hide subtitle
             if (subtitleText.visibility == VISIBLE) {
                 subtitleText.visibility = GONE
+                lastDisplayedCueIndex = -1
             }
         }
     }
@@ -934,6 +999,87 @@ class VODPlayerComponent @JvmOverloads constructor(
             clearMediaItems()
         }
         Log.d(TAG, "Player stopped and media cleared")
+    }
+
+    /**
+     * Update bitrate information display
+     */
+    private fun updateBitrateInfo() {
+        // Check if user wants to see bitrate info
+        if (!AppPreferences.shouldShowBitrate(context)) {
+            bitrateInfo.visibility = GONE
+            return
+        }
+        
+        player?.let { exoPlayer ->
+            try {
+                // Get current video format from selected tracks
+                val currentTracks = exoPlayer.currentTracks
+                val videoTrack = currentTracks.groups.firstOrNull { group ->
+                    group.type == androidx.media3.common.C.TRACK_TYPE_VIDEO && group.isSelected
+                }
+                
+                videoTrack?.let { track ->
+                    // Get the selected format
+                    for (i in 0 until track.length) {
+                        if (track.isTrackSelected(i)) {
+                            val format = track.getTrackFormat(i)
+                            
+                            // Extract info
+                            val width = format.width
+                            val height = format.height
+                            val bitrate = format.bitrate
+                            val codecs = format.codecs
+                            
+                            // Format resolution label
+                            val resolution = when {
+                                height >= 2160 -> "4K"
+                                height >= 1440 -> "1440p"
+                                height >= 1080 -> "1080p"
+                                height >= 720 -> "720p"
+                                height >= 480 -> "480p"
+                                else -> "${height}p"
+                            }
+                            
+                            // Format bitrate (convert from bps to Mbps)
+                            val bitrateText = if (bitrate > 0) {
+                                String.format("%.1f Mbps", bitrate / 1_000_000.0)
+                            } else {
+                                "N/A"
+                            }
+                            
+                            // Extract codec name (e.g., "avc1.64001f" -> "H.264")
+                            val codecName = when {
+                                codecs?.startsWith("avc") == true -> "H.264"
+                                codecs?.startsWith("hev") == true || codecs?.startsWith("hvc") == true -> "H.265"
+                                codecs?.startsWith("vp9") == true -> "VP9"
+                                codecs?.startsWith("av01") == true -> "AV1"
+                                else -> codecs?.split('.')?.firstOrNull()?.uppercase() ?: "N/A"
+                            }
+                            
+                            // Update UI
+                            bitrateInfo.post {
+                                bitrateInfo.text = "$resolution • $bitrateText • $codecName"
+                                bitrateInfo.visibility = VISIBLE
+                            }
+                            
+                            Log.d(TAG, "📊 Bitrate Info: $resolution (${width}x${height}) • $bitrateText • $codecName")
+                            break
+                        }
+                    }
+                } ?: run {
+                    // No video track found
+                    bitrateInfo.post {
+                        bitrateInfo.visibility = GONE
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating bitrate info: ${e.message}", e)
+                bitrateInfo.post {
+                    bitrateInfo.visibility = GONE
+                }
+            }
+        }
     }
 
     fun release() {

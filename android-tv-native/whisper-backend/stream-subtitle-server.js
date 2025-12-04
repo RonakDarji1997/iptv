@@ -32,13 +32,19 @@ app.use(express.json());
 
 // IP filtering middleware
 app.use((req, res, next) => {
-    const clientIP = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
+    let clientIP = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
+    
+    // Strip IPv6 prefix if present (::ffff:x.x.x.x -> x.x.x.x)
+    if (clientIP && clientIP.startsWith('::ffff:')) {
+        clientIP = clientIP.substring(7);
+    }
+    
     console.log(`🔍 Incoming request from IP: ${clientIP}, URL: ${req.url}`);
+    
     if (ALLOWED_IPS) {
         if (!ALLOWED_IPS.includes(clientIP)) {
             console.log(`❌ Blocked request from unauthorized IP: ${clientIP} (allowed: ${ALLOWED_IPS.join(', ')})`);
-            // Temporarily allow but log - change back after debugging
-            // return res.status(403).json({ error: 'Access denied' });
+            return res.status(403).json({ error: 'Access denied' });
         }
     }
     next();
@@ -193,8 +199,9 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
     // -f segment: output segments
     // -segment_time 2: 2-second chunks (faster processing)
     // -af silencedetect: Skip silence to avoid processing empty audio
+    // NOTE: Removed -ss seek because it doesn't work well with HLS streams
+    // We'll start from current position and adjust timestamps in VTT
     const ffmpegArgs = [
-        '-ss', startPosition.toString(),
         '-i', streamUrl,
         // No -t limit: generate continuously until stopped
         '-vn',
@@ -210,7 +217,7 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
     ];
     
     console.log('FFmpeg command:', 'ffmpeg', ffmpegArgs.join(' '));
-    console.log(`⏱️  Starting from ${startPosition}s, generating continuously until stopped`);
+    console.log(`⏱️  Starting from current stream position (will use ${startPosition}s as base for VTT timestamps)`);
     
     const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
     
@@ -330,10 +337,8 @@ async function startSubtitleGeneration(streamUrl, language = 'auto', startPositi
     ffmpegProcess.stderr.on('data', (data) => {
         const output = data.toString();
         
-        // Log FFmpeg progress
-        if (output.includes('time=')) {
-            console.log(`FFmpeg: ${output.trim()}`);
-        }
+        // Log all FFmpeg output to diagnose issues
+        console.log(`FFmpeg [${streamId}]: ${output.trim()}`);
     });
     
     ffmpegProcess.on('error', (error) => {

@@ -8,7 +8,7 @@ import androidx.room.PrimaryKey
 @Entity(
     tableName = "categories",
     indices = [
-        Index(value = ["externalId", "providerId"], unique = true),
+        Index(value = ["externalId", "providerId", "type"], unique = true),
         Index(value = ["providerId"])
     ],
     foreignKeys = [

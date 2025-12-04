@@ -37,17 +37,21 @@ class CustomGridRecyclerView @JvmOverloads constructor(
     
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // Intercept DPAD keys BEFORE RecyclerView processes them
-        if (event.action == KeyEvent.ACTION_DOWN) {
-            when (event.keyCode) {
-                KeyEvent.KEYCODE_DPAD_UP,
-                KeyEvent.KEYCODE_DPAD_DOWN,
-                KeyEvent.KEYCODE_DPAD_LEFT,
-                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+        when (event.keyCode) {
+            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_DOWN,
+            KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (event.action == KeyEvent.ACTION_DOWN) {
                     customKeyHandler?.let { handler ->
                         if (handler(event.keyCode, event)) {
-                            return true // Event consumed
+                            return true // Event consumed, don't let RecyclerView handle it
                         }
                     }
+                }
+                // Also consume ACTION_UP to prevent RecyclerView from handling it
+                if (event.action == KeyEvent.ACTION_UP) {
+                    return true
                 }
             }
         }
@@ -289,7 +293,7 @@ class VODComponent @JvmOverloads constructor(
         
         gridLayoutManager = GridLayoutManager(context, columnCount)
         
-        // Set custom key handler for navigation
+        // Set custom key handler for navigation with proper boundary checks
         thumbnailsRecycler.customKeyHandler = { keyCode, event ->
             val currentView = thumbnailsRecycler.focusedChild
             if (currentView != null) {
@@ -297,25 +301,53 @@ class VODComponent @JvmOverloads constructor(
                 if (currentPosition != RecyclerView.NO_POSITION) {
                     val spanCount = columnCount
                     val totalItems = thumbnailAdapter.itemCount
+                    val currentRow = currentPosition / spanCount
+                    val currentCol = currentPosition % spanCount
+                    val totalRows = (totalItems + spanCount - 1) / spanCount
                     
                     val nextPosition = when (keyCode) {
                         android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                            (currentPosition + spanCount).coerceAtMost(totalItems - 1)
+                            val calculatedPos = currentPosition + spanCount
+                            if (calculatedPos >= totalItems) {
+                                // Would go beyond available items, block navigation
+                                Log.d(TAG, "🚫 Blocking DOWN - no item below (pos $currentPosition, would be $calculatedPos, max ${totalItems - 1})")
+                                currentPosition
+                            } else {
+                                calculatedPos
+                            }
                         }
                         android.view.KeyEvent.KEYCODE_DPAD_UP -> {
-                            (currentPosition - spanCount).coerceAtLeast(0)
+                            if (currentRow == 0) {
+                                // At top, block navigation
+                                Log.d(TAG, "🚫 Blocking UP at top row")
+                                currentPosition
+                            } else {
+                                currentPosition - spanCount
+                            }
                         }
                         android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                            (currentPosition + 1).coerceAtMost(totalItems - 1)
+                            if (currentCol == spanCount - 1 || currentPosition == totalItems - 1) {
+                                // At right edge, block navigation
+                                Log.d(TAG, "🚫 Blocking RIGHT at edge")
+                                currentPosition
+                            } else {
+                                currentPosition + 1
+                            }
                         }
                         android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                            (currentPosition - 1).coerceAtLeast(0)
+                            if (currentCol == 0) {
+                                // At left edge, block navigation
+                                Log.d(TAG, "🚫 Blocking LEFT at edge")
+                                currentPosition
+                            } else {
+                                currentPosition - 1
+                            }
                         }
                         else -> currentPosition
                     }
                     
                     if (nextPosition != currentPosition) {
-                        Log.d(TAG, "🔍 Moving focus from $currentPosition to $nextPosition")
+                        Log.d(TAG, "🔍 Moving focus from $currentPosition (row $currentRow, col $currentCol) to $nextPosition")
                         thumbnailsRecycler.scrollToPosition(nextPosition)
                         thumbnailsRecycler.post {
                             gridLayoutManager.findViewByPosition(nextPosition)?.requestFocus()
@@ -323,7 +355,8 @@ class VODComponent @JvmOverloads constructor(
                         }
                         true // Consume the event
                     } else {
-                        false
+                        // Position didn't change (at boundary), consume event to block navigation
+                        true
                     }
                 } else {
                     false
@@ -493,6 +526,12 @@ class VODComponent @JvmOverloads constructor(
                     withContext(Dispatchers.Main) {
                         titleText.text = "No Content Available"
                         descriptionText.text = "This category doesn't have any content available."
+                        
+                        // Make the container focusable so back button works in empty/error state
+                        vodGridContainer.isFocusable = true
+                        vodGridContainer.isFocusableInTouchMode = true
+                        vodGridContainer.requestFocus()
+                        Log.d(TAG, "Empty state: made vodGridContainer focusable and requested focus")
                     }
                 }
                 
@@ -518,7 +557,17 @@ class VODComponent @JvmOverloads constructor(
                     Log.e(TAG, "No provider ID set when looking up genre ID")
                     return@withContext null
                 }
-                val category = categoryDao.getCategoryByNameAndProvider(categoryName, providerId)
+                
+                // Retry logic to handle race condition during initial category sync
+                var category = categoryDao.getCategoryByNameAndProvider(categoryName, providerId)
+                
+                // If not found on first try, wait and retry once (in case sync is still in progress)
+                if (category == null) {
+                    Log.d(TAG, "Genre not found on first attempt, waiting 500ms and retrying...")
+                    kotlinx.coroutines.delay(500)
+                    category = categoryDao.getCategoryByNameAndProvider(categoryName, providerId)
+                }
+                
                 Log.d(TAG, "lookupGenreId: name=$categoryName, providerId=$providerId, found=${category?.externalId}")
                 category?.externalId
             } catch (e: Exception) {

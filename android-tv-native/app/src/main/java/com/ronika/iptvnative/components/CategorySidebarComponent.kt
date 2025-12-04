@@ -96,16 +96,21 @@ class CategorySidebarComponent @JvmOverloads constructor(
                         database.categoryDao().getCategoriesByProviderId(provider.id)
                     }
                     
+                    Log.d(TAG, "📊 Total categories for provider ${provider.name}: ${categories.size}")
+                    
                     val live = categories.filter { it.type.equals("live", ignoreCase = true) }
-                        .map { it.name }
                     val movies = categories.filter { it.type.equals("movie", ignoreCase = true) }
-                        .map { it.name }
                     val series = categories.filter { it.type.equals("series", ignoreCase = true) }
-                        .map { it.name }
                     
                     Log.d(TAG, "Provider ${provider.name}: ${live.size} live, ${movies.size} movies, ${series.size} series")
                     
-                    ProviderWithCategories(provider, live, movies, series)
+                    // Log adult/censored categories
+                    val adultCategories = categories.filter { it.censored == 1 || it.name.contains("adult", ignoreCase = true) || it.name.contains("18+") }
+                    if (adultCategories.isNotEmpty()) {
+                        Log.d(TAG, "🔞 Adult/Censored categories found: ${adultCategories.map { "${it.name} (type=${it.type}, censored=${it.censored})" }}")
+                    }
+                    
+                    ProviderWithCategories(provider, live.map { it.name }, movies.map { it.name }, series.map { it.name })
                 }
                 
                 providers = providersWithCategories
@@ -204,7 +209,7 @@ class CategorySidebarComponent @JvmOverloads constructor(
             onCategoryClicked(categoryName, provider.id, contentType)
         }
         
-        textView.setOnKeyListener { _, keyCode, event ->
+        textView.setOnKeyListener { view, keyCode, event ->
             if (event.action == KeyEvent.ACTION_DOWN) {
                 when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_RIGHT -> {
@@ -214,6 +219,34 @@ class CategorySidebarComponent @JvmOverloads constructor(
                     KeyEvent.KEYCODE_DPAD_LEFT -> {
                         onNavigateBackCallback?.invoke()
                         true
+                    }
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        // Find previous focusable sibling
+                        val parent = view.parent as? ViewGroup
+                        if (parent != null) {
+                            val index = parent.indexOfChild(view)
+                            if (index == 0) {
+                                // At first item, block UP to prevent focus escape
+                                Log.d(TAG, "Blocking UP at first category")
+                                true
+                            } else {
+                                false // Allow normal navigation
+                            }
+                        } else false
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        // Find next focusable sibling
+                        val parent = view.parent as? ViewGroup
+                        if (parent != null) {
+                            val index = parent.indexOfChild(view)
+                            if (index == parent.childCount - 1) {
+                                // At last item, block DOWN to prevent focus escape
+                                Log.d(TAG, "Blocking DOWN at last category")
+                                true
+                            } else {
+                                false // Allow normal navigation
+                            }
+                        } else false
                     }
                     else -> false
                 }
@@ -395,13 +428,41 @@ class CategorySidebarComponent @JvmOverloads constructor(
         }
         
         // Key handler
-        textView.setOnKeyListener { _, keyCode, event ->
+        textView.setOnKeyListener { view, keyCode, event ->
             if (event.action == KeyEvent.ACTION_DOWN) {
                 when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_LEFT -> true // Block left
                     KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
                         onCategoryClicked(categoryName, providerId, contentType)
                         true
+                    }
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        // Find previous focusable sibling in dropdown
+                        val parent = view.parent as? ViewGroup
+                        if (parent != null) {
+                            val index = parent.indexOfChild(view)
+                            if (index == 0) {
+                                // At first item in dropdown, block UP
+                                Log.d(TAG, "Blocking UP at first dropdown category")
+                                true
+                            } else {
+                                false // Allow normal navigation
+                            }
+                        } else false
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        // Find next focusable sibling in dropdown
+                        val parent = view.parent as? ViewGroup
+                        if (parent != null) {
+                            val index = parent.indexOfChild(view)
+                            if (index == parent.childCount - 1) {
+                                // At last item in dropdown, block DOWN
+                                Log.d(TAG, "Blocking DOWN at last dropdown category")
+                                true
+                            } else {
+                                false // Allow normal navigation
+                            }
+                        } else false
                     }
                     else -> false
                 }

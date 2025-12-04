@@ -20,6 +20,7 @@ import com.ronika.iptvnative.R
 import com.ronika.iptvnative.PortalSetupActivity
 import com.ronika.iptvnative.database.AppDatabase
 import com.ronika.iptvnative.database.entities.ProviderEntity
+import com.ronika.iptvnative.utils.AppPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -55,11 +56,13 @@ class SettingsComponent @JvmOverloads constructor(
     // Menu items
     private lateinit var menuPlaylist: TextView
     private lateinit var menuParental: TextView
+    private lateinit var menuPlayer: TextView
     private lateinit var menuAbout: TextView
     
     // Content sections
     private lateinit var contentPlaylist: ScrollView
     private lateinit var contentParental: ScrollView
+    private lateinit var contentPlayer: ScrollView
     private lateinit var contentAbout: LinearLayout
     
     // Playlist section views
@@ -68,6 +71,12 @@ class SettingsComponent @JvmOverloads constructor(
     private lateinit var btnAddPlaylist: LinearLayout
     private lateinit var activePlaylistsContainer: LinearLayout
     private lateinit var lastUpdatedText: TextView
+    
+    // Player section views
+    private lateinit var btnToggleBitrate: LinearLayout
+    private lateinit var checkboxBitrate: android.widget.CheckBox
+    private lateinit var seekTimeSlider: android.widget.SeekBar
+    private lateinit var seekTimeValue: TextView
     
     // Parental section views
     private lateinit var parentalStatus: TextView
@@ -87,7 +96,7 @@ class SettingsComponent @JvmOverloads constructor(
     private var currentProvider: ProviderEntity? = null
     
     enum class Section {
-        PLAYLIST, PARENTAL, ABOUT
+        PLAYLIST, PARENTAL, PLAYER, ABOUT
     }
     
     private val database by lazy { AppDatabase.getDatabase(context) }
@@ -111,11 +120,13 @@ class SettingsComponent @JvmOverloads constructor(
         // Menu items
         menuPlaylist = findViewById(R.id.menu_playlist)
         menuParental = findViewById(R.id.menu_parental)
+        menuPlayer = findViewById(R.id.menu_player)
         menuAbout = findViewById(R.id.menu_about)
         
         // Content sections
         contentPlaylist = findViewById(R.id.content_playlist)
         contentParental = findViewById(R.id.content_parental)
+        contentPlayer = findViewById(R.id.content_player)
         contentAbout = findViewById(R.id.content_about)
         
         // Playlist section
@@ -124,6 +135,12 @@ class SettingsComponent @JvmOverloads constructor(
         btnAddPlaylist = findViewById(R.id.btn_add_playlist)
         activePlaylistsContainer = findViewById(R.id.active_playlists_container)
         lastUpdatedText = findViewById(R.id.last_updated_text)
+        
+        // Player section
+        btnToggleBitrate = findViewById(R.id.btn_toggle_bitrate)
+        checkboxBitrate = findViewById(R.id.checkbox_bitrate)
+        seekTimeSlider = findViewById(R.id.seek_time_slider)
+        seekTimeValue = findViewById(R.id.seek_time_value)
         
         // Parental section
         parentalStatus = findViewById(R.id.parental_status)
@@ -176,6 +193,19 @@ class SettingsComponent @JvmOverloads constructor(
             }
         }
         
+        menuPlayer.setOnClickListener { 
+            switchSection(Section.PLAYER)
+            moveToSectionContent()
+        }
+        menuPlayer.setOnFocusChangeListener { _, hasFocus ->
+            menuPlayer.setTextColor(if (hasFocus) 0xFF000000.toInt() else 0xFFFFFFFF.toInt())
+            if (hasFocus) {
+                updateMenuHighlight(Section.PLAYER)
+                switchSection(Section.PLAYER)
+                isInContentSection = false
+            }
+        }
+        
         menuAbout.setOnClickListener { 
             switchSection(Section.ABOUT)
             // About doesn't have focusable content, just scroll
@@ -199,6 +229,8 @@ class SettingsComponent @JvmOverloads constructor(
         btnManageCategories.onFocusChangeListener = contentFocusListener
         btnUpdatePlaylist.onFocusChangeListener = contentFocusListener
         btnAddPlaylist.onFocusChangeListener = contentFocusListener
+        btnToggleBitrate.onFocusChangeListener = contentFocusListener
+        seekTimeSlider.onFocusChangeListener = contentFocusListener
         btnChangePin.onFocusChangeListener = contentFocusListener
         btnResetPin.onFocusChangeListener = contentFocusListener
         
@@ -230,6 +262,29 @@ class SettingsComponent @JvmOverloads constructor(
             context.startActivity(intent)
         }
         
+        // Player Settings buttons
+        btnToggleBitrate.setOnClickListener {
+            toggleBitrateDisplay()
+        }
+        
+        // Seek time slider (10 sec to 10 min)
+        seekTimeSlider.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                val seconds = 10 + progress // 0-590 -> 10-600
+                updateSeekTimeDisplay(seconds)
+            }
+            
+            override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
+            
+            override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {
+                val seconds = 10 + (seekBar?.progress ?: 0)
+                coroutineScope.launch {
+                    AppPreferences.setSeekTimeSeconds(context, seconds)
+                    Log.d(TAG, "Seek time saved: $seconds seconds")
+                }
+            }
+        })
+        
         // Parental buttons
         btnChangePin.setOnClickListener {
             showChangePinDialog()
@@ -251,6 +306,7 @@ class SettingsComponent @JvmOverloads constructor(
                 }
             }
             Section.PARENTAL -> btnChangePin.requestFocus()
+            Section.PLAYER -> btnToggleBitrate.requestFocus()
             Section.ABOUT -> {
                 // About is non-focusable, stay on menu
                 menuAbout.requestFocus()
@@ -263,6 +319,7 @@ class SettingsComponent @JvmOverloads constructor(
         when (currentSection) {
             Section.PLAYLIST -> menuPlaylist.requestFocus()
             Section.PARENTAL -> menuParental.requestFocus()
+            Section.PLAYER -> menuPlayer.requestFocus()
             Section.ABOUT -> menuAbout.requestFocus()
         }
         isInContentSection = false
@@ -273,6 +330,7 @@ class SettingsComponent @JvmOverloads constructor(
         
         contentPlaylist.visibility = if (section == Section.PLAYLIST) View.VISIBLE else View.GONE
         contentParental.visibility = if (section == Section.PARENTAL) View.VISIBLE else View.GONE
+        contentPlayer.visibility = if (section == Section.PLAYER) View.VISIBLE else View.GONE
         contentAbout.visibility = if (section == Section.ABOUT) View.VISIBLE else View.GONE
         
         updateMenuHighlight(section)
@@ -281,6 +339,7 @@ class SettingsComponent @JvmOverloads constructor(
     private fun updateMenuHighlight(section: Section) {
         menuPlaylist.isSelected = section == Section.PLAYLIST
         menuParental.isSelected = section == Section.PARENTAL
+        menuPlayer.isSelected = section == Section.PLAYER
         menuAbout.isSelected = section == Section.ABOUT
     }
     
@@ -660,6 +719,12 @@ class SettingsComponent @JvmOverloads constructor(
                 val configuredProviders = allProviders.filter { it.isConfigured }
                 Log.d(TAG, "Configured providers to show: ${configuredProviders.map { it.name }}")
                 
+                // Load player settings
+                checkboxBitrate.isChecked = AppPreferences.shouldShowBitrate(context)
+                val seekTimeSeconds = AppPreferences.getSeekTimeSeconds(context)
+                seekTimeSlider.progress = seekTimeSeconds - 10 // Convert back to 0-590
+                updateSeekTimeDisplay(seekTimeSeconds)
+                
                 // Update UI
                 updatePlaylistSection(provider, configuredProviders.size)
                 populateActivePlaylists(configuredProviders)
@@ -668,6 +733,18 @@ class SettingsComponent @JvmOverloads constructor(
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading settings data", e)
+            }
+        }
+    }
+    
+    private fun updateSeekTimeDisplay(seconds: Int) {
+        when {
+            seconds < 60 -> seekTimeValue.text = "$seconds sec"
+            seconds % 60 == 0 -> seekTimeValue.text = "${seconds / 60} min"
+            else -> {
+                val minutes = seconds / 60
+                val remainingSeconds = seconds % 60
+                seekTimeValue.text = "${minutes}:${remainingSeconds.toString().padStart(2, '0')} min"
             }
         }
     }
@@ -748,7 +825,7 @@ class SettingsComponent @JvmOverloads constructor(
             when (event.keyCode) {
                 KeyEvent.KEYCODE_BACK -> {
                     val focusedView = findFocus()
-                    val isOnMenu = focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuAbout
+                    val isOnMenu = focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuPlayer || focusedView == menuAbout
                     
                     if (isInContentSection && !isOnMenu) {
                         // Back from content section -> menu option
@@ -765,7 +842,7 @@ class SettingsComponent @JvmOverloads constructor(
                 KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
                     // If menu item is focused, move to content
                     val focusedView = findFocus()
-                    if (focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuAbout) {
+                    if (focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuPlayer || focusedView == menuAbout) {
                         if (event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || 
                             event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
                             event.keyCode == KeyEvent.KEYCODE_ENTER) {
@@ -782,7 +859,7 @@ class SettingsComponent @JvmOverloads constructor(
                 KeyEvent.KEYCODE_DPAD_LEFT -> {
                     // If content button is focused, move back to menu
                     val focusedView = findFocus()
-                    val isOnMenu = focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuAbout
+                    val isOnMenu = focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuPlayer || focusedView == menuAbout
                     if (!isOnMenu) {
                         moveToMenuOption()
                         return true
@@ -791,7 +868,7 @@ class SettingsComponent @JvmOverloads constructor(
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
                     // Prevent focus from escaping to main sidenav when at bottom
                     val focusedView = findFocus()
-                    val isOnMenu = focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuAbout
+                    val isOnMenu = focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuPlayer || focusedView == menuAbout
                     
                     // If on menu About (bottom item), consume to prevent escape
                     if (focusedView == menuAbout || 
@@ -835,5 +912,22 @@ class SettingsComponent @JvmOverloads constructor(
     
     fun refresh() {
         loadData()
+    }
+    
+    private fun toggleBitrateDisplay() {
+        val newState = !checkboxBitrate.isChecked
+        checkboxBitrate.isChecked = newState
+        
+        coroutineScope.launch {
+            AppPreferences.setShowBitrate(context, newState)
+        }
+        
+        val message = if (newState) {
+            "Bitrate info will be displayed during playback"
+        } else {
+            "Bitrate info hidden"
+        }
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        Log.d(TAG, "Bitrate display toggled: $newState")
     }
 }

@@ -48,6 +48,7 @@ class MainSideNavComponent @JvmOverloads constructor(
     private var isExpanded = false
     private var activeTab: Tab = Tab.LIVE_TV
     private var isInitializing = true  // Prevent tab selection during init
+    private var isNavigatingSidebar = false  // Track if user is actively navigating sidebar
     
     // Navigation
     private val focusHelper = FocusNavigationHelper()
@@ -94,9 +95,13 @@ class MainSideNavComponent @JvmOverloads constructor(
         
         searchButton.setOnFocusChangeListener { _, hasFocus ->
             if (hasFocus) {
-                setActiveTab(Tab.SEARCH, notify = !isInitializing)
+                // Only change tab if user is actively navigating sidebar or during initialization
+                if (isNavigatingSidebar || isInitializing) {
+                    setActiveTab(Tab.SEARCH, notify = !isInitializing)
+                }
                 applyFocusedStyle(searchButton, searchLabel)
                 isInitializing = false
+                isNavigatingSidebar = true  // User has entered sidebar
             } else {
                 applyNormalStyle(searchButton, searchLabel, Tab.SEARCH)
             }
@@ -114,6 +119,7 @@ class MainSideNavComponent @JvmOverloads constructor(
                 setActiveTab(Tab.LIVE_TV, notify = !isInitializing)
                 applyFocusedStyle(tvButton, tvLabel)
                 isInitializing = false
+                isNavigatingSidebar = true
             } else {
                 applyNormalStyle(tvButton, tvLabel, Tab.LIVE_TV)
             }
@@ -127,6 +133,7 @@ class MainSideNavComponent @JvmOverloads constructor(
                         true
                     }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        isNavigatingSidebar = false  // User left sidebar
                         onNavigateRight?.invoke()
                         true
                     }
@@ -143,6 +150,7 @@ class MainSideNavComponent @JvmOverloads constructor(
                         true
                     }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        isNavigatingSidebar = false  // User left sidebar
                         onNavigateRight?.invoke()
                         true
                     }
@@ -164,6 +172,7 @@ class MainSideNavComponent @JvmOverloads constructor(
                 setActiveTab(Tab.MOVIES, notify = !isInitializing)
                 applyFocusedStyle(moviesButton, moviesLabel)
                 isInitializing = false
+                isNavigatingSidebar = true
             } else {
                 applyNormalStyle(moviesButton, moviesLabel, Tab.MOVIES)
             }
@@ -180,6 +189,7 @@ class MainSideNavComponent @JvmOverloads constructor(
                     }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
                         Log.d(TAG, "Movies button RIGHT pressed, invoking navigate right")
+                        isNavigatingSidebar = false  // User left sidebar
                         onNavigateRight?.invoke()
                         true
                     }
@@ -200,6 +210,7 @@ class MainSideNavComponent @JvmOverloads constructor(
                 setActiveTab(Tab.SERIES, notify = !isInitializing)
                 applyFocusedStyle(seriesButton, seriesLabel)
                 isInitializing = false
+                isNavigatingSidebar = true
             } else {
                 applyNormalStyle(seriesButton, seriesLabel, Tab.SERIES)
             }
@@ -213,6 +224,7 @@ class MainSideNavComponent @JvmOverloads constructor(
                         true
                     }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        isNavigatingSidebar = false  // User left sidebar
                         onNavigateRight?.invoke()
                         true
                     }
@@ -232,6 +244,7 @@ class MainSideNavComponent @JvmOverloads constructor(
                 setActiveTab(Tab.SETTINGS, notify = !isInitializing)
                 applyFocusedStyle(settingsButton, settingsLabel)
                 isInitializing = false
+                isNavigatingSidebar = true
             } else {
                 applyNormalStyle(settingsButton, settingsLabel, Tab.SETTINGS)
             }
@@ -246,6 +259,7 @@ class MainSideNavComponent @JvmOverloads constructor(
                     }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
                         // Navigate right to settings content
+                        isNavigatingSidebar = false  // User left sidebar
                         onNavigateRight?.invoke()
                         true
                     }
@@ -350,6 +364,7 @@ class MainSideNavComponent @JvmOverloads constructor(
      * Request focus on the active tab
      */
     fun requestFocusOnActiveTab() {
+        isNavigatingSidebar = true  // User is returning to sidebar
         when (activeTab) {
             Tab.SEARCH -> searchButton.requestFocus()
             Tab.LIVE_TV -> tvButton.requestFocus()
@@ -378,6 +393,30 @@ class MainSideNavComponent @JvmOverloads constructor(
      */
     fun setOnExpandStateChangedListener(listener: (Boolean) -> Unit) {
         onExpandStateChanged = listener
+    }
+    
+    /**
+     * Disable focus on all navigation buttons
+     */
+    fun disableFocus() {
+        searchButton.isFocusable = false
+        tvButton.isFocusable = false
+        moviesButton.isFocusable = false
+        seriesButton.isFocusable = false
+        settingsButton.isFocusable = false
+        Log.d(TAG, "Focus disabled on all main sidenav buttons")
+    }
+    
+    /**
+     * Enable focus on all navigation buttons
+     */
+    fun enableFocus() {
+        searchButton.isFocusable = true
+        tvButton.isFocusable = true
+        moviesButton.isFocusable = true
+        seriesButton.isFocusable = true
+        settingsButton.isFocusable = true
+        Log.d(TAG, "Focus enabled on all main sidenav buttons")
     }
     
     /**

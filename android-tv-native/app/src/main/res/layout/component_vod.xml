@@ -65,8 +65,9 @@
                     android:layout_height="wrap_content"
                     android:textColor="#CCFFFFFF"
                     android:textSize="14sp"
+                    android:lineSpacingExtra="2dp"
                     android:layout_marginTop="10dp"
-                    android:maxLines="3"
+                    android:maxLines="4"
                     android:ellipsize="end" />
 
 

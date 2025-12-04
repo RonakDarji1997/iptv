@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "463696797778",
+    "project_id": "iptv-11932",
+    "storage_bucket": "iptv-11932.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:463696797778:android:5a02c57f5c5af936babf8b",
+        "android_client_info": {
+          "package_name": "com.ronika.iptvnative"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDtdDV6SsJXusknkPXw1HOkOudGLopaD5M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

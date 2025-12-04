@@ -24,11 +24,14 @@ import com.ronika.iptvnative.database.AppDatabase
 import com.ronika.iptvnative.database.entities.CategoryEntity
 import com.ronika.iptvnative.database.entities.ProviderEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.util.UUID
 
 /**
@@ -60,11 +63,6 @@ class PortalSetupActivity : ComponentActivity() {
         const val SETUP_STEP_ADULT_PASS = 3   // Step 3: Set adult password (if needed)
         const val SETUP_STEP_COMPLETE = 4     // All steps done
         
-        // Test data for pre-fill
-        private const val TEST_SERVER = "http://tv.stream4k.cc"
-        private const val TEST_MAC = "00:1a:79:17:f4:f5"
-        private const val TEST_TOKEN = "1E75E91204660B7A876055CE8830130E"
-        
         // Preferences keys (kept for backwards compatibility)
         private const val PREFS_NAME = "portal_config"
         private const val KEY_PORTAL_TYPE = "portal_type"
@@ -87,8 +85,18 @@ class PortalSetupActivity : ComponentActivity() {
          * Check if portal is already configured
          */
         fun isPortalConfigured(context: Context): Boolean {
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            return prefs.getBoolean(KEY_IS_CONFIGURED, false)
+            // Check if any configured providers exist in database
+            return try {
+                val database = AppDatabase.getDatabase(context)
+                val providerCount = runBlocking {
+                    database.providerDao().getProviderCount()
+                }
+                providerCount > 0
+            } catch (e: Exception) {
+                // Fallback to SharedPreferences if database check fails
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.getBoolean(KEY_IS_CONFIGURED, false)
+            }
         }
         
         /**
@@ -282,51 +290,6 @@ class PortalSetupActivity : ComponentActivity() {
         Log.d(TAG, "Portal setup activity initialized")
     }
     
-    private suspend fun seedTestProvider() {
-        Log.d(TAG, "Seeding test provider for development...")
-        
-        val testProvider = ProviderEntity(
-            id = UUID.randomUUID().toString(),
-            name = "Test Provider - Stream4K",
-            type = PORTAL_TYPE_STALKER,
-            serverUrl = TEST_SERVER,
-            macAddress = TEST_MAC,
-            serialNumber = generatedSerial,
-            token = TEST_TOKEN,
-            username = null,
-            password = null,
-            setupStep = SETUP_STEP_CATEGORIES, // Step 1 complete, ready for step 2
-            isActive = true,
-            includeTv = true,
-            includeVod = true
-        )
-        
-        withContext(Dispatchers.IO) {
-            providerDao.insertProvider(testProvider)
-        }
-        
-        currentProviderId = testProvider.id
-        
-        // Save to prefs for backwards compatibility
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().apply {
-            putString(KEY_ACTIVE_PROVIDER_ID, testProvider.id)
-            putString(KEY_PORTAL_TYPE, PORTAL_TYPE_STALKER)
-            putString(KEY_SERVER, TEST_SERVER)
-            putString(KEY_MAC_ADDRESS, TEST_MAC)
-            putString(KEY_SERIAL, generatedSerial)
-            putString(KEY_STALKER_TOKEN, TEST_TOKEN)
-            putInt(KEY_SETUP_STEP, SETUP_STEP_CATEGORIES)
-            putBoolean(KEY_HAS_PENDING_SETUP, true)
-            apply()
-        }
-        
-        runOnUiThread {
-            Toast.makeText(this@PortalSetupActivity, "Test provider loaded. Starting Step 2...", Toast.LENGTH_SHORT).show()
-            showCategorySelectionForm(testProvider)
-        }
-    }
-    
     private fun showCategorySelectionForm(provider: ProviderEntity) {
         currentStep = FormStep.CATEGORY_SELECTION
         
@@ -399,8 +362,9 @@ class PortalSetupActivity : ComponentActivity() {
                 )
                 
                 // Get TV genres
+                Log.d(TAG, "📡 Fetching Live TV genres from API...")
                 val tvGenres = authClient.getGenres(provider.token ?: "")
-                Log.d(TAG, "TV Genres: ${tvGenres.size} items")
+                Log.d(TAG, "📺 API returned ${tvGenres.size} Live TV genres")
                 
                 // Apply existing state if editing, otherwise default to selected
                 for (genre in tvGenres) {
@@ -410,37 +374,44 @@ class PortalSetupActivity : ComponentActivity() {
                     // Default isSelected is true from StalkerCategory
                 }
                 liveTvCategories.addAll(tvGenres)
+                Log.d(TAG, "✅ Added ${tvGenres.size} Live TV genres to list")
                 
                 // Get VOD categories
+                Log.d(TAG, "📡 Fetching VOD categories from API...")
                 val vodCategories = authClient.getVodCategories(provider.token ?: "")
-                Log.d(TAG, "VOD Categories: ${vodCategories.size} items - checking is_series for each...")
+                Log.d(TAG, "🎬 API returned ${vodCategories.size} VOD categories")
+                Log.d(TAG, "🔍 Starting is_series classification for ${vodCategories.size} categories...")
                 
-                // Classify each category by fetching page 1 and checking is_series field
+                // Classify each category by checking is_series field from API
                 val token = provider.token ?: ""
                 val classifiedCategories = coroutineScope {
                     vodCategories.map { category ->
                         async(Dispatchers.IO) {
-                            try {
-                                // Apply existing state if editing
-                                if (isEditingFromSettings && existingStateMap.containsKey(category.id)) {
-                                    category.isSelected = existingStateMap[category.id] ?: true
-                                }
-                                
-                                // Check is_series by fetching page 1 of this category
-                                val isSeries = authClient.isCategorySeries(token, category.id)
-                                category.isSeries = isSeries
-                                Log.d(TAG, "Category ${category.title}: is_series=$isSeries")
-                                category
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error checking category ${category.title}, defaulting to movie", e)
-                                category.isSeries = false
-                                category
+                            // Apply existing state if editing
+                            if (isEditingFromSettings && existingStateMap.containsKey(category.id)) {
+                                category.isSelected = existingStateMap[category.id] ?: true
                             }
+                            
+                            // Check is_series from API with timeout
+                            var isSeries = false
+                            try {
+                                isSeries = withTimeout(5000L) {
+                                    authClient.isCategorySeries(token, category.id)
+                                }
+                                Log.d(TAG, "✓ Category '${category.title}': is_series=$isSeries")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "✗ Category '${category.title}' check failed, defaulting to movie: ${e.message}")
+                                isSeries = false
+                            }
+                            
+                            category.isSeries = isSeries
+                            category
                         }
                     }.awaitAll()
                 }
                 
                 // Separate into movies and series
+                Log.d(TAG, "📊 Classifying ${classifiedCategories.size} VOD categories...")
                 for (category in classifiedCategories) {
                     if (category.isSeries) {
                         seriesCategories.add(category)
@@ -449,7 +420,8 @@ class PortalSetupActivity : ComponentActivity() {
                     }
                 }
                 
-                Log.d(TAG, "Movies: ${movieCategories.size}, Series: ${seriesCategories.size}")
+                Log.d(TAG, "✅ Classification complete: ${movieCategories.size} Movies, ${seriesCategories.size} Series")
+                Log.d(TAG, "📊 TOTAL CATEGORIES: Live=${liveTvCategories.size}, Movies=${movieCategories.size}, Series=${seriesCategories.size}, GRAND TOTAL=${liveTvCategories.size + movieCategories.size + seriesCategories.size}")
                 
                 // Sort categories: deselected first (at top), then selected
                 val sortedLive = liveTvCategories.sortedBy { it.isSelected }
@@ -524,13 +496,17 @@ class PortalSetupActivity : ComponentActivity() {
             Log.d(TAG, "Selected - Live: ${selectedLive.size}, Movies: ${selectedMovies.size}, Series: ${selectedSeries.size}")
             
             // Save selected categories to database
+            Log.d(TAG, "💾 Starting category save process...")
+            Log.d(TAG, "💾 Categories to save: Live=${liveTvCategories.size}, Movies=${movieCategories.size}, Series=${seriesCategories.size}")
             lifecycleScope.launch {
                 withContext(Dispatchers.IO) {
                     // First, save ALL category data to CategoryEntity table
                     // This ensures categories are in DB when MainActivity loads
                     
                     // Clear existing categories for this provider
+                    Log.d(TAG, "🗑️  Clearing existing categories for provider ${provider.id}")
                     categoryDao.deleteByProviderId(provider.id)
+                    Log.d(TAG, "🗑️  Existing categories cleared")
                     
                     // Save Live TV categories with isEnabled based on selection
                     val liveTvEntities = liveTvCategories.map { cat ->
@@ -547,9 +523,24 @@ class PortalSetupActivity : ComponentActivity() {
                             isEnabled = cat.isSelected // Store selection state in isEnabled
                         )
                     }
+                    
+                    // Check for duplicate externalIds
+                    val liveExternalIds = liveTvEntities.map { it.externalId }
+                    val liveDuplicates = liveExternalIds.groupingBy { it }.eachCount().filter { it.value > 1 }
+                    if (liveDuplicates.isNotEmpty()) {
+                        Log.w(TAG, "⚠️ Found ${liveDuplicates.size} duplicate externalIds in Live TV categories: $liveDuplicates")
+                        val duplicateCategories = liveTvEntities.filter { liveDuplicates.containsKey(it.externalId) }
+                        Log.w(TAG, "⚠️ Duplicate categories: ${duplicateCategories.map { "${it.name} (id=${it.externalId})" }}")
+                    }
+                    
+                    Log.d(TAG, "💾 Inserting ${liveTvEntities.size} Live TV categories...")
                     categoryDao.insertAll(liveTvEntities)
                     val enabledLive = liveTvEntities.count { it.isEnabled }
-                    Log.d(TAG, "Saved ${liveTvEntities.size} Live TV categories to DB ($enabledLive enabled)")
+                    Log.d(TAG, "✅ Saved ${liveTvEntities.size} Live TV categories to DB ($enabledLive enabled)")
+                    
+                    // Verify insert for THIS provider only
+                    val verifyLive = categoryDao.getCategoriesByProviderAndType(provider.id, "LIVE").size
+                    Log.d(TAG, "✔️  Verification: DB now has $verifyLive LIVE categories for provider ${provider.id}")
                     
                     // Save Movie categories with isEnabled based on selection
                     val movieEntities = movieCategories.map { cat ->
@@ -566,9 +557,14 @@ class PortalSetupActivity : ComponentActivity() {
                             isEnabled = cat.isSelected // Store selection state in isEnabled
                         )
                     }
+                    Log.d(TAG, "💾 Inserting ${movieEntities.size} Movie categories...")
                     categoryDao.insertAll(movieEntities)
                     val enabledMovies = movieEntities.count { it.isEnabled }
-                    Log.d(TAG, "Saved ${movieEntities.size} Movie categories to DB ($enabledMovies enabled)")
+                    Log.d(TAG, "✅ Saved ${movieEntities.size} Movie categories to DB ($enabledMovies enabled)")
+                    
+                    // Verify insert for THIS provider only
+                    val verifyMovies = categoryDao.getCategoriesByProviderAndType(provider.id, "MOVIE").size
+                    Log.d(TAG, "✔️  Verification: DB now has $verifyMovies MOVIE categories for provider ${provider.id}")
                     
                     // Save Series categories with isEnabled based on selection
                     val seriesEntities = seriesCategories.map { cat ->
@@ -585,13 +581,40 @@ class PortalSetupActivity : ComponentActivity() {
                             isEnabled = cat.isSelected // Store selection state in isEnabled
                         )
                     }
+                    Log.d(TAG, "💾 Inserting ${seriesEntities.size} Series categories...")
                     categoryDao.insertAll(seriesEntities)
                     val enabledSeries = seriesEntities.count { it.isEnabled }
-                    Log.d(TAG, "Saved ${seriesEntities.size} Series categories to DB ($enabledSeries enabled)")
+                    Log.d(TAG, "✅ Saved ${seriesEntities.size} Series categories to DB ($enabledSeries enabled)")
+                    
+                    // Verify insert for THIS provider only
+                    val verifySeries = categoryDao.getCategoriesByProviderAndType(provider.id, "SERIES").size
+                    Log.d(TAG, "✔️  Verification: DB now has $verifySeries SERIES categories for provider ${provider.id}")
+                    
+                    // Final verification
+                    val totalInDb = verifyLive + verifyMovies + verifySeries
+                    val totalExpected = liveTvEntities.size + movieEntities.size + seriesEntities.size
+                    Log.d(TAG, "")
+                    Log.d(TAG, "╔═══════════════════════════════════════════╗")
+                    Log.d(TAG, "║       CATEGORY SAVE SUMMARY              ║")
+                    Log.d(TAG, "╠═══════════════════════════════════════════╣")
+                    Log.d(TAG, "║ Live TV:  ${liveTvEntities.size.toString().padStart(3)} → DB: ${verifyLive.toString().padStart(3)} ($enabledLive enabled)    ║")
+                    Log.d(TAG, "║ Movies:   ${movieEntities.size.toString().padStart(3)} → DB: ${verifyMovies.toString().padStart(3)} ($enabledMovies enabled)    ║")
+                    Log.d(TAG, "║ Series:   ${seriesEntities.size.toString().padStart(3)} → DB: ${verifySeries.toString().padStart(3)} ($enabledSeries enabled)    ║")
+                    Log.d(TAG, "║ ─────────────────────────────────────── ║")
+                    Log.d(TAG, "║ TOTAL:    ${totalExpected.toString().padStart(3)} → DB: ${totalInDb.toString().padStart(3)}                ║")
+                    Log.d(TAG, "╚═══════════════════════════════════════════╝")
+                    Log.d(TAG, "")
+                    
+                    if (totalInDb != totalExpected) {
+                        Log.e(TAG, "⚠️  WARNING: Category count mismatch! Expected $totalExpected but DB has $totalInDb")
+                        Log.e(TAG, "⚠️  Missing: ${totalExpected - totalInDb} categories")
+                    } else {
+                        Log.d(TAG, "✅ All categories saved successfully!")
+                    }
                     
                     // isEnabled flag is now stored in CategoryEntity, no need to store comma-separated IDs
                     providerDao.updateSetupStep(provider.id, SETUP_STEP_ADULT_PASS)
-                    Log.d(TAG, "Saved category selections for provider: ${provider.id}")
+                    Log.d(TAG, "✅ Provider setup step updated to ADULT_PASS")
                 }
                 
                 runOnUiThread {
