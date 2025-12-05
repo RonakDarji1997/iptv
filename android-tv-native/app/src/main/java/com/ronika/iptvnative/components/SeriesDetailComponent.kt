@@ -258,8 +258,8 @@ class SeriesDetailComponent @JvmOverloads constructor(
         }
         backdropImage.load(fullPosterUrl) {
             crossfade(300)
-            placeholder(android.R.color.darker_gray)
-            error(android.R.color.darker_gray)
+            placeholder(R.drawable.ic_movie_placeholder)
+            error(R.drawable.ic_movie_placeholder)
         }
         
         // Auto-load seasons and episodes (always show by default)

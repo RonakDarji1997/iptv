@@ -516,6 +516,52 @@ class VODComponent @JvmOverloads constructor(
                     currentGenreId = genreId
                     Log.d(TAG, "Loading $vodType for category: $categoryName, genreId: $genreId")
                     
+                    // Check if M3U provider - load from database
+                    val provider = withContext(Dispatchers.IO) {
+                        currentProviderId?.let { database.providerDao().getProviderById(it) }
+                    }
+                    
+                    if (provider?.type == "m3u") {
+                        // Load VOD from database for M3U
+                        val dbChannels = withContext(Dispatchers.IO) {
+                            database.channelDao().getChannelsByCategory(genreId)
+                        }
+                        
+                        Log.d(TAG, "Loaded ${dbChannels.size} M3U VOD items from database")
+                        
+                        val vodItems = dbChannels.map { dbChannel ->
+                            VODItem(
+                                id = dbChannel.externalId,
+                                name = dbChannel.name,
+                                year = "",
+                                description = "",
+                                posterUrl = dbChannel.logo?.takeIf { it.isNotEmpty() },
+                                backdropUrl = dbChannel.logo?.takeIf { it.isNotEmpty() },
+                                cmd = dbChannel.cmd ?: "",
+                                director = null,
+                                actors = null
+                            )
+                        }
+                        
+                        allItems.addAll(vodItems)
+                        totalPages = 1
+                        isLoadingMore = false
+                        
+                        withContext(Dispatchers.Main) {
+                            thumbnailAdapter.updateItems(allItems)
+                            loadingIndicator.visibility = GONE
+                            thumbnailsRecycler.visibility = VISIBLE
+                            if (vodItems.isNotEmpty()) {
+                                showDetailScreen(vodItems[0])
+                                thumbnailsRecycler.post {
+                                    thumbnailsRecycler.getChildAt(0)?.requestFocus()
+                                }
+                            }
+                        }
+                        return@launch
+                    }
+                    
+                    // Stalker provider - load from API
                     // Load first 5 pages in parallel
                     loadPagesInParallel(1, 5)
                 } else {
@@ -568,8 +614,13 @@ class VODComponent @JvmOverloads constructor(
                     category = categoryDao.getCategoryByNameAndProvider(categoryName, providerId)
                 }
                 
-                Log.d(TAG, "lookupGenreId: name=$categoryName, providerId=$providerId, found=${category?.externalId}")
-                category?.externalId
+                // For M3U providers, use category.id (UUID) since channels are linked by categoryId
+                // For Stalker providers, use category.externalId (API genre ID)
+                val provider = database.providerDao().getProviderById(providerId)
+                val genreId = if (provider?.type == "m3u") category?.id else category?.externalId
+                
+                Log.d(TAG, "lookupGenreId: name=$categoryName, providerId=$providerId, provider type=${provider?.type}, found=$genreId")
+                genreId
             } catch (e: Exception) {
                 Log.e(TAG, "Error looking up genre ID: ${e.message}", e)
                 null
@@ -708,8 +759,8 @@ class VODComponent @JvmOverloads constructor(
         val imageUrl = item.backdropUrl?.takeIf { it.isNotEmpty() }
         backdropImage.load(imageUrl) {
             crossfade(200)
-            placeholder(android.R.color.black)
-            error(android.R.color.black)
+            placeholder(R.drawable.ic_movie_placeholder)
+            error(R.drawable.ic_movie_placeholder)
         }
     }
     
@@ -773,8 +824,8 @@ class VODComponent @JvmOverloads constructor(
         val backdropUrl = item.backdropUrl?.takeIf { it.isNotEmpty() } ?: item.posterUrl
         detailPosterImage.load(backdropUrl) {
             crossfade(300)
-            placeholder(android.R.color.darker_gray)
-            error(android.R.color.darker_gray)
+            placeholder(R.drawable.ic_movie_placeholder)
+            error(R.drawable.ic_movie_placeholder)
         }
         
         // Animate transition
@@ -1135,8 +1186,8 @@ class VODComponent @JvmOverloads constructor(
                 
                 posterImage.load(imageUrl) {
                     crossfade(true)
-                    placeholder(android.R.color.darker_gray)
-                    error(android.R.color.darker_gray)
+                    placeholder(R.drawable.ic_movie_placeholder)
+                    error(R.drawable.ic_movie_placeholder)
                     transformations(RoundedCornersTransformation(8f))
                 }
                 

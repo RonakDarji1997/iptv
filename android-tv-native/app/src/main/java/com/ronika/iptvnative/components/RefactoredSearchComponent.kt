@@ -96,7 +96,10 @@ class RefactoredSearchComponent @JvmOverloads constructor(
         searchScope.launch {
             activeProviders = withContext(Dispatchers.IO) {
                 providerDao.getAllProvidersList()
-                    .filter { it.isConfigured && it.isActive && it.token != null }
+                    .filter { provider ->
+                        provider.isConfigured && provider.isActive && 
+                        (provider.type == "m3u" || provider.token != null)
+                    }
             }
             
             Log.d(TAG, "Found ${activeProviders.size} active providers")
@@ -658,8 +661,8 @@ class RefactoredSearchComponent @JvmOverloads constructor(
                 // Load image using Coil
                 posterImage.load(item.vodItem.posterUrl) {
                     crossfade(300)
-                    placeholder(android.R.color.darker_gray)
-                    error(android.R.color.darker_gray)
+                    placeholder(R.drawable.ic_movie_placeholder)
+                    error(R.drawable.ic_movie_placeholder)
                 }
             }
 

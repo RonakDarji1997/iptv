@@ -1,10 +1,12 @@
 package com.ronika.iptvnative
 
 import android.app.AlertDialog
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import com.ronika.iptvnative.api.StalkerClient
@@ -206,6 +208,12 @@ class MainActivity : ComponentActivity() {
         // User can manually sync via "Update Playlist" button in settings
         // syncVODCategories() // DISABLED - causes category count changes due to API variability
         
+        // Sync with cloud on app load (bidirectional)
+        performInitialSync()
+        
+        // Check if user wants to enable cloud sync (for existing users)
+        checkAndPromptCloudSync()
+        
         // Initialize navigation stack
         navigationStack.add(NavigationState.MAIN_SIDENAV)
         
@@ -235,6 +243,152 @@ class MainActivity : ComponentActivity() {
         // This ensures any changes to enabled/disabled categories are reflected
         if (::categorySidebar.isInitialized) {
             categorySidebar.refreshCategories()
+        }
+    }
+    
+    /**
+     * Perform initial bidirectional sync on app load
+     * 1. Pull from cloud (settings, passwords, etc.)
+     * 2. Push local changes to cloud
+     */
+    private fun performInitialSync() {
+        lifecycleScope.launch {
+            try {
+                val syncService = com.ronika.iptvnative.sync.IPTVSyncService(this@MainActivity)
+                
+                // Check if cloud sync is enabled and user is logged in
+                if (!syncService.isLoggedIn()) {
+                    Log.d(TAG, "⏭️ Skipping sync - user not logged in")
+                    return@launch
+                }
+                
+                val syncPrefs = getSharedPreferences("iptv_sync_prefs", MODE_PRIVATE)
+                val cloudSyncEnabled = syncPrefs.getBoolean("cloud_sync_enabled", false)
+                
+                if (!cloudSyncEnabled) {
+                    Log.d(TAG, "⏭️ Skipping sync - cloud sync disabled")
+                    return@launch
+                }
+                
+                Log.d(TAG, "🔄 Starting bidirectional sync...")
+                
+                // 1. Pull from cloud first (download settings, passwords, etc.)
+                Log.d(TAG, "⬇️ Pulling data from cloud...")
+                syncService.syncFromCloud()
+                
+                // 2. Push any local changes to cloud
+                Log.d(TAG, "⬆️ Pushing local changes to cloud...")
+                val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(this@MainActivity)
+                val providers = withContext(Dispatchers.IO) {
+                    database.providerDao().getAllProvidersList()
+                }
+                syncService.syncAllProviders(providers)
+                
+                Log.d(TAG, "✅ Bidirectional sync completed")
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Sync error (non-critical): ${e.message}", e)
+            }
+        }
+    }
+    
+    /**
+     * Check if user has providers and hasn't configured cloud sync yet
+     * Show dialog to enable cloud sync
+     */
+    private fun checkAndPromptCloudSync() {
+        lifecycleScope.launch {
+            try {
+                val syncPrefs = getSharedPreferences("iptv_sync_prefs", MODE_PRIVATE)
+                val cloudSyncEnabled = syncPrefs.getBoolean("cloud_sync_enabled", false)
+                val cloudSyncConfigured = syncPrefs.getBoolean("cloud_sync_configured", false)
+                
+                // Check if user is already logged in
+                val syncService = com.ronika.iptvnative.sync.IPTVSyncService(this@MainActivity)
+                val isLoggedIn = syncService.isLoggedIn()
+                
+                // Check if user has providers
+                val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(this@MainActivity)
+                val providers = withContext(Dispatchers.IO) {
+                    database.providerDao().getAllProvidersList()
+                }
+                
+                // If user has providers but hasn't configured cloud sync yet AND is not logged in, show dialog
+                if (providers.isNotEmpty() && !cloudSyncConfigured && !isLoggedIn) {
+                    withContext(Dispatchers.Main) {
+                        showCloudSyncDialog()
+                    }
+                }
+                // Note: Auto-sync is now handled by performInitialSync()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error checking cloud sync", e)
+            }
+        }
+    }
+    
+    /**
+     * Show dialog asking user if they want to enable cloud sync
+     */
+    private fun showCloudSyncDialog() {
+        val dialog = CloudSyncDialog(this)
+        dialog.showSimple(object : CloudSyncDialog.CloudSyncCallback {
+            override fun onEnableCloudSync() {
+                Log.d(TAG, "User wants to enable cloud sync")
+                // Launch CloudAuthActivity to get credentials and upload data
+                val intent = Intent(this@MainActivity, CloudAuthActivity::class.java)
+                intent.putExtra(CloudAuthActivity.EXTRA_IS_NEW_USER, false)
+                intent.putExtra(CloudAuthActivity.EXTRA_UPLOAD_EXISTING, true)
+                startActivityForResult(intent, CloudSyncDialog.REQUEST_CODE_CLOUD_AUTH)
+            }
+            
+            override fun onDeclineCloudSync() {
+                Log.d(TAG, "User declined cloud sync")
+                val syncPrefs = getSharedPreferences("iptv_sync_prefs", MODE_PRIVATE)
+                syncPrefs.edit()
+                    .putBoolean("cloud_sync_enabled", false)
+                    .putBoolean("cloud_sync_configured", true)  // Mark as configured
+                    .apply()
+                
+                Toast.makeText(
+                    this@MainActivity,
+                    "Cloud sync disabled. Data will be stored locally only.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        })
+    }
+    
+    /**
+     * Sync providers to cloud (called when cloud sync is enabled)
+     */
+    private fun syncProvidersToCloud() {
+        lifecycleScope.launch {
+            try {
+                Log.d(TAG, "☁️ Starting cloud sync for all providers...")
+                val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(this@MainActivity)
+                val providers = withContext(Dispatchers.IO) {
+                    database.providerDao().getAllProvidersList()
+                }
+                
+                if (providers.isNotEmpty()) {
+                    val syncService = com.ronika.iptvnative.sync.IPTVSyncService(this@MainActivity)
+                    syncService.syncAllProviders(providers)
+                    Log.d(TAG, "☁️ Cloud sync completed for ${providers.size} provider(s)")
+                } else {
+                    Log.d(TAG, "No providers to sync")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "⚠️ Cloud sync error (non-critical)", e)
+            }
+        }
+    }
+    
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        
+        if (requestCode == CloudSyncDialog.REQUEST_CODE_CLOUD_AUTH && resultCode == RESULT_OK) {
+            // Cloud sync enabled successfully, start syncing
+            syncProvidersToCloud()
         }
     }
     
@@ -1013,7 +1167,56 @@ class MainActivity : ComponentActivity() {
         // Get stream URL in background
         lifecycleScope.launch {
             try {
-                // Step 1: Get file info to get the file ID
+                // Check if M3U provider - play directly without API calls
+                val providerId = vodComponent.getCurrentProviderId()
+                val provider = if (providerId != null) {
+                    withContext(Dispatchers.IO) {
+                        com.ronika.iptvnative.database.AppDatabase.getDatabase(applicationContext)
+                            .providerDao().getProviderById(providerId)
+                    }
+                } else null
+                
+                if (provider?.type == "m3u") {
+                    Log.d(TAG, "🎬 M3U provider detected - playing direct URL: $cmd")
+                    
+                    // Hide all other components and show player
+                    val sideNavContainer = findViewById<FrameLayout>(R.id.sideNavContainer)
+                    val categorySidebarContainer = findViewById<FrameLayout>(R.id.categorySidebarContainer)
+                    val vodContainer = findViewById<FrameLayout>(R.id.vodContainer)
+                    val vodPlayerContainer = findViewById<FrameLayout>(R.id.vodPlayerContainer)
+                    
+                    sideNavContainer.visibility = android.view.View.GONE
+                    categorySidebarContainer.visibility = android.view.View.GONE
+                    vodContainer.visibility = android.view.View.GONE
+                    
+                    // Push PLAYER state to navigation stack
+                    pushNavigation(NavigationState.PLAYER)
+                    
+                    // Show player fullscreen
+                    vodPlayerContainer.visibility = android.view.View.VISIBLE
+                    isPlayingFromSeries = false
+                    
+                    // Set content info for progress tracking
+                    vodPlayer.setContentInfo(
+                        contentId = movieId,
+                        contentType = "MOVIE",
+                        posterUrl = vodItem.posterUrl,
+                        cmd = cmd ?: ""
+                    )
+                    
+                    // Play M3U movie directly with URL from cmd
+                    val streamUrl = cmd ?: ""
+                    if (streamUrl.isNotEmpty()) {
+                        vodPlayer.playMovie(streamUrl, title, 0L)
+                        Log.d(TAG, "🎬 M3U movie playback started")
+                    } else {
+                        Log.e(TAG, "🎬 M3U movie has no URL")
+                        android.widget.Toast.makeText(this@MainActivity, "Invalid stream URL", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    return@launch
+                }
+                
+                // Stalker provider - get stream URL from API
                 Log.d(TAG, "🎬 Step 1: Getting file info for movie ID: $movieId")
                 
                 // IMPORTANT: Use StalkerClient from VODComponent to ensure we use the same provider
@@ -1023,7 +1226,7 @@ class MainActivity : ComponentActivity() {
                     Log.e(TAG, "🎬 Failed to get StalkerClient!")
                     return@launch
                 }
-                Log.d(TAG, "🎬 Using StalkerClient from VODComponent, providerId: ${vodComponent.getCurrentProviderId()}")
+                Log.d(TAG, "🎬 Using StalkerClient from VODComponent, providerId: $providerId")
                 
                 val fileInfo = client.getVodFileInfo(movieId)
                 Log.d(TAG, "🎬 File info response: $fileInfo")

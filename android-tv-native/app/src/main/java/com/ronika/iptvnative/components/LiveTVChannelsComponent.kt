@@ -339,13 +339,71 @@ class LiveTVChannelsComponent @JvmOverloads constructor(
         // Fetch all channels in parallel
         scope.launch {
             try {
+                // Check if this is an M3U provider
+                val provider = withContext(Dispatchers.IO) {
+                    currentProviderId?.let { database.providerDao().getProviderById(it) }
+                }
+                
                 // Look up genre ID from category name
                 val genreId = lookupGenreId(categoryName)
                 
                 if (genreId != null) {
                     currentGenreId = genreId
-                    Log.d(TAG, "Fetching channels for category: $categoryName, genreId: $genreId")
+                    Log.d(TAG, "Fetching channels for category: $categoryName, genreId: $genreId, provider type: ${provider?.type}")
                     
+                    // M3U providers load from database, Stalker providers use API
+                    if (provider?.type == "m3u") {
+                        // Load channels directly from database for M3U
+                        val dbChannels = withContext(Dispatchers.IO) {
+                            database.channelDao().getChannelsByCategory(genreId)
+                        }
+                        
+                        Log.d(TAG, "Loaded ${dbChannels.size} M3U channels from database")
+                        
+                        val channelItems = dbChannels.map { dbChannel ->
+                            ChannelItem(
+                                id = dbChannel.externalId,
+                                number = dbChannel.number?.toIntOrNull() ?: 0,
+                                name = dbChannel.name,
+                                url = dbChannel.cmd ?: "",
+                                logo = dbChannel.logo,
+                                epgSlots = emptyList()
+                            )
+                        }
+                        
+                        allChannels.addAll(channelItems)
+                        totalItems = channelItems.size
+                        totalPages = 1
+                        allChannelsLoaded = true
+                        
+                        Log.d(TAG, "Setting up UI with ${allChannels.size} channels")
+                        
+                        withContext(Dispatchers.Main) {
+                            // Update adapter
+                            channelAdapter.updateChannels(allChannels)
+                            Log.d(TAG, "Adapter updated with channels")
+                            
+                            // Setup time header
+                            setupTimeHeader()
+                            
+                            // Setup players
+                            liveTVPlayer.setChannels(allChannels.toList())
+                            liveTVPlayerFullscreen.setChannels(allChannels.toList())
+                            Log.d(TAG, "Players configured with channels")
+                            
+                            // Focus first channel
+                            channelsRecycler.post {
+                                updatePreview(0)
+                                val firstRow = channelsRecycler.getChildAt(0)
+                                firstRow?.findViewById<LinearLayout>(R.id.channel_info)?.requestFocus()
+                                Log.d(TAG, "Focused first channel")
+                            }
+                        }
+                        
+                        return@launch
+                    }
+                    
+                    // Stalker provider - use API
                     // Ensure client is initialized
                     val client = stalkerClient
                     if (client == null) {
@@ -572,8 +630,14 @@ class LiveTVChannelsComponent @JvmOverloads constructor(
                     return@withContext null
                 }
                 val category = categoryDao.getCategoryByNameAndProvider(categoryName, providerId)
-                Log.d(TAG, "lookupGenreId: name=$categoryName, providerId=$providerId, found=${category?.externalId}")
-                category?.externalId
+                
+                // For M3U providers, use category.id (UUID) since channels are linked by categoryId
+                // For Stalker providers, use category.externalId (API genre ID)
+                val provider = database.providerDao().getProviderById(providerId)
+                val genreId = if (provider?.type == "m3u") category?.id else category?.externalId
+                
+                Log.d(TAG, "lookupGenreId: name=$categoryName, providerId=$providerId, provider type=${provider?.type}, found=$genreId")
+                genreId
             } catch (e: Exception) {
                 Log.e(TAG, "Error looking up genre ID: ${e.message}", e)
                 null

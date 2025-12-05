@@ -89,4 +89,7 @@ interface CategoryDao {
     
     @Query("DELETE FROM categories WHERE externalId = :externalId AND providerId = :providerId")
     suspend fun deleteByExternalIdAndProvider(externalId: String, providerId: String)
+    
+    @Query("SELECT * FROM categories WHERE name IN (:names)")
+    suspend fun getCategoriesByNames(names: List<String>): List<CategoryEntity>
 }

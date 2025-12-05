@@ -47,6 +47,19 @@
                 android:textSize="16sp"
                 android:gravity="center" />
 
+            <!-- Cloud Sync Button -->
+            <Button
+                android:id="@+id/btnCloudSync"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="32dp"
+                android:text="☁️ Setup Cloud Sync"
+                android:textSize="16sp"
+                android:textColor="@color/button_text_color"
+                android:background="@drawable/button_background"
+                android:padding="16dp"
+                android:minWidth="200dp"/>
+
         </LinearLayout>
 
         <!-- Right Side - Form Content -->

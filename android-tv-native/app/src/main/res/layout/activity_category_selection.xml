@@ -197,7 +197,9 @@
                 android:background="@drawable/rounded_button_dark"
                 android:layout_marginEnd="12dp"
                 android:focusable="true"
-                android:focusableInTouchMode="true" />
+                android:focusableInTouchMode="true"
+                android:nextFocusLeft="@id/btn_next"
+                android:nextFocusRight="@id/btn_deselect_all" />
 
             <Button
                 android:id="@+id/btn_deselect_all"
@@ -209,7 +211,9 @@
                 android:background="@drawable/rounded_button_dark"
                 android:layout_marginEnd="24dp"
                 android:focusable="true"
-                android:focusableInTouchMode="true" />
+                android:focusableInTouchMode="true"
+                android:nextFocusLeft="@id/btn_select_all"
+                android:nextFocusRight="@id/btn_next" />
 
             <Button
                 android:id="@+id/btn_next"
@@ -220,7 +224,10 @@
                 android:textStyle="bold"
                 android:background="@drawable/rounded_button_blue"
                 android:focusable="true"
-                android:focusableInTouchMode="true" />
+                android:focusableInTouchMode="true"
+                android:clickable="true"
+                android:nextFocusLeft="@id/btn_deselect_all"
+                android:nextFocusRight="@id/btn_select_all" />
         </LinearLayout>
     </LinearLayout>
 

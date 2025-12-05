@@ -14,6 +14,7 @@ import android.widget.TextView
 import com.ronika.iptvnative.R
 import com.ronika.iptvnative.MainActivity
 import com.ronika.iptvnative.database.AppDatabase
+import com.ronika.iptvnative.database.entities.CategoryEntity
 import com.ronika.iptvnative.database.entities.ProviderEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -85,7 +86,10 @@ class CategorySidebarComponent @JvmOverloads constructor(
             try {
                 val providersList = withContext(Dispatchers.IO) {
                     database.providerDao().getAllProvidersList()
-                        .filter { it.isConfigured && it.isActive && it.token != null }
+                        .filter { provider ->
+                            provider.isConfigured && provider.isActive && 
+                            (provider.type == "m3u" || provider.token != null)
+                        }
                 }
                 
                 Log.d(TAG, "Found ${providersList.size} active configured providers")
@@ -110,7 +114,12 @@ class CategorySidebarComponent @JvmOverloads constructor(
                         Log.d(TAG, "🔞 Adult/Censored categories found: ${adultCategories.map { "${it.name} (type=${it.type}, censored=${it.censored})" }}")
                     }
                     
-                    ProviderWithCategories(provider, live.map { it.name }, movies.map { it.name }, series.map { it.name })
+                    // Sort each category type with adult categories at the bottom
+                    val sortedLive = sortCategoriesByAdult(live)
+                    val sortedMovies = sortCategoriesByAdult(movies)
+                    val sortedSeries = sortCategoriesByAdult(series)
+                    
+                    ProviderWithCategories(provider, sortedLive.map { it.name }, sortedMovies.map { it.name }, sortedSeries.map { it.name })
                 }
                 
                 providers = providersWithCategories
@@ -132,6 +141,22 @@ class CategorySidebarComponent @JvmOverloads constructor(
         providersContainer.removeAllViews()
         focusableViews.clear()
         
+        // Check if there are any categories to display
+        val hasCategories = providers.any { providerData ->
+            when (currentSection) {
+                Section.LIVE_TV -> providerData.liveCategories.isNotEmpty()
+                Section.MOVIES -> providerData.movieCategories.isNotEmpty()
+                Section.SERIES -> providerData.seriesCategories.isNotEmpty()
+                Section.SEARCH -> false
+            }
+        }
+        
+        if (!hasCategories) {
+            // Show empty state message
+            showEmptyState()
+            return
+        }
+        
         // If only one provider, show categories directly without dropdown
         if (providers.size == 1) {
             addDirectCategories(providers.first())
@@ -146,16 +171,55 @@ class CategorySidebarComponent @JvmOverloads constructor(
     }
     
     /**
+     * Show empty state when no categories are found
+     */
+    private fun showEmptyState() {
+        val emptyView = TextView(context).apply {
+            text = when (currentSection) {
+                Section.LIVE_TV -> "No Live TV channels available"
+                Section.MOVIES -> "No movies available"
+                Section.SERIES -> "No series available"
+                Section.SEARCH -> "No content available"
+            }
+            textSize = 16f
+            setTextColor(0xFF999999.toInt())
+            gravity = android.view.Gravity.CENTER
+            setPadding(16, 32, 16, 16)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        providersContainer.addView(emptyView)
+        Log.d(TAG, "Showing empty state for section: $currentSection")
+    }
+    
+    /**
+     * Sort category names with adult/censored categories at the bottom
+     */
+    // Sort category entities with adult/censored categories at the bottom
+    private fun sortCategoriesByAdult(categories: List<CategoryEntity>): List<CategoryEntity> {
+        val (adultCategories, normalCategories) = categories.partition { it.censored == 1 }
+        return normalCategories + adultCategories
+    }
+    
+    /**
      * Add categories directly without provider header (for single provider)
      */
     private fun addDirectCategories(providerData: ProviderWithCategories) {
         val provider = providerData.provider
         
-        // Get categories based on current section
+        // Get categories based on current section (already sorted with adult at bottom)
         val categories = when (currentSection) {
             Section.LIVE_TV -> providerData.liveCategories
-            Section.MOVIES -> providerData.movieCategories
-            Section.SERIES -> providerData.seriesCategories
+            Section.MOVIES -> {
+                // Add Continue Watching and Favourites at the top
+                listOf("▶️ Continue Watching", "⭐ Favourites") + providerData.movieCategories
+            }
+            Section.SERIES -> {
+                // Add Continue Watching and Favourites at the top
+                listOf("▶️ Continue Watching", "⭐ Favourites") + providerData.seriesCategories
+            }
             Section.SEARCH -> emptyList() // Search doesn't have categories in sidebar
         }
         
@@ -321,6 +385,7 @@ class CategorySidebarComponent @JvmOverloads constructor(
         }
         
         // Build category sections based on current section filter
+        Log.d(TAG, "Building categories for provider ${provider.name}, section: $currentSection")
         when (currentSection) {
             Section.LIVE_TV -> {
                 if (providerData.liveCategories.isNotEmpty()) {
@@ -337,8 +402,9 @@ class CategorySidebarComponent @JvmOverloads constructor(
             }
             Section.MOVIES -> {
                 if (providerData.movieCategories.isNotEmpty()) {
-                    // Add Continue Watching and Favourites
-                    val categoriesWithExtras = listOf("Continue Watching", "Favourites") + providerData.movieCategories
+                    // Add Continue Watching and Favourites at the top (categories already sorted with adult at bottom)
+                    val categoriesWithExtras = listOf("▶️ Continue Watching", "⭐ Favourites") + providerData.movieCategories
+                    Log.d(TAG, "🎬 Movies: Added ${categoriesWithExtras.size} categories (including Continue Watching & Favourites)")
                     buildCategorySection(
                         dropdownView.findViewById(R.id.movies_section),
                         dropdownView.findViewById(R.id.movies_header),
@@ -352,8 +418,9 @@ class CategorySidebarComponent @JvmOverloads constructor(
             }
             Section.SERIES -> {
                 if (providerData.seriesCategories.isNotEmpty()) {
-                    // Add Continue Watching and Favourites
-                    val categoriesWithExtras = listOf("Continue Watching", "Favourites") + providerData.seriesCategories
+                    // Add Continue Watching and Favourites at the top (categories already sorted with adult at bottom)
+                    val categoriesWithExtras = listOf("▶️ Continue Watching", "⭐ Favourites") + providerData.seriesCategories
+                    Log.d(TAG, "📺 Series: Added ${categoriesWithExtras.size} categories (including Continue Watching & Favourites)")
                     buildCategorySection(
                         dropdownView.findViewById(R.id.series_section),
                         dropdownView.findViewById(R.id.series_header),

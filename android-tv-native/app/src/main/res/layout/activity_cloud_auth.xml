@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="48dp"
+    android:background="#1a1a1a">
+
+    <!-- Logo/Title -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="☁️ Cloud Sync"
+        android:textSize="32sp"
+        android:textColor="@android:color/white"
+        android:textStyle="bold"
+        android:layout_marginBottom="12dp"/>
+
+    <!-- Info Text -->
+    <TextView
+        android:id="@+id/tvInfo"
+        android:layout_width="700dp"
+        android:layout_height="wrap_content"
+        android:text="Login to sync your data across devices"
+        android:textSize="16sp"
+        android:textColor="#999999"
+        android:gravity="center"
+        android:layout_marginBottom="24dp"/>
+
+    <!-- Email Input -->
+    <TextView
+        android:layout_width="700dp"
+        android:layout_height="wrap_content"
+        android:text="Email"
+        android:textSize="14sp"
+        android:textColor="@android:color/white"
+        android:layout_marginBottom="6dp"/>
+
+    <EditText
+        android:id="@+id/etEmail"
+        android:layout_width="700dp"
+        android:layout_height="48dp"
+        android:hint="Enter your email"
+        android:inputType="textEmailAddress"
+        android:textSize="16sp"
+        android:textColor="@android:color/white"
+        android:textColorHint="#999999"
+        android:background="@drawable/edittext_background"
+        android:padding="12dp"
+        android:layout_marginBottom="16dp"/>
+
+    <!-- Password Input -->
+    <TextView
+        android:layout_width="700dp"
+        android:layout_height="wrap_content"
+        android:text="Password"
+        android:textSize="14sp"
+        android:textColor="@android:color/white"
+        android:layout_marginBottom="6dp"/>
+
+    <EditText
+        android:id="@+id/etPassword"
+        android:layout_width="700dp"
+        android:layout_height="48dp"
+        android:hint="Enter your password"
+        android:inputType="textPassword"
+        android:textSize="16sp"
+        android:textColor="@android:color/white"
+        android:textColorHint="#999999"
+        android:background="@drawable/edittext_background"
+        android:padding="12dp"
+        android:layout_marginBottom="24dp"/>
+
+    <!-- All Three Buttons in One Row -->
+    <LinearLayout
+        android:layout_width="700dp"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnLogin"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="Login"
+            android:textSize="16sp"
+            android:textColor="@color/button_text_color"
+            android:background="@drawable/button_background"
+            android:layout_marginEnd="8dp"/>
+
+        <Button
+            android:id="@+id/btnRegister"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="Register"
+            android:textSize="16sp"
+            android:textColor="@color/button_text_color"
+            android:background="@drawable/button_background"
+            android:layout_marginEnd="8dp"/>
+
+        <Button
+            android:id="@+id/btnSkip"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="Skip"
+            android:textSize="16sp"
+            android:textColor="#999999"
+            android:background="@drawable/button_background"
+            android:visibility="gone"/>
+
+    </LinearLayout>
+
+    <!-- Progress Bar -->
+    <ProgressBar
+        android:id="@+id/progressBar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:visibility="gone"/>
+
+    <!-- Status Text -->
+    <TextView
+        android:id="@+id/tvStatus"
+        android:layout_width="700dp"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textSize="14sp"
+        android:textColor="@android:color/white"
+        android:gravity="center"
+        android:layout_marginTop="12dp"/>
+
+</LinearLayout>

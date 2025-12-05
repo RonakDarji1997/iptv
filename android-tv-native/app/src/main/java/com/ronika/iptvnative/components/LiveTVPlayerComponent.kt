@@ -22,6 +22,7 @@ import com.ronika.iptvnative.R
 import com.ronika.iptvnative.api.StalkerClient
 import com.ronika.iptvnative.utils.AppPreferences
 import com.ronika.iptvnative.database.AppDatabase
+import com.ronika.iptvnative.database.entities.ProviderEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -62,6 +63,7 @@ class LiveTVPlayerComponent @JvmOverloads constructor(
     
     // API - initialized lazily with provider credentials
     private var stalkerClient: StalkerClient? = null
+    private var currentProvider: ProviderEntity? = null
     
     // Database
     private val database = AppDatabase.getDatabase(context)
@@ -85,6 +87,7 @@ class LiveTVPlayerComponent @JvmOverloads constructor(
                 providerDao.getActiveProvider()
             }
             if (provider != null) {
+                currentProvider = provider
                 stalkerClient = StalkerClient(
                     portalUrl = provider.serverUrl,
                     macAddress = provider.macAddress ?: "",
@@ -358,6 +361,16 @@ class LiveTVPlayerComponent @JvmOverloads constructor(
                 // Extract cmd from channel URL
                 val cmd = channel.url.replace("ffrt ", "").trim()
                 
+                // Check if M3U provider - direct play without API call
+                if (currentProvider?.type == "m3u") {
+                    Log.d(TAG, "M3U provider detected - playing direct URL: $cmd")
+                    withContext(Dispatchers.Main) {
+                        playStream(cmd)
+                    }
+                    return@launch
+                }
+                
+                // Stalker provider - get stream URL from API
                 Log.d(TAG, "Getting stream URL for cmd: $cmd")
                 
                 val client = stalkerClient

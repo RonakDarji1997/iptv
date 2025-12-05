@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="600dp"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="32dp"
+    android:background="@drawable/rounded_background">
+
+    <!-- Title -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="☁️ Enable Cloud Sync?"
+        android:textSize="28sp"
+        android:textColor="@android:color/white"
+        android:textStyle="bold"
+        android:layout_gravity="center"
+        android:layout_marginBottom="24dp"/>
+
+    <!-- Benefits Section -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="✅ Benefits"
+        android:textSize="20sp"
+        android:textColor="@android:color/white"
+        android:textStyle="bold"
+        android:layout_marginBottom="12dp"/>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="📱 Multi-Device Sync: Access providers on any device\n☁️ Cloud Backup: Never lose your configuration\n⚙️ Settings Sync: Preferences everywhere\n📺 Channel Favorites: Synced across devices\n🔄 Auto Recovery: Restore after reinstall"
+        android:textSize="16sp"
+        android:textColor="@android:color/white"
+        android:lineSpacingExtra="4dp"
+        android:layout_marginBottom="24dp"/>
+
+    <!-- Risks Section -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="⚠️ Without Cloud Sync"
+        android:textSize="20sp"
+        android:textColor="#FFB74D"
+        android:textStyle="bold"
+        android:layout_marginBottom="12dp"/>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="• All data stored locally only\n• Uninstalling app = data lost forever\n• Device reset = configuration lost\n• No multi-device access\n• No automatic backup"
+        android:textSize="16sp"
+        android:textColor="#FFB74D"
+        android:lineSpacingExtra="4dp"
+        android:layout_marginBottom="32dp"/>
+
+    <!-- Buttons -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center">
+
+        <TextView
+            android:id="@+id/btnDecline"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="Keep Local Only"
+            android:textSize="16sp"
+            android:textColor="@android:color/white"
+            android:background="@drawable/button_background"
+            android:gravity="center"
+            android:layout_marginEnd="12dp"
+            android:focusable="true"
+            android:clickable="true"/>
+
+        <TextView
+            android:id="@+id/btnEnableSync"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="Enable Cloud Sync ☁️"
+            android:textSize="16sp"
+            android:textColor="@android:color/black"
+            android:background="@drawable/button_primary_background"
+            android:gravity="center"
+            android:focusable="true"
+            android:clickable="true"/>
+
+    </LinearLayout>
+
+</LinearLayout>

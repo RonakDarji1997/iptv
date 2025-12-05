@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.app.AlertDialog
 import android.util.Log
 import android.view.KeyEvent
 import android.view.LayoutInflater
@@ -22,7 +23,10 @@ import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import com.ronika.iptvnative.database.AppDatabase
 import com.ronika.iptvnative.database.entities.CategoryEntity
+import com.ronika.iptvnative.database.entities.ChannelEntity
 import com.ronika.iptvnative.database.entities.ProviderEntity
+import com.ronika.iptvnative.models.Movie
+import com.ronika.iptvnative.sync.IPTVSyncService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
@@ -32,6 +36,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.UUID
 
 /**
@@ -51,6 +57,7 @@ class PortalSetupActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "PortalSetup"
+        private const val REQUEST_CODE_CLOUD_AUTH = 1001
         
         // Portal types
         const val PORTAL_TYPE_M3U = "m3u"
@@ -230,9 +237,31 @@ class PortalSetupActivity : ComponentActivity() {
             return
         }
         
+        // Check if coming from cloud sync (after login)
+        val fromCloudSync = intent.getBooleanExtra("from_cloud_sync", false)
+        val cloudProviderId = intent.getStringExtra("provider_id")
+        
+        if (fromCloudSync && cloudProviderId != null) {
+            // Direct to category selection for provider from cloud
+            lifecycleScope.launch {
+                val provider = withContext(Dispatchers.IO) {
+                    providerDao.getProviderById(cloudProviderId)
+                }
+                
+                if (provider != null) {
+                    currentProviderId = provider.id
+                    Log.d(TAG, "Cloud sync: Showing category selection for ${provider.name}")
+                    showCategorySelectionForm(provider)
+                } else {
+                    Toast.makeText(this@PortalSetupActivity, "Provider not found", Toast.LENGTH_SHORT).show()
+                    finish()
+                }
+            }
+            return
+        }
+        
         // Check if coming from settings to edit categories
         val editCategories = intent.getBooleanExtra("edit_categories", false)
-        val fromSettings = intent.getBooleanExtra("from_settings", false)
         val editProviderId = intent.getStringExtra("provider_id")
         
         if (editCategories && editProviderId != null) {
@@ -444,6 +473,8 @@ class PortalSetupActivity : ComponentActivity() {
                 runOnUiThread {
                     loadingView.visibility = View.GONE
                     btnNext.isEnabled = true
+                    btnNext.isFocusable = true
+                    Log.d(TAG, "✅ Categories loaded, Next button enabled and focusable")
                     
                     // Update count labels with deselected info
                     if (deselectedLive > 0) {
@@ -488,6 +519,7 @@ class PortalSetupActivity : ComponentActivity() {
         
         // Next button click
         btnNext.setOnClickListener {
+            Log.d(TAG, "🔘 Next button clicked in category selection!")
             // Collect selected categories and save
             val selectedLive = liveTvCategories.filter { it.isSelected }.map { it.id }
             val selectedMovies = movieCategories.filter { it.isSelected }.map { it.id }
@@ -615,6 +647,9 @@ class PortalSetupActivity : ComponentActivity() {
                     // isEnabled flag is now stored in CategoryEntity, no need to store comma-separated IDs
                     providerDao.updateSetupStep(provider.id, SETUP_STEP_ADULT_PASS)
                     Log.d(TAG, "✅ Provider setup step updated to ADULT_PASS")
+                    
+                    // VOD content will be fetched later by MainActivity when user first accesses the app
+                    Log.d(TAG, "📝 Categories saved. VOD content will be fetched when app starts.")
                 }
                 
                 runOnUiThread {
@@ -683,6 +718,9 @@ class PortalSetupActivity : ComponentActivity() {
                 }
             }
             
+            // Check if this is the last item in the column
+            val isLastItem = (index == categories.size - 1)
+            
             // Handle D-pad center/enter to toggle
             itemView.setOnKeyListener { v, keyCode, event ->
                 if (event.action == KeyEvent.ACTION_DOWN) {
@@ -701,6 +739,17 @@ class PortalSetupActivity : ComponentActivity() {
                             // Move to next column
                             moveToColumn(columnType, 1, index)
                             true
+                        }
+                        KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            // If last item in column, move to Select All button (first button)
+                            if (isLastItem) {
+                                val btnSelectAll = findViewById<Button>(R.id.btn_select_all)
+                                btnSelectAll?.requestFocus()
+                                Log.d(TAG, "📍 DOWN key from last category - moving to Select All button")
+                                true
+                            } else {
+                                false // Allow default behavior
+                            }
                         }
                         else -> false
                     }
@@ -901,6 +950,17 @@ class PortalSetupActivity : ComponentActivity() {
         
         // Update left panel
         updateLeftPanel(R.drawable.ic_add, "Add Playlist", "Select the type of playlist you want to add")
+        
+        // Setup cloud sync button
+        val btnCloudSync = findViewById<Button>(R.id.btnCloudSync)
+        btnCloudSync?.setOnClickListener {
+            Log.d(TAG, "Cloud sync button clicked")
+            val intent = Intent(this, CloudAuthActivity::class.java)
+            intent.putExtra(CloudAuthActivity.EXTRA_IS_NEW_USER, false)
+            intent.putExtra(CloudAuthActivity.EXTRA_UPLOAD_EXISTING, true)
+            intent.putExtra("SHOW_SKIP_OPTION", false) // No skip when accessing from setup page
+            startActivityForResult(intent, REQUEST_CODE_CLOUD_AUTH)
+        }
         
         // Setup option clicks
         val optionM3u = form.findViewById<LinearLayout>(R.id.option_m3u)
@@ -1256,19 +1316,45 @@ class PortalSetupActivity : ComponentActivity() {
                 
                 Log.d(TAG, "Handshake successful, token received")
                 
-                // Step 2: Get profile to verify connection
+                // Step 2: Get profile to verify connection and check for errors
                 val profileResult = authClient.getProfile(token)
                 
                 if (!profileResult.success) {
+                    val errorMessage = profileResult.error ?: "Failed to get profile"
+                    Log.e(TAG, "Profile failed: $errorMessage")
                     runOnUiThread {
-                        Toast.makeText(this@PortalSetupActivity, profileResult.error ?: "Failed to get profile", Toast.LENGTH_LONG).show()
+                        showErrorDialog("Connection Failed", errorMessage)
                         connectButton.isEnabled = true
                         connectButton.text = "Connect"
                     }
                     return@launch
                 }
                 
-                Log.d(TAG, "Profile retrieved successfully")
+                // Check for specific errors in profile response
+                val profile = profileResult.profile
+                if (profile != null) {
+                    val error = profile.optString("error", null)
+                    val errorMessage = profile.optString("msg", null) ?: profile.optString("message", null)
+                    
+                    if (!error.isNullOrEmpty() || !errorMessage.isNullOrEmpty()) {
+                        val fullError = buildString {
+                            if (!error.isNullOrEmpty()) append(error)
+                            if (!errorMessage.isNullOrEmpty()) {
+                                if (isNotEmpty()) append(": ")
+                                append(errorMessage)
+                            }
+                        }
+                        Log.e(TAG, "Profile contains error: $fullError")
+                        runOnUiThread {
+                            showErrorDialog("Portal Error", fullError.ifEmpty { "Unknown error from portal" })
+                            connectButton.isEnabled = true
+                            connectButton.text = "Connect"
+                        }
+                        return@launch
+                    }
+                }
+                
+                Log.d(TAG, "Profile retrieved successfully - no errors detected")
                 
                 // Save configuration with token and RESOLVED URL
                 saveStalkerConfig(
@@ -1303,19 +1389,72 @@ class PortalSetupActivity : ComponentActivity() {
     }
     
     private fun saveM3uConfig(url: String) {
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().apply {
-            putString(KEY_PORTAL_TYPE, PORTAL_TYPE_M3U)
-            putString(KEY_PORTAL_URL, url)
-            putBoolean(KEY_IS_CONFIGURED, true)
-            apply()
+        Log.d(TAG, "📥 Downloading M3U playlist from: $url")
+        Toast.makeText(this, "Downloading playlist...", Toast.LENGTH_SHORT).show()
+        
+        lifecycleScope.launch {
+            try {
+                // Download M3U content
+                val m3uContent = withContext(Dispatchers.IO) {
+                    val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                    connection.connectTimeout = 15000
+                    connection.readTimeout = 15000
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                }
+                
+                Log.d(TAG, "✅ Downloaded ${m3uContent.length} bytes")
+                
+                // Parse M3U
+                val channels = M3uParser.parse(m3uContent)
+                
+                if (channels.isEmpty()) {
+                    runOnUiThread {
+                        Toast.makeText(this@PortalSetupActivity, "No channels found in playlist", Toast.LENGTH_LONG).show()
+                    }
+                    return@launch
+                }
+                
+                Log.d(TAG, "📺 Parsed ${channels.size} channels")
+                
+                // Create provider
+                val provider = ProviderEntity(
+                    id = UUID.randomUUID().toString(),
+                    name = "M3U Playlist",
+                    type = PORTAL_TYPE_M3U,
+                    serverUrl = url,
+                    setupStep = SETUP_STEP_CATEGORIES,
+                    isActive = true,
+                    includeTv = true,
+                    includeVod = true
+                )
+                
+                withContext(Dispatchers.IO) {
+                    providerDao.insertProvider(provider)
+                }
+                
+                currentProviderId = provider.id
+                
+                Log.d(TAG, "✅ Provider created: ${provider.id}")
+                
+                // Sync to cloud backend
+                try {
+                    val syncService = com.ronika.iptvnative.sync.IPTVSyncService(this@PortalSetupActivity)
+                    syncService.syncProvider(provider)
+                    Log.d(TAG, "☁️ M3U Provider synced to cloud")
+                } catch (e: Exception) {
+                    Log.e(TAG, "⚠️ Cloud sync failed (continuing anyway)", e)
+                }
+                
+                // Process categories and channels
+                showCategorySelectionFromM3u(provider, channels)
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to download/parse M3U", e)
+                runOnUiThread {
+                    Toast.makeText(this@PortalSetupActivity, "Failed to load playlist: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
         }
-        
-        Log.d(TAG, "M3U config saved: $url")
-        Toast.makeText(this, "M3U playlist configured!", Toast.LENGTH_SHORT).show()
-        
-        // Navigate to main app
-        navigateToMain()
     }
     
     private fun saveXtreamConfig(server: String, username: String, password: String, includeTv: Boolean, includeVod: Boolean) {
@@ -1396,6 +1535,15 @@ class PortalSetupActivity : ComponentActivity() {
             
             Log.d(TAG, "Stalker Step 1 complete: $server with MAC $macAddress, token: $token")
             
+            // Sync to cloud backend
+            try {
+                val syncService = com.ronika.iptvnative.sync.IPTVSyncService(this@PortalSetupActivity)
+                syncService.syncProvider(provider)
+                Log.d(TAG, "☁️ Provider synced to cloud")
+            } catch (e: Exception) {
+                Log.e(TAG, "⚠️ Cloud sync failed (continuing anyway)", e)
+            }
+            
             runOnUiThread {
                 Toast.makeText(this@PortalSetupActivity, "Connected! Step 1 of 3 complete.", Toast.LENGTH_SHORT).show()
                 // Go to step 2 - category selection
@@ -1404,11 +1552,272 @@ class PortalSetupActivity : ComponentActivity() {
         }
     }
     
+    private suspend fun showCategorySelectionFromM3u(provider: ProviderEntity, channels: List<M3uChannel>) {
+        Log.d(TAG, "🎬 Converting M3U channels to categories for provider: ${provider.id}")
+        
+        // Classify channels
+        val (liveChannels, movieChannels, seriesChannels) = M3uParser.classifyChannels(channels)
+        
+        // Group by category
+        val liveGroups = M3uParser.groupByCategory(liveChannels)
+        val movieGroups = M3uParser.groupByCategory(movieChannels)
+        val seriesGroups = M3uParser.groupByCategory(seriesChannels)
+        
+        val liveCategories = mutableListOf<CategoryEntity>()
+        val movieCategories = mutableListOf<CategoryEntity>()
+        val seriesCategories = mutableListOf<CategoryEntity>()
+        
+        // Convert live channels to categories
+        liveGroups.forEach { (groupName, channelList) ->
+            liveCategories.add(
+                CategoryEntity(
+                    id = UUID.randomUUID().toString(),
+                    externalId = groupName.hashCode().toString(),
+                    name = groupName,
+                    providerId = provider.id,
+                    contentType = "live",
+                    type = "LIVE",
+                    censored = 0
+                )
+            )
+        }
+        
+        // Convert movie channels to categories
+        movieGroups.forEach { (groupName, channelList) ->
+            movieCategories.add(
+                CategoryEntity(
+                    id = UUID.randomUUID().toString(),
+                    externalId = groupName.hashCode().toString(),
+                    name = groupName,
+                    providerId = provider.id,
+                    contentType = "movie",
+                    type = "MOVIE",
+                    censored = 0
+                )
+            )
+        }
+        
+        // Convert series channels to categories
+        seriesGroups.forEach { (groupName, channelList) ->
+            seriesCategories.add(
+                CategoryEntity(
+                    id = UUID.randomUUID().toString(),
+                    externalId = groupName.hashCode().toString(),
+                    name = groupName,
+                    providerId = provider.id,
+                    contentType = "series",
+                    type = "SERIES",
+                    censored = 0
+                )
+            )
+        }
+        
+        Log.d(TAG, "📊 Created categories: Live=${liveCategories.size}, Movies=${movieCategories.size}, Series=${seriesCategories.size}")
+        
+        // Save categories and channels to database
+        withContext(Dispatchers.IO) {
+            val categoryDao = database.categoryDao()
+            val channelDao = database.channelDao()
+            
+            // Save and process live channels
+            liveGroups.forEach { (groupName, channelList) ->
+                val category = liveCategories.find { it.name == groupName } ?: return@forEach
+                categoryDao.insert(category)
+                
+                channelList.forEachIndexed { index, channel ->
+                    val channelEntity = ChannelEntity(
+                        id = UUID.randomUUID().toString(),
+                        externalId = channel.tvgId.ifEmpty { "${channel.name.hashCode()}_${index}" },
+                        name = channel.name,
+                        number = (index + 1).toString(),
+                        categoryId = category.id,
+                        categoryName = category.name,
+                        cmd = channel.url,
+                        logo = channel.tvgLogo.ifEmpty { null },
+                        providerId = provider.id,
+                        isActive = true
+                    )
+                    channelDao.insert(channelEntity)
+                }
+            }
+            
+            // Save and process movie channels
+            movieGroups.forEach { (groupName, channelList) ->
+                val category = movieCategories.find { it.name == groupName } ?: return@forEach
+                categoryDao.insert(category)
+                
+                channelList.forEachIndexed { index, channel ->
+                    val channelEntity = ChannelEntity(
+                        id = UUID.randomUUID().toString(),
+                        externalId = channel.tvgId.ifEmpty { "${channel.name.hashCode()}_${index}" },
+                        name = channel.name,
+                        number = (index + 1).toString(),
+                        categoryId = category.id,
+                        categoryName = category.name,
+                        cmd = channel.url,
+                        logo = channel.tvgLogo.ifEmpty { null },
+                        providerId = provider.id,
+                        isActive = true
+                    )
+                    channelDao.insert(channelEntity)
+                }
+            }
+            
+            // Save and process series channels
+            seriesGroups.forEach { (groupName, channelList) ->
+                val category = seriesCategories.find { it.name == groupName } ?: return@forEach
+                categoryDao.insert(category)
+                
+                channelList.forEachIndexed { index, channel ->
+                    val channelEntity = ChannelEntity(
+                        id = UUID.randomUUID().toString(),
+                        externalId = channel.tvgId.ifEmpty { "${channel.name.hashCode()}_${index}" },
+                        name = channel.name,
+                        number = (index + 1).toString(),
+                        categoryId = category.id,
+                        categoryName = category.name,
+                        cmd = channel.url,
+                        logo = channel.tvgLogo.ifEmpty { null },
+                        providerId = provider.id,
+                        isActive = true
+                    )
+                    channelDao.insert(channelEntity)
+                }
+            }
+        }
+        
+        Log.d(TAG, "✅ Saved ${channels.size} channels to database")
+        
+        // Mark provider as configured and active
+        withContext(Dispatchers.IO) {
+            val updatedProvider = provider.copy(
+                isConfigured = true,
+                isActive = true,
+                setupStep = 4 // Complete
+            )
+            providerDao.updateProvider(updatedProvider)
+            Log.d(TAG, "✅ Provider marked as configured")
+        }
+        
+        // M3U setup complete - navigate to main
+        withContext(Dispatchers.Main) {
+            Toast.makeText(this@PortalSetupActivity, "M3U playlist loaded successfully!", Toast.LENGTH_SHORT).show()
+            navigateToMain()
+        }
+    }
+    
+    private fun showErrorDialog(title: String, message: String) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton("OK") { dialog, _ ->
+                dialog.dismiss()
+            }
+            .setCancelable(true)
+            .show()
+    }
+    
     private fun navigateToMain() {
         val intent = Intent(this, MainActivity::class.java)
         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         startActivity(intent)
         finish()
+    }
+    
+    /**
+     * Check if user is setting up first provider and show cloud auth option
+     */
+    private fun checkAndShowCloudAuthForNewUser() {
+        lifecycleScope.launch {
+            try {
+                val providers = withContext(Dispatchers.IO) {
+                    providerDao.getAllProvidersList()
+                }
+                
+                val syncPrefs = getSharedPreferences("iptv_sync_prefs", MODE_PRIVATE)
+                val cloudSyncConfigured = syncPrefs.getBoolean("cloud_sync_configured", false)
+                
+                // If no providers and cloud sync not configured, show option
+                if (providers.isEmpty() && !cloudSyncConfigured) {
+                    withContext(Dispatchers.Main) {
+                        showCloudAuthOptionDialog()
+                    }
+                } else {
+                    // Just show type selection
+                    showSelectTypeForm()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error checking cloud auth", e)
+                showSelectTypeForm()
+            }
+        }
+    }
+    
+    /**
+     * Show dialog asking new user if they want to use cloud sync
+     */
+    private fun showCloudAuthOptionDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("☁️ Cloud Sync")
+            .setMessage("""
+                Would you like to enable cloud sync?
+                
+                ✅ Benefits:
+                • Access providers on multiple devices
+                • Automatic backup of configuration
+                • Settings synced everywhere
+                
+                You can set this up now or skip and enable it later.
+            """.trimIndent())
+            .setPositiveButton("Setup Cloud Sync") { dialog, _ ->
+                dialog.dismiss()
+                val intent = Intent(this@PortalSetupActivity, CloudAuthActivity::class.java)
+                intent.putExtra(CloudAuthActivity.EXTRA_IS_NEW_USER, true)
+                intent.putExtra(CloudAuthActivity.EXTRA_UPLOAD_EXISTING, false)
+                startActivityForResult(intent, REQUEST_CODE_CLOUD_AUTH)
+            }
+            .setNegativeButton("Skip") { dialog, _ ->
+                dialog.dismiss()
+                val syncPrefs = getSharedPreferences("iptv_sync_prefs", MODE_PRIVATE)
+                syncPrefs.edit().putBoolean("cloud_sync_configured", true).apply()
+                showSelectTypeForm()
+            }
+            .setCancelable(false)
+            .show()
+    }
+    
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        
+        if (requestCode == REQUEST_CODE_CLOUD_AUTH) {
+            val syncPrefs = getSharedPreferences("iptv_sync_prefs", MODE_PRIVATE)
+            syncPrefs.edit().putBoolean("cloud_sync_configured", true).apply()
+            
+            if (resultCode == RESULT_OK) {
+                // Cloud sync enabled, check if data was pulled
+                lifecycleScope.launch {
+                    val providers = withContext(Dispatchers.IO) {
+                        providerDao.getAllProvidersList()
+                    }
+                    
+                    if (providers.isNotEmpty()) {
+                        // Data was restored from cloud, finish setup
+                        Toast.makeText(
+                            this@PortalSetupActivity,
+                            "✅ Providers restored from cloud!",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        finish()
+                    } else {
+                        // No data in cloud, continue with setup
+                        showSelectTypeForm()
+                    }
+                }
+            } else {
+                // User cancelled or error, continue with setup
+                showSelectTypeForm()
+            }
+        }
     }
     
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {

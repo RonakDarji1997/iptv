@@ -1,0 +1,32 @@
+{
+  "name": "iptv-sync-backend",
+  "version": "1.0.0",
+  "description": "Multi-device IPTV sync backend with device and concurrent stream management",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=@iptv-sync/api",
+    "build": "npm run build --workspaces",
+    "start": "npm run start --workspace=@iptv-sync/api",
+    "db:migrate": "npm run migrate --workspace=@iptv-sync/database",
+    "db:seed": "npm run seed --workspace=@iptv-sync/database",
+    "test": "npm test --workspaces",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "keywords": [
+    "iptv",
+    "sync",
+    "multi-device",
+    "streaming"
+  ],
+  "author": "Ronika",
+  "license": "MIT"
+}
