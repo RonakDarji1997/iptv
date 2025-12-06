@@ -6,8 +6,6 @@ WORKDIR /app
 COPY package*.json ./
 COPY packages/api/package*.json ./packages/api/
 COPY packages/database/package*.json ./packages/database/
-COPY packages/shared/package*.json ./packages/shared/
-COPY packages/types/package*.json ./packages/types/
 
 # Install dependencies
 RUN npm ci
@@ -27,16 +25,12 @@ WORKDIR /app
 COPY package*.json ./
 COPY packages/api/package*.json ./packages/api/
 COPY packages/database/package*.json ./packages/database/
-COPY packages/shared/package*.json ./packages/shared/
-COPY packages/types/package*.json ./packages/types/
 
 RUN npm ci --omit=dev
 
 # Copy built files from builder
 COPY --from=builder /app/packages/api/dist ./packages/api/dist
 COPY --from=builder /app/packages/database/dist ./packages/database/dist
-COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
-COPY --from=builder /app/packages/types/dist ./packages/types/dist
 
 # Copy database migrations
 COPY --from=builder /app/packages/database/migrations ./packages/database/migrations
