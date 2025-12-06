@@ -40,8 +40,13 @@ export default function SeriesScreen({ navigation }: any) {
   const [portalUrl, setPortalUrl] = useState<string>('');
 
   useEffect(() => {
-    initStalkerClient();
-    loadCategories();
+    const init = async () => {
+      const client = await initStalkerClient();
+      if (client) {
+        await loadCategories(client);
+      }
+    };
+    init();
     
     // Allow time for sync to complete before showing empty state
     const syncTimer = setTimeout(() => {
@@ -56,7 +61,7 @@ export default function SeriesScreen({ navigation }: any) {
       const providerData = await AsyncStorage.getItem('stalker_provider_config');
       if (!providerData) {
         console.error('❌ No provider config found');
-        return;
+        return null;
       }
       
       const provider = JSON.parse(providerData);
@@ -79,30 +84,45 @@ export default function SeriesScreen({ navigation }: any) {
       
       setPortalUrl(provider.portalUrl);
       setStalkerClient(client);
+      return client;
     } catch (error) {
       console.error('❌ Failed to init Stalker client:', error);
+      return null;
     }
   };
 
-  const loadCategories = async () => {
+  const loadCategories = async (client?: StalkerPortalClient | null) => {
     try {
       setCategoriesLoading(true);
       const cats = await CategoryRepository.getSeriesCategories();
       setCategories(cats);
+      setCategoriesLoading(false); // Show categories immediately
+      
+      // Load series previews progressively for all categories (like LiveTV)
+      const activeClient = client || stalkerClient;
+      if (activeClient) {
+        for (const cat of cats) {
+          try {
+            await loadCategorySeries(cat, activeClient);
+          } catch (error) {
+            console.error(`❌ Error loading ${cat.name}:`, error);
+          }
+        }
+      }
     } catch (err) {
       console.error('Error loading series categories:', err);
-    } finally {
       setCategoriesLoading(false);
     }
   };
 
-  const loadCategorySeries = async (category: Category) => {
-    if (!stalkerClient || categorySeries[category.id]) return;
+  const loadCategorySeries = async (category: Category, client?: StalkerPortalClient | null) => {
+    const activeClient = client || stalkerClient;
+    if (!activeClient || categorySeries[category.id]) return;
     
     try {
       console.log(`📡 Loading series for category: ${category.name}`);
       
-      const response = await stalkerClient.getVodItemsByCategory(category.id, 1);
+      const response = await activeClient.getVodItemsByCategory(category.id, 1);
       const limitedSeries = (response.items || []).slice(0, MAX_THUMBNAILS);
       
       setCategorySeries(prev => ({
@@ -252,28 +272,9 @@ export default function SeriesScreen({ navigation }: any) {
   };
 
   const SeriesThumbnail = React.memo(({ item }: { item: StalkerVodItem }) => {
-    const [imageUrl, setImageUrl] = React.useState<string>(FALLBACK_IMAGE);
-    const [hasError, setHasError] = React.useState<boolean>(false);
-
-    React.useEffect(() => {
-      let mounted = true;
-      setHasError(false);
-      
-      getImageUrl(item)
-        .then((url) => {
-          if (mounted && url !== FALLBACK_IMAGE) {
-            setImageUrl(url);
-          }
-        })
-        .catch(() => {
-          if (mounted) {
-            console.error('❌ Failed to get image URL for', item.name);
-            setHasError(true);
-          }
-        });
-      
-      return () => { mounted = false; };
-    }, [item.id]);
+    const imageUrl = item.screenshot_uri 
+      ? `${portalUrl}${item.screenshot_uri}` 
+      : FALLBACK_IMAGE;
 
     return (
       <TouchableOpacity
@@ -282,14 +283,10 @@ export default function SeriesScreen({ navigation }: any) {
         activeOpacity={0.7}
       >
         <Image
-          source={{ uri: hasError ? FALLBACK_IMAGE : imageUrl }}
+          source={{ uri: imageUrl }}
           style={styles.thumbnailImage}
           resizeMode="cover"
-          onError={() => {
-            if (!hasError) {
-              setHasError(true);
-            }
-          }}
+          defaultSource={require('../../assets/icon.png')}
         />
         <Text style={styles.thumbnailTitle} numberOfLines={2}>
           {item.name || 'Untitled'}
@@ -303,27 +300,9 @@ export default function SeriesScreen({ navigation }: any) {
   };
 
   const SeriesCard = React.memo(({ item }: { item: StalkerVodItem }) => {
-    const [imageUrl, setImageUrl] = React.useState<string>(FALLBACK_IMAGE);
-    const [hasError, setHasError] = React.useState<boolean>(false);
-
-    React.useEffect(() => {
-      let mounted = true;
-      setHasError(false);
-      
-      getImageUrl(item)
-        .then((url) => {
-          if (mounted && url !== FALLBACK_IMAGE) {
-            setImageUrl(url);
-          }
-        })
-        .catch(() => {
-          if (mounted) {
-            setHasError(true);
-          }
-        });
-      
-      return () => { mounted = false; };
-    }, [item.id]);
+    const imageUrl = item.screenshot_uri 
+      ? `${portalUrl}${item.screenshot_uri}` 
+      : FALLBACK_IMAGE;
 
     return (
       <TouchableOpacity
@@ -332,14 +311,10 @@ export default function SeriesScreen({ navigation }: any) {
         activeOpacity={0.7}
       >
         <Image
-          source={{ uri: hasError ? FALLBACK_IMAGE : imageUrl }}
+          source={{ uri: imageUrl }}
           style={styles.seriesImage}
           resizeMode="cover"
-          onError={() => {
-            if (!hasError) {
-              setHasError(true);
-            }
-          }}
+          defaultSource={require('../../assets/icon.png')}
         />
         <View style={styles.seriesInfo}>
           <Text style={styles.seriesTitle} numberOfLines={2}>
@@ -412,19 +387,6 @@ export default function SeriesScreen({ navigation }: any) {
         renderItem={renderCategoryRow}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.categoryList}
-        onViewableItemsChanged={({ viewableItems }) => {
-          // Load series for categories as they become visible - in parallel batches
-          const categoriesToLoad = viewableItems
-            .map(({ item }) => item)
-            .filter(item => !categorySeries[item.id]);
-          
-          if (categoriesToLoad.length > 0) {
-            loadMultipleCategoriesInParallel(categoriesToLoad);
-          }
-        }}
-        viewabilityConfig={{
-          itemVisiblePercentThreshold: 50
-        }}
       />
     </View>
   );
