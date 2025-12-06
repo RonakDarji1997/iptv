@@ -9,7 +9,7 @@ export const createAuthRouter = (pool: Pool) => {
   
   router.post('/register', async (req: Request, res: Response) => {
     try {
-      const { email, password, deviceId, deviceName, deviceModel } = req.body;
+      const { email, password, deviceId, deviceName } = req.body;
       
       if (!email || !password) {
         return res.status(400).json({ 
@@ -62,12 +62,12 @@ export const createAuthRouter = (pool: Pool) => {
         let device;
         if (deviceId) {
           const deviceResult = await client.query(
-            `INSERT INTO devices (device_id, user_id, device_name, device_model, device_type, platform, last_active)
-             VALUES ($1, $2, $3, $4, 'TV', 'Android', NOW())
+            `INSERT INTO devices (device_id, user_id, device_name, device_type, platform, last_active)
+             VALUES ($1, $2, $3, 'TV', 'Android', NOW())
              ON CONFLICT (user_id, device_id) 
-             DO UPDATE SET last_active = NOW(), device_name = EXCLUDED.device_name, device_model = EXCLUDED.device_model
+             DO UPDATE SET last_active = NOW(), device_name = EXCLUDED.device_name
              RETURNING *`,
-            [deviceId, userId, deviceName || 'Android TV', deviceModel || 'Unknown']
+            [deviceId, userId, deviceName || 'Android TV']
           );
           device = deviceResult.rows[0];
         }
