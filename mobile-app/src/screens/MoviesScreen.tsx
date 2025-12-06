@@ -215,23 +215,11 @@ export default function MoviesScreen({ navigation }: any) {
 
   const getImageUrl = async (item: StalkerVodItem): Promise<string> => {
     if (!item.screenshot_uri) {
-      console.log('⚠️ No screenshot_uri for:', item.name);
       return FALLBACK_IMAGE;
     }
     
-    try {
-      if (stalkerClient) {
-        const proxiedUrl = await stalkerClient.getProxiedImageUrl(item.screenshot_uri);
-        console.log('🖼️ Image URL for', item.name?.substring(0, 30), ':', proxiedUrl.substring(0, 80));
-        return proxiedUrl;
-      }
-    } catch (error) {
-      console.error('❌ Error getting proxied image:', error);
-    }
-    
-    // Fallback to direct URL
+    // Use direct URL (same as LiveTV) - simpler and more reliable
     const directUrl = `${portalUrl}${item.screenshot_uri}`;
-    console.log('🖼️ Direct image URL:', directUrl.substring(0, 80));
     return directUrl;
   };
 
