@@ -5,10 +5,16 @@ WORKDIR /app
 # Install system dependencies
 RUN apk add --no-cache python3 py3-pip ffmpeg
 
+# Copy Python requirements
+COPY requirements.txt ./
+
+# Install Python dependencies
+RUN pip3 install --no-cache-dir -r requirements.txt
+
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
+# Install Node dependencies
 RUN npm ci --only=production
 
 # Copy application files
