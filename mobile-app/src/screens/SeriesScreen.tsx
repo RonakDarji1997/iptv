@@ -61,7 +61,9 @@ export default function SeriesScreen({ navigation }: any) {
       
       const provider = JSON.parse(providerData);
       // Use backend URL from constants (remove /api suffix for StalkerPortalClient)
-      const backendBaseUrl = API_CONFIG.BACKEND_URL.replace('/api', '');
+      const backendBaseUrl = API_CONFIG.BACKEND_URL.endsWith('/api') 
+        ? API_CONFIG.BACKEND_URL.slice(0, -4) 
+        : API_CONFIG.BACKEND_URL;
       console.log('🔧 SeriesScreen using backend URL:', backendBaseUrl);
       
       const client = new StalkerPortalClient(
