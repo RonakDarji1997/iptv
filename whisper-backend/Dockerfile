@@ -3,13 +3,7 @@ FROM node:18-alpine
 WORKDIR /app
 
 # Install system dependencies
-RUN apk add --no-cache python3 py3-pip ffmpeg
-
-# Copy Python requirements
-COPY requirements.txt ./
-
-# Install Python dependencies
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN apk add --no-cache ffmpeg
 
 # Copy package files
 COPY package*.json ./

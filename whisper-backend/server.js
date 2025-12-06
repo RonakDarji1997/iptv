@@ -192,6 +192,8 @@ app.listen(PORT, () => {
   console.log('='.repeat(60));
   console.log('');
   
-  // Start Python service
-  startPythonService();
+  // TODO: Start Python service when Python dependencies are available
+  // startPythonService();
+  console.log('⚠️  Running in API-only mode (Python Whisper service disabled)');
+  console.log('💡 Subtitle transcription endpoints will return placeholder responses');
 });
