@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Subtitle Generator Test</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+    }
+    .container {
+      background: #f5f5f5;
+      padding: 20px;
+      border-radius: 8px;
+    }
+    input {
+      width: 100%;
+      padding: 10px;
+      margin: 10px 0;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    button {
+      background: #007bff;
+      color: white;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-right: 10px;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .progress {
+      width: 100%;
+      height: 30px;
+      background: #e0e0e0;
+      border-radius: 4px;
+      margin: 20px 0;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      background: #28a745;
+      transition: width 0.3s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: bold;
+    }
+    .status {
+      margin: 10px 0;
+      padding: 10px;
+      background: #fff;
+      border-left: 4px solid #007bff;
+    }
+    .subtitle {
+      margin: 5px 0;
+      padding: 8px;
+      background: #fff;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .subtitle-time {
+      color: #666;
+      font-size: 12px;
+    }
+    .log {
+      max-height: 300px;
+      overflow-y: auto;
+      background: #2d2d2d;
+      color: #00ff00;
+      padding: 10px;
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎬 Real-Time Subtitle Generator Test</h1>
+    
+    <div>
+      <label>Stream URL:</label>
+      <input type="text" id="streamUrl" 
+             placeholder="http://example.com/stream.m3u8"
+             value="http://192.168.2.69:3000/api/stream/some-channel">
+    </div>
+    
+    <div>
+      <label>Video ID:</label>
+      <input type="text" id="videoId" 
+             placeholder="unique-video-id"
+             value="test-123">
+    </div>
+    
+    <div>
+      <label>Model:</label>
+      <select id="model">
+        <option value="tiny" selected>Tiny (Fastest)</option>
+        <option value="base">Base (Balanced)</option>
+        <option value="small">Small (Better)</option>
+      </select>
+      
+      <label>Language:</label>
+      <select id="language">
+        <option value="auto" selected>Auto-detect</option>
+        <option value="en">English</option>
+        <option value="es">Spanish</option>
+        <option value="fr">French</option>
+      </select>
+    </div>
+    
+    <div style="margin-top: 20px;">
+      <button onclick="startGeneration()" id="startBtn">Start Generation</button>
+      <button onclick="cancelGeneration()" id="cancelBtn" disabled>Cancel</button>
+      <button onclick="clearResults()">Clear Results</button>
+    </div>
+    
+    <div class="progress" style="display: none;" id="progressBar">
+      <div class="progress-bar" id="progressFill">0%</div>
+    </div>
+    
+    <div class="status" id="status" style="display: none;"></div>
+    
+    <h3>Subtitles:</h3>
+    <div id="subtitles"></div>
+    
+    <h3>Console Log:</h3>
+    <div class="log" id="log"></div>
+  </div>
+
+  <script>
+    let eventSource = null;
+    const BACKEND_URL = 'http://localhost:8765';
+    
+    function log(message, type = 'info') {
+      const logDiv = document.getElementById('log');
+      const time = new Date().toLocaleTimeString();
+      const color = type === 'error' ? '#ff0000' : '#00ff00';
+      logDiv.innerHTML += `<div style="color: ${color}">[${time}] ${message}</div>`;
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+    
+    function updateProgress(percent, message) {
+      const progressBar = document.getElementById('progressBar');
+      const progressFill = document.getElementById('progressFill');
+      progressBar.style.display = 'block';
+      progressFill.style.width = percent + '%';
+      progressFill.textContent = `${percent}% - ${message}`;
+    }
+    
+    function updateStatus(message) {
+      const status = document.getElementById('status');
+      status.style.display = 'block';
+      status.textContent = message;
+    }
+    
+    function addSubtitle(subtitle) {
+      const container = document.getElementById('subtitles');
+      const div = document.createElement('div');
+      div.className = 'subtitle';
+      div.innerHTML = `
+        <div class="subtitle-time">
+          ${formatTime(subtitle.startTime)} → ${formatTime(subtitle.endTime)}
+        </div>
+        <div>${subtitle.text}</div>
+      `;
+      container.appendChild(div);
+      container.scrollTop = container.scrollHeight;
+    }
+    
+    function formatTime(seconds) {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      const ms = Math.floor((seconds % 1) * 1000);
+      return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
+    }
+    
+    async function startGeneration() {
+      const streamUrl = document.getElementById('streamUrl').value;
+      const videoId = document.getElementById('videoId').value;
+      const model = document.getElementById('model').value;
+      const language = document.getElementById('language').value;
+      
+      if (!streamUrl || !videoId) {
+        alert('Please enter stream URL and video ID');
+        return;
+      }
+      
+      document.getElementById('startBtn').disabled = true;
+      document.getElementById('cancelBtn').disabled = false;
+      
+      const url = `${BACKEND_URL}/api/subtitles/generate-stream?` + 
+                  `streamUrl=${encodeURIComponent(streamUrl)}` +
+                  `&videoId=${encodeURIComponent(videoId)}` +
+                  `&model=${model}` +
+                  `&language=${language}`;
+      
+      log(`Starting generation for ${videoId}...`);
+      log(`Using model: ${model}, language: ${language}`);
+      
+      eventSource = new EventSource(url);
+      
+      eventSource.addEventListener('message', (event) => {
+        const data = JSON.parse(event.data);
+        
+        switch (data.type) {
+          case 'connected':
+            log(`✓ Connected to server (${data.videoId})`);
+            updateStatus('Connected - Starting generation...');
+            break;
+            
+          case 'progress':
+            log(`Progress: ${data.percent}% (${data.estimatedTime}s remaining)`);
+            updateProgress(data.percent, `${data.estimatedTime}s remaining`);
+            updateStatus(`${data.message} - ${data.processedSeconds}/${data.totalDuration}s processed`);
+            break;
+            
+          case 'subtitle':
+            log(`Subtitle #${data.index}: "${data.text}"`);
+            addSubtitle(data);
+            break;
+            
+          case 'complete':
+            log(`✓ Complete! ${data.totalSubtitles} subtitles in ${data.duration}s`);
+            updateStatus(`Complete! Generated ${data.totalSubtitles} subtitles`);
+            updateProgress(100, 'Complete!');
+            eventSource.close();
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('cancelBtn').disabled = true;
+            break;
+            
+          case 'error':
+            log(`✗ Error: ${data.message}`, 'error');
+            updateStatus(`Error: ${data.message}`);
+            eventSource.close();
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('cancelBtn').disabled = true;
+            break;
+        }
+      });
+      
+      eventSource.addEventListener('error', () => {
+        log('✗ Connection error', 'error');
+        updateStatus('Connection error');
+        eventSource.close();
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('cancelBtn').disabled = true;
+      });
+    }
+    
+    async function cancelGeneration() {
+      const videoId = document.getElementById('videoId').value;
+      
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/subtitles/generate/${videoId}`, {
+          method: 'DELETE'
+        });
+        const result = await response.json();
+        log(`✓ Cancelled: ${result.message}`);
+        
+        if (eventSource) {
+          eventSource.close();
+        }
+        
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('cancelBtn').disabled = true;
+      } catch (error) {
+        log(`✗ Cancel failed: ${error.message}`, 'error');
+      }
+    }
+    
+    function clearResults() {
+      document.getElementById('subtitles').innerHTML = '';
+      document.getElementById('log').innerHTML = '';
+      document.getElementById('progressBar').style.display = 'none';
+      document.getElementById('status').style.display = 'none';
+    }
+    
+    // Check capability on load
+    window.onload = async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/subtitles/capability`);
+        const data = await response.json();
+        log(`Server capability: ${JSON.stringify(data)}`);
+        
+        if (!data.available) {
+          updateStatus(`Server busy - wait ${data.estimatedWaitTime}s`);
+        }
+      } catch (error) {
+        log(`✗ Failed to check capability: ${error.message}`, 'error');
+        updateStatus('Cannot connect to backend');
+      }
+    };
+  </script>
+</body>
+</html>

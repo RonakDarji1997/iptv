@@ -77,11 +77,13 @@ export const createAuthRouter = (pool: Pool) => {
         const jwtSecret = process.env.JWT_SECRET || 'default-secret';
         const refreshSecret = process.env.JWT_REFRESH_SECRET || 'default-refresh-secret';
         
+        console.log(`🔐 Creating token with secret: ${jwtSecret}`);
         const accessToken = jwt.sign(
           { userId, email, deviceId },
           jwtSecret,
           { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
         );
+        console.log(`🎫 Generated token: ${accessToken.substring(0, 50)}...`);
         
         const refreshToken = jwt.sign(
           { userId },

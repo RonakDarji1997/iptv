@@ -9,7 +9,7 @@ export const createSyncRouter = (pool: Pool) => {
   // POST /api/sync/providers - Sync provider data
   router.post('/providers', authMiddleware, async (req: Request, res: Response) => {
     try {
-      const { userId } = (req as any).user;
+      const userId = (req as any).userId; // From auth middleware
       const { 
         provider_id,
         name,
@@ -89,7 +89,7 @@ export const createSyncRouter = (pool: Pool) => {
   // POST /api/sync/categories - Sync categories for a provider
   router.post('/categories', authMiddleware, async (req: Request, res: Response) => {
     try {
-      const { userId } = (req as any).user;
+      const userId = (req as any).userId; // From auth middleware
       const { provider_id, categories } = req.body;
       
       if (!provider_id || !Array.isArray(categories)) {
@@ -165,7 +165,7 @@ export const createSyncRouter = (pool: Pool) => {
   // POST /api/sync/channels - Sync channels for categories
   router.post('/channels', authMiddleware, async (req: Request, res: Response) => {
     try {
-      const { userId } = (req as any).user;
+      const userId = (req as any).userId; // From auth middleware
       const { provider_id, channels } = req.body;
       
       if (!provider_id || !Array.isArray(channels)) {
@@ -254,7 +254,7 @@ export const createSyncRouter = (pool: Pool) => {
   // POST /api/sync/settings - Sync user settings
   router.post('/settings', authMiddleware, async (req: Request, res: Response) => {
     try {
-      const { userId } = (req as any).user;
+      const userId = (req as any).userId; // From auth middleware
       const { settings } = req.body;
       
       if (!settings || typeof settings !== 'object') {
@@ -292,7 +292,7 @@ export const createSyncRouter = (pool: Pool) => {
   // POST /api/sync/progress - Sync watch progress
   router.post('/progress', authMiddleware, async (req: Request, res: Response) => {
     try {
-      const { userId } = (req as any).user;
+      const userId = (req as any).userId; // From auth middleware
       const { 
         contentId, 
         contentType, 
@@ -359,7 +359,7 @@ export const createSyncRouter = (pool: Pool) => {
   // GET /api/sync/pull - Pull all data for user
   router.get('/pull', authMiddleware, async (req: Request, res: Response) => {
     try {
-      const { userId } = (req as any).user;
+      const userId = (req as any).userId; // From auth middleware
 
       const client = await pool.connect();
       

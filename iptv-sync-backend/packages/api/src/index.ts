@@ -43,13 +43,16 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'),
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'),
-  message: 'Too many requests from this IP, please try again later.',
-});
-app.use('/api/', limiter);
+// Rate limiting - DISABLED for fast rendering
+// const limiter = rateLimit({
+//   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000'),
+//   max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '300'),
+//   message: 'Too many requests from this IP, please try again later.',
+//   standardHeaders: true,
+//   legacyHeaders: false,
+// });
+// app.use('/api/', limiter);
+console.log('⚡ Rate limiting DISABLED for maximum performance');
 
 // Health check
 app.get('/health', async (req: Request, res: Response) => {
@@ -78,12 +81,24 @@ import { createSyncRouter } from './routes/sync';
 import { createDevicesRouter } from './routes/devices';
 import { createStreamRouter } from './routes/stream';
 import { createProgressRouter } from './routes/progress';
+import { createStalkerProxyRouter } from './routes/stalker-proxy';
+import { authMiddleware } from './middleware/auth';
+
+// Conditional auth middleware that skips /image endpoint (uses token in query)
+const conditionalAuth = (req: Request, res: Response, next: NextFunction) => {
+  if (req.path === '/image') {
+    // Skip auth middleware for images - they use token query param
+    return next();
+  }
+  return authMiddleware(req, res, next);
+};
 
 app.use('/api/auth', createAuthRouter(pool));
-app.use('/api/sync', createSyncRouter(pool));
-app.use('/api/devices', createDevicesRouter(pool));
-app.use('/api/stream', createStreamRouter(pool));
-app.use('/api/progress', createProgressRouter(pool));
+app.use('/api/sync', authMiddleware, createSyncRouter(pool));
+app.use('/api/devices', authMiddleware, createDevicesRouter(pool));
+app.use('/api/stream', authMiddleware, createStreamRouter(pool));
+app.use('/api/progress', authMiddleware, createProgressRouter(pool));
+app.use('/api/stalker-proxy', conditionalAuth, createStalkerProxyRouter(pool));
 
 // 404 handler
 app.use((req: Request, res: Response) => {
