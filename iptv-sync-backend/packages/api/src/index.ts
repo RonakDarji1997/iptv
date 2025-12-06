@@ -93,12 +93,12 @@ const conditionalAuth = (req: Request, res: Response, next: NextFunction) => {
   return authMiddleware(req, res, next);
 };
 
-app.use('/api/auth', createAuthRouter(pool));
-app.use('/api/sync', authMiddleware, createSyncRouter(pool));
-app.use('/api/devices', authMiddleware, createDevicesRouter(pool));
-app.use('/api/stream', authMiddleware, createStreamRouter(pool));
-app.use('/api/progress', authMiddleware, createProgressRouter(pool));
-app.use('/api/stalker-proxy', conditionalAuth, createStalkerProxyRouter(pool));
+app.use('/auth', createAuthRouter(pool));
+app.use('/sync', authMiddleware, createSyncRouter(pool));
+app.use('/devices', authMiddleware, createDevicesRouter(pool));
+app.use('/stream', authMiddleware, createStreamRouter(pool));
+app.use('/progress', authMiddleware, createProgressRouter(pool));
+app.use('/stalker-proxy', conditionalAuth, createStalkerProxyRouter(pool));
 
 // 404 handler
 app.use((req: Request, res: Response) => {
