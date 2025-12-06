@@ -81,7 +81,7 @@ export const COLORS = {
 
 // API Configuration
 export const API_CONFIG = {
-  BACKEND_URL: 'http://192.168.2.69:3000/api', // Sync backend URL
+  BACKEND_URL: 'http://api.iptv.ronika.co/api', // Sync backend URL (NAS server)
   TIMEOUT: 30000,
   MAX_RETRIES: 3,
 };

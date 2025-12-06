@@ -44,7 +44,7 @@ export class StalkerPortalClient {
   private bearerToken: string | null = null;
   private backendUrl: string;
 
-  constructor(portalUrl: string, macAddress: string = MAC_ADDRESS, serialNumber: string = SERIAL_NUMBER, backendUrl: string = 'http://192.168.2.69:3000') {
+  constructor(portalUrl: string, macAddress: string = MAC_ADDRESS, serialNumber: string = SERIAL_NUMBER, backendUrl: string = 'http://api.iptv.ronika.co') {
     this.portalUrl = portalUrl.replace(/\/$/, ''); // Remove trailing slash
     this.macAddress = macAddress;
     this.serialNumber = serialNumber;
