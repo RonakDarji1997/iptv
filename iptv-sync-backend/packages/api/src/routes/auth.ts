@@ -3,10 +3,9 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { Pool } from 'pg';
 
-const router = Router();
-
 // POST /api/auth/register - Register or login user
 export const createAuthRouter = (pool: Pool) => {
+  const router = Router();
   
   router.post('/register', async (req: Request, res: Response) => {
     try {

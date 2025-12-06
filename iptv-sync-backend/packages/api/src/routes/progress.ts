@@ -2,9 +2,8 @@ import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { authMiddleware } from '../middleware/auth';
 
-const router = Router();
-
 export const createProgressRouter = (pool: Pool) => {
+  const router = Router();
   
   // GET /api/progress/:contentId - Get watch progress for content
   router.get('/:contentId', authMiddleware, async (req: Request, res: Response) => {

@@ -2,9 +2,8 @@ import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { authMiddleware } from '../middleware/auth';
 
-const router = Router();
-
 export const createDevicesRouter = (pool: Pool) => {
+  const router = Router();
   
   // GET /api/devices/list - Get all user devices
   router.get('/list', authMiddleware, async (req: Request, res: Response) => {

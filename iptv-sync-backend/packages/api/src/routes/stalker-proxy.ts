@@ -2,10 +2,9 @@ import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import axios from 'axios';
 
-const router = Router();
-
 // Stalker Portal Proxy - Forwards requests to Stalker portal with proper headers
 export const createStalkerProxyRouter = (pool: Pool) => {
+  const router = Router();
   
   // GET /api/stalker-proxy/categories - Get live and VOD categories
   router.get('/categories', async (req: Request, res: Response) => {

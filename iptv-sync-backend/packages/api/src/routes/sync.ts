@@ -2,9 +2,8 @@ import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { authMiddleware } from '../middleware/auth';
 
-const router = Router();
-
 export const createSyncRouter = (pool: Pool) => {
+  const router = Router();
   
   // POST /api/sync/providers - Sync provider data
   router.post('/providers', authMiddleware, async (req: Request, res: Response) => {

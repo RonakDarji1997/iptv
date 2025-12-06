@@ -2,9 +2,8 @@ import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { authMiddleware } from '../middleware/auth';
 
-const router = Router();
-
 export const createStreamRouter = (pool: Pool) => {
+  const router = Router();
   
   // POST /api/stream/start - Start streaming session
   router.post('/start', authMiddleware, async (req: Request, res: Response) => {
