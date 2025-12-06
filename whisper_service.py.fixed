@@ -118,28 +118,28 @@ def transcribe_audio():
             language=language if language != 'auto' else None,
             beam_size=5,
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500)
-        )
-        
         # Collect segments
-        text = ''
+        text = ""
         all_segments = []
         for segment in segments:
-            text += segment.text + ' '
+            text += segment.text + " "
             all_segments.append({
-                'start': segment.start,
-                'end': segment.end,
-                'text': segment.text.strip()
+                "start": segment.start,
+                "end": segment.end,
+                "text": segment.text.strip()
             })
         
         # Clean up
         os.remove(temp_path)
         
-        logger.info(f'Transcription result: {text[:50]}...')
+        logger.info(f"Transcription result: {text[:50]}...")
         return jsonify({
-            'text': text.strip(),
-            'segments': all_segments
+            "text": text.strip(),
+            "segments": all_segments
         })
+        
+        logger.info(f'Transcription result: {text[:50]}...')
+        return jsonify({'text': text})
 
     
         

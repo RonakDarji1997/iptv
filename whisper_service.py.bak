@@ -121,25 +121,13 @@ def transcribe_audio():
             vad_parameters=dict(min_silence_duration_ms=500)
         )
         
-        # Collect segments
-        text = ''
-        all_segments = []
-        for segment in segments:
-            text += segment.text + ' '
-            all_segments.append({
-                'start': segment.start,
-                'end': segment.end,
-                'text': segment.text.strip()
-            })
+        text = ' '.join([segment.text for segment in segments])
         
         # Clean up
         os.remove(temp_path)
         
         logger.info(f'Transcription result: {text[:50]}...')
-        return jsonify({
-            'text': text.strip(),
-            'segments': all_segments
-        })
+        return jsonify({'text': text})
 
     
         

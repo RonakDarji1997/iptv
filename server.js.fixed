@@ -29,7 +29,7 @@ const upload = multer({
 });
 
 // Track Python service
-// let pythonProcess = null;
+let pythonProcess = null;
 let pythonServiceReady = false;
 
 // Import subtitle routes
@@ -41,7 +41,7 @@ function startPythonService() {
   console.log('🚀 Connecting to Python Whisper service at localhost:8771...');
   
   // Use fetch to check if Python service is available
-  fetch('http://172.20.0.1:8771/health')
+  fetch('http://localhost:8771/health')
     .then(response => {
       if (response.ok) {
         pythonServiceReady = true;
@@ -55,8 +55,39 @@ function startPythonService() {
       pythonServiceReady = false;
       setTimeout(startPythonService, 5000);
     });
-}
   
+  pythonProcess = spawn('python3', ['whisper_service.py'], {
+    env: { ...process.env, PORT: PYTHON_PORT },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  
+  pythonProcess.stdout.on('data', (data) => {
+    const output = data.toString();
+    console.log(`[Whisper] ${output.trim()}`);
+    
+    // Check if service is ready
+    if (output.includes('Running on') || output.includes('loaded successfully')) {
+      pythonServiceReady = true;
+      console.log('✅ Whisper service is ready!');
+    }
+  });
+  
+  pythonProcess.stderr.on('data', (data) => {
+    console.error(`[Whisper Error] ${data.toString().trim()}`);
+  });
+  
+  pythonProcess.on('close', (code) => {
+    console.log(`⚠️  Python service exited with code ${code}`);
+    pythonServiceReady = false;
+    
+    // Auto-restart on crash
+    if (code !== 0) {
+      console.log('🔄 Restarting Python service in 5 seconds...');
+      setTimeout(startPythonService, 5000);
+    }
+  });
+}
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({
@@ -115,7 +146,7 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
     const form = new formData();
     form.append('file', fs.createReadStream(audioPath));
     
-    const response = await fetch(`http://172.20.0.1:8771/transcribe?language=${language}`, {
+    const response = await fetch(`http://localhost:${PYTHON_PORT}/transcribe?language=${language}`, {
       method: 'POST',
       body: form,
       headers: form.getHeaders()
@@ -152,16 +183,16 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('\n🛑 Shutting down...');
-//   if (pythonProcess) {
-//     pythonProcess.kill();
-//   }
+  if (pythonProcess) {
+    pythonProcess.kill();
+  }
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-//   if (pythonProcess) {
-//     pythonProcess.kill();
-//   }
+  if (pythonProcess) {
+    pythonProcess.kill();
+  }
   process.exit(0);
 });
 
@@ -171,7 +202,7 @@ app.listen(PORT, () => {
   console.log('🎙️  Whisper Subtitle Backend');
   console.log('='.repeat(60));
   console.log(`📡 Node.js API: http://localhost:${PORT}`);
-  console.log(`🐍 Python Whisper: http://172.20.0.1:8771`);
+  console.log(`🐍 Python Whisper: http://localhost:${PYTHON_PORT}`);
   console.log(`🔧 Model: ${process.env.WHISPER_MODEL || 'base'}`);
   console.log(`🌍 Language: ${process.env.WHISPER_LANGUAGE || 'auto'}`);
   console.log('='.repeat(60));
@@ -179,6 +210,6 @@ app.listen(PORT, () => {
   
   // TODO: Start Python service when Python dependencies are available
   startPythonService();
-//   console.log('⚠️  Running in API-only mode (Python Whisper service disabled)');
-//   console.log('💡 Subtitle transcription endpoints will return placeholder responses');
+  console.log('⚠️  Running in API-only mode (Python Whisper service disabled)');
+  console.log('💡 Subtitle transcription endpoints will return placeholder responses');
 });
