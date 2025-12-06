@@ -4,6 +4,8 @@
  * Handles real-time subtitle generation via SSE (Server-Sent Events)
  */
 
+import { API_CONFIG } from '../constants';
+
 export interface Subtitle {
   index: number;
   startTime: number;
@@ -37,7 +39,7 @@ class SubtitleService {
   private eventSource: any = null;
   private listeners: Map<string, SubtitleEventCallback[]> = new Map();
 
-  constructor(baseUrl: string = 'http://192.168.2.69:8765') {
+  constructor(baseUrl: string = API_CONFIG.SUBTITLE_SERVICE_URL) {
     this.baseUrl = baseUrl;
   }
 
