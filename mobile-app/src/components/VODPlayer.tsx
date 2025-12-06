@@ -11,6 +11,7 @@ import {
   StatusBar,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Video, ResizeMode, AVPlaybackStatus } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -409,9 +410,10 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar hidden />
-      <View style={styles.videoContainer} {...panResponderRef.panHandlers}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
+      <View style={styles.container}>
+        <StatusBar hidden />
+        <View style={styles.videoContainer} {...panResponderRef.panHandlers}>
         <Video
           ref={videoRef}
           style={styles.video}
@@ -496,6 +498,9 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
                     console.log('🎬 [VODPlayer] CC button toggled:', showSubtitles, '→', newState);
                     console.log('  - subtitles.length:', subtitles.length);
                     console.log('  - isGenerating:', isGenerating);
+                    console.log('  - Will show overlay:', newState && subtitles.length > 0);
+                    console.log('  - First 3 subtitles:', subtitles.slice(0, 3));
+                    console.log('  - Current position:', position, 'ms (', position/1000, 's)');
                     
                     setShowSubtitles(newState);
                     
@@ -668,18 +673,32 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
 
         {/* Subtitle Overlay */}
         {showSubtitles && subtitles.length > 0 && (
-          <SubtitleOverlay
-            subtitles={subtitles}
-            currentTime={position / 1000}
-            visible={showSubtitles}
-          />
+          <>
+            {console.log('🎬 [VODPlayer] Rendering SubtitleOverlay:', {
+              subtitlesCount: subtitles.length,
+              currentTime: position / 1000,
+              position,
+              showSubtitles,
+              firstSubtitle: subtitles[0]
+            })}
+            <SubtitleOverlay
+              subtitles={subtitles}
+              currentTime={position / 1000}
+              visible={showSubtitles}
+            />
+          </>
         )}
       </View>
-    </View>
+      </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
   container: {
     flex: 1,
     backgroundColor: '#000',
