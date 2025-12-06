@@ -129,47 +129,32 @@ class SubtitleService {
     });
 
     this.eventSource.addEventListener('message', (event: any) => {
-      console.log('📨 [SubtitleService] Raw SSE message received');
-      console.log('  - event.data type:', typeof event.data);
-      console.log('  - event.data preview:', String(event.data).substring(0, 200));
-      
       try {
         const data = JSON.parse(event.data);
-        console.log('📦 [SubtitleService] Parsed SSE data:');
-        console.log('  - type:', data.type);
         
         switch (data.type) {
           case 'connected':
-            console.log('🔗 [SubtitleService] Connected event:', JSON.stringify(data));
             this.emit('connected', data);
             break;
           case 'progress':
-            console.log('📊 [SubtitleService] Progress:', data.percent?.toFixed(1) + '%', `(${data.processedSeconds}/${data.totalDuration}s)`);
             this.emit('progress', data as SubtitleProgress);
             break;
           case 'subtitle':
-            console.log('📝 [SubtitleService] Subtitle received:');
-            console.log('  - index:', data.index);
-            console.log('  - time:', data.startTime + 's -', data.endTime + 's');
-            console.log('  - text:', data.text?.substring(0, 50) + '...');
             this.emit('subtitle', data as Subtitle);
             break;
           case 'complete':
-            console.log('✅ [SubtitleService] Generation complete:', JSON.stringify(data));
+            console.log('✅ [Subtitles] Generation complete!');
             this.emit('complete', data);
             this.close();
             break;
           case 'error':
-            console.error('❌ [SubtitleService] Error from backend:', JSON.stringify(data));
+            console.error('❌ [Subtitles] Error:', data.message);
             this.emit('error', data);
             this.close();
             break;
-          default:
-            console.warn('⚠️ [SubtitleService] Unknown event type:', data.type);
         }
       } catch (error) {
-        console.error('❌ [SubtitleService] Failed to parse SSE message:', error);
-        console.error('Raw data:', event.data);
+        console.error('❌ [Subtitles] Failed to parse message:', error);
       }
     });
 

@@ -12,6 +12,7 @@ import {
   Modal,
   StatusBar
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { COLORS, SPACING } from '../constants';
 import { LoadingIndicator, ErrorState, EmptyState, LiveTVPlayer } from '../components';
 import { CategoryRepository } from '../repositories';
@@ -28,6 +29,7 @@ const MAX_THUMBNAILS = 25;
 const FALLBACK_IMAGE = 'https://via.placeholder.com/300x450/1a1a1a/ffffff?text=No+Image';
 
 export default function LiveTVScreen() {
+  const navigation = useNavigation();
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
   const [channels, setChannels] = useState<StalkerChannel[]>([]);
@@ -41,6 +43,7 @@ export default function LiveTVScreen() {
   const [hasMore, setHasMore] = useState(true);
   const [stalkerClient, setStalkerClient] = useState<StalkerPortalClient | null>(null);
   const [portalUrl, setPortalUrl] = useState<string>('');
+  const isFocusedRef = React.useRef(true);
 
   useEffect(() => {
     const init = async () => {
@@ -54,8 +57,23 @@ export default function LiveTVScreen() {
       setSyncWaitComplete(true);
     }, 5000); // Wait 5 seconds for sync
     
-    return () => clearTimeout(syncTimer);
-  }, []);
+    // Track screen focus to stop loading on tab change
+    const unsubscribeFocus = navigation.addListener('focus', () => {
+      console.log('📺 [LiveTV] Screen focused');
+      isFocusedRef.current = true;
+    });
+    
+    const unsubscribeBlur = navigation.addListener('blur', () => {
+      console.log('👋 [LiveTV] Screen blurred - stopping fetches');
+      isFocusedRef.current = false;
+    });
+    
+    return () => {
+      clearTimeout(syncTimer);
+      unsubscribeFocus();
+      unsubscribeBlur();
+    };
+  }, [navigation]);
 
   const initStalkerClient = async () => {
     try {
@@ -103,7 +121,12 @@ export default function LiveTVScreen() {
       // If stalker client is available, load channel previews progressively
       if (activeClient) {
         for (const cat of cats) {
-          // Stop if component is unmounting
+          // Stop if screen is not focused
+          if (!isFocusedRef.current) {
+            console.log('⏸️ Stopping channel loading - screen not focused');
+            break;
+          }
+          
           try {
             await loadCategoryChannels(cat, activeClient);
           } catch (error) {

@@ -101,26 +101,15 @@ export function useSubtitles({
       };
 
       const handleProgress = (prog: SubtitleProgress) => {
-        console.log('📊 [useSubtitles] Progress update:');
-        console.log('  - percent:', prog.percent.toFixed(1) + '%');
-        console.log('  - processed:', prog.processedSeconds + 's');
-        console.log('  - total:', prog.totalDuration + 's');
-        console.log('  - estimated time:', prog.estimatedTime + 's');
-        console.log('  - message:', prog.message);
+        console.log('⏳ [Subtitles] Progress:', prog.percent.toFixed(1) + '%', `(${prog.processedSeconds}/${prog.totalDuration}s)`);
         setProgress(prog);
       };
 
       const handleSubtitle = (subtitle: Subtitle) => {
-        console.log('📝 [useSubtitles] New subtitle received:');
-        console.log('  - index:', subtitle.index);
-        console.log('  - startTime:', subtitle.startTime + 's');
-        console.log('  - endTime:', subtitle.endTime + 's');
-        console.log('  - text:', subtitle.text);
-        console.log('  - current subtitle count:', subtitlesRef.current.length);
+        console.log(`📝 [Received] [${subtitle.startTime.toFixed(1)}s - ${subtitle.endTime.toFixed(1)}s] "${subtitle.text}"`);
         
         subtitlesRef.current.push(subtitle);
         setSubtitles([...subtitlesRef.current]);
-        console.log('✅ [useSubtitles] Subtitle added, new count:', subtitlesRef.current.length);
       };
 
       const handleComplete = () => {
@@ -184,13 +173,7 @@ export function useSubtitles({
     
     if (subtitle !== currentSubtitle) {
       if (subtitle) {
-        console.log('🎯 [useSubtitles] Subtitle sync - showing subtitle:', subtitle.index);
-        console.log('  - currentTime:', currentTime.toFixed(2) + 's');
-        console.log('  - subtitle time:', subtitle.startTime + 's -', subtitle.endTime + 's');
-        console.log('  - text:', subtitle.text);
-      } else if (currentSubtitle) {
-        console.log('👁️ [useSubtitles] Subtitle sync - hiding subtitle');
-        console.log('  - currentTime:', currentTime.toFixed(2) + 's');
+        console.log(`👁️  [Showing] [${currentTime.toFixed(1)}s] "${subtitle.text}"`);
       }
       setCurrentSubtitle(subtitle || null);
     }
@@ -212,12 +195,17 @@ export function useSubtitles({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStart, capability?.available, isGenerating]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount or when video changes (not on isGenerating change)
   useEffect(() => {
+    const currentVideoId = videoId;
     return () => {
+      console.log('🧹 [useSubtitles] Cleanup: closing subtitle service for', currentVideoId);
+      subtitleService.cancelGeneration(currentVideoId).catch(err => {
+        console.error('Failed to cancel on cleanup:', err);
+      });
       subtitleService.close();
     };
-  }, []);
+  }, [videoId, streamUrl]);
 
   return {
     subtitles,

@@ -22,7 +22,6 @@ const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
   // Find subtitle that matches current playback time
   const currentSubtitle = useMemo(() => {
     if (!visible || subtitles.length === 0) {
-      console.log('📺 [SubtitleOverlay] No subtitles:', { visible, count: subtitles.length });
       return null;
     }
     
@@ -30,13 +29,9 @@ const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
       subtitle => currentTime >= subtitle.startTime && currentTime <= subtitle.endTime
     );
     
-    if (found) {
-      console.log('✅ [SubtitleOverlay] Found subtitle:', {
-        currentTime,
-        text: found.text,
-        start: found.startTime,
-        end: found.endTime
-      });
+    // Log when checking for subtitles (throttled to avoid spam)
+    if (subtitles.length > 0 && currentTime % 5 < 0.5) {
+      console.log(`🔍 [Subtitle Check] Time: ${currentTime.toFixed(1)}s, Range: ${subtitles[0].startTime.toFixed(1)}s - ${subtitles[subtitles.length - 1].endTime.toFixed(1)}s, Found: ${found ? 'YES' : 'NO'}`);
     }
     
     return found;

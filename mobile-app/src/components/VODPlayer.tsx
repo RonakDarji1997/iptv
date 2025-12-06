@@ -79,6 +79,16 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
   const [currentOrientation, setCurrentOrientation] = useState<number>(0);
   const MAX_RETRIES = 3;
 
+  // Cancel subtitle generation when component unmounts or new video starts
+  useEffect(() => {
+    return () => {
+      if (isGenerating) {
+        console.log('🧹 [VODPlayer] Cleanup: Cancelling subtitle generation');
+        cancelGeneration();
+      }
+    };
+  }, [isGenerating, cancelGeneration]);
+
   const loadVideo = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -495,19 +505,27 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
                   style={styles.subtitleButton}
                   onPress={() => {
                     const newState = !showSubtitles;
+                    const currentPos = position / 1000;
                     console.log('🎬 [VODPlayer] CC button toggled:', showSubtitles, '→', newState);
-                    console.log('  - subtitles.length:', subtitles.length);
-                    console.log('  - isGenerating:', isGenerating);
-                    console.log('  - Will show overlay:', newState && subtitles.length > 0);
-                    console.log('  - First 3 subtitles:', subtitles.slice(0, 3));
-                    console.log('  - Current position:', position, 'ms (', position/1000, 's)');
+                    
+                    if (newState && subtitles.length > 0) {
+                      // Show where generation started from
+                      console.log('  - Generation started from:', subtitles[0].startTime.toFixed(1) + 's');
+                    }
                     
                     setShowSubtitles(newState);
                     
                     if (newState) {
-                      // Turning on - resume generation from current position if not generating
-                      if (!isGenerating) {
-                        const currentPos = Math.floor(position / 1000);
+                      // Turning on - start/resume generation from current position
+                      const currentPos = Math.floor(position / 1000);
+                      
+                      if (isGenerating) {
+                        console.log('🔄 [VODPlayer] Cancelling previous generation...');
+                        cancelGeneration().then(() => {
+                          console.log('▶️ [VODPlayer] Starting new generation from:', currentPos + 's');
+                          startGeneration(currentPos);
+                        });
+                      } else {
                         console.log('  ▶️ Starting/resuming generation from:', currentPos + 's');
                         startGeneration(currentPos);
                       }
@@ -617,7 +635,6 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
                     const locationX = Math.max(0, Math.min(progressBarWidth, e.nativeEvent.locationX));
                     const percent = locationX / progressBarWidth;
                     const newPos = duration * percent;
-                    console.log('🎯 Grant:', {locationX, progressBarWidth, duration: Math.floor(duration/1000), percent, result: Math.floor(newPos/1000)});
                     setDragPosition(newPos);
                   }}
                   onResponderMove={(e) => {
@@ -625,7 +642,6 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
                       const locationX = Math.max(0, Math.min(progressBarWidth, e.nativeEvent.locationX));
                       const percent = locationX / progressBarWidth;
                       const newPos = duration * percent;
-                      console.log('🔄 Move:', {locationX, progressBarWidth, duration: Math.floor(duration/1000), percent, result: Math.floor(newPos/1000)});
                       setDragPosition(newPos);
                     }
                   }}
@@ -633,7 +649,7 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
                     const locationX = Math.max(0, Math.min(progressBarWidth, e.nativeEvent.locationX));
                     const percent = locationX / progressBarWidth;
                     const newPosition = duration * percent;
-                    console.log('✅ Release:', {locationX, progressBarWidth, duration: Math.floor(duration/1000), percent, result: Math.floor(newPosition/1000)});
+                    console.log('⏩ Seek to:', Math.floor(newPosition/1000) + 's');
                     
                     setIsDragging(false);
                     seekTo(newPosition);
@@ -673,20 +689,11 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
 
         {/* Subtitle Overlay */}
         {showSubtitles && subtitles.length > 0 && (
-          <>
-            {console.log('🎬 [VODPlayer] Rendering SubtitleOverlay:', {
-              subtitlesCount: subtitles.length,
-              currentTime: position / 1000,
-              position,
-              showSubtitles,
-              firstSubtitle: subtitles[0]
-            })}
-            <SubtitleOverlay
-              subtitles={subtitles}
-              currentTime={position / 1000}
-              visible={showSubtitles}
-            />
-          </>
+          <SubtitleOverlay
+            subtitles={subtitles}
+            currentTime={position / 1000}
+            visible={showSubtitles}
+          />
         )}
       </View>
       </View>

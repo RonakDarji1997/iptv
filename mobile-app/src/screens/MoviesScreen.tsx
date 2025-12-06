@@ -38,8 +38,7 @@ export default function MoviesScreen({ navigation }: any) {
   const [hasMore, setHasMore] = useState(true);
   const [stalkerClient, setStalkerClient] = useState<StalkerPortalClient | null>(null);
   const [portalUrl, setPortalUrl] = useState<string>('');
-
-  const [isScreenFocused, setIsScreenFocused] = useState(true);
+  const isFocusedRef = React.useRef(true);
 
   useEffect(() => {
     const init = async () => {
@@ -57,11 +56,13 @@ export default function MoviesScreen({ navigation }: any) {
     
     // Track screen focus to stop loading on tab change
     const unsubscribeFocus = navigation.addListener('focus', () => {
-      setIsScreenFocused(true);
+      console.log('🎬 [Movies] Screen focused');
+      isFocusedRef.current = true;
     });
     
     const unsubscribeBlur = navigation.addListener('blur', () => {
-      setIsScreenFocused(false);
+      console.log('👋 [Movies] Screen blurred - stopping fetches');
+      isFocusedRef.current = false;
     });
     
     return () => {
@@ -118,7 +119,7 @@ export default function MoviesScreen({ navigation }: any) {
       if (activeClient) {
         for (const cat of cats) {
           // Stop if screen is not focused
-          if (!isScreenFocused) break;
+          if (!isFocusedRef.current) break;
           
           try {
             await loadCategoryMovies(cat, activeClient);
@@ -153,7 +154,7 @@ export default function MoviesScreen({ navigation }: any) {
   };
 
   const loadMultipleCategoriesInParallel = async (categoriesToLoad: Category[]) => {
-    if (!stalkerClient || !isScreenFocused) return;
+    if (!stalkerClient || !isFocusedRef.current) return;
     
     // Filter out categories that are already loaded or loading
     const unloadedCategories = categoriesToLoad.filter(cat => !categoryMovies[cat.id]);
@@ -164,7 +165,7 @@ export default function MoviesScreen({ navigation }: any) {
     // Load progressively and update as each completes
     for (const category of unloadedCategories) {
       // Stop loading if screen is no longer focused
-      if (!isScreenFocused) {
+      if (!isFocusedRef.current) {
         console.log('⏸️ Stopping movie loading - screen not focused');
         break;
       }
