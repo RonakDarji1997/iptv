@@ -1,0 +1,127 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: iptv-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: iptv_sync
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres_secure_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - iptv-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: iptv-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_secure_password}
+    volumes:
+      - redis_data:/data
+    networks:
+      - iptv-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # IPTV Sync Backend API
+  iptv-api:
+    build:
+      context: ./iptv-sync-backend
+      dockerfile: Dockerfile
+    container_name: iptv-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 8881
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: iptv_sync
+      DB_USER: postgres
+      DB_PASSWORD: ${DB_PASSWORD:-postgres_secure_password}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secure_password}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - iptv-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8881/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Whisper Subtitle Backend
+  whisper-api:
+    build:
+      context: ./whisper-backend
+      dockerfile: Dockerfile
+    container_name: whisper-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 8882
+      WHISPER_MODEL: tiny
+      MAX_CONCURRENT_JOBS: 3
+    volumes:
+      - whisper_models:/app/models
+      - whisper_logs:/app/logs
+    networks:
+      - iptv-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8882/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: iptv-nginx
+    restart: unless-stopped
+    ports:
+      - "8880:80"
+      - "8443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - iptv-api
+      - whisper-api
+    networks:
+      - iptv-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  whisper_models:
+    driver: local
+  whisper_logs:
+    driver: local
+
+networks:
+  iptv-network:
+    driver: bridge
