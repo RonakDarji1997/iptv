@@ -212,7 +212,7 @@ export class StalkerPortalClient {
         throw new Error('No auth token found');
       }
 
-      const backendUrl = `http://192.168.2.69:3000/api/stalker-proxy/channels/${categoryId}?page=${page}`;
+      const backendUrl = `${this.backendUrl}/api/stalker-proxy/channels/${categoryId}?page=${page}`;
       const response = await axios.get(backendUrl, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -245,7 +245,7 @@ export class StalkerPortalClient {
         throw new Error('No auth token found');
       }
 
-      const backendUrl = `http://192.168.2.69:3000/api/stalker-proxy/vod/${categoryId}?page=${page}`;
+      const backendUrl = `${this.backendUrl}/api/stalker-proxy/vod/${categoryId}?page=${page}`;
       const response = await axios.get(backendUrl, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -314,7 +314,7 @@ export class StalkerPortalClient {
       }
 
       // Backend proxy fetches from Stalker portal, analyzes categories, and caches in PostgreSQL
-      const backendUrl = 'http://192.168.2.69:3000/api/stalker-proxy/categories';
+      const backendUrl = `${this.backendUrl}/api/stalker-proxy/categories`;
       const response = await axios.get(backendUrl, {
         headers: {
           'Authorization': `Bearer ${token}`,
