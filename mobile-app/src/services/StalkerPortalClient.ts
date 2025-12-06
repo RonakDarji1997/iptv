@@ -49,6 +49,7 @@ export class StalkerPortalClient {
     this.macAddress = macAddress;
     this.serialNumber = serialNumber;
     this.backendUrl = backendUrl;
+    console.log('🔧 StalkerPortalClient initialized with backendUrl:', this.backendUrl);
     
     this.client = axios.create({
       baseURL: `${this.portalUrl}/stalker_portal/server`,
@@ -246,6 +247,8 @@ export class StalkerPortalClient {
       }
 
       const backendUrl = `${this.backendUrl}/api/stalker-proxy/vod/${categoryId}?page=${page}`;
+      console.log(`📡 Fetching VOD items: ${backendUrl}`);
+      console.log(`🔑 Using token: ${token.substring(0, 50)}...`);
       const response = await axios.get(backendUrl, {
         headers: {
           'Authorization': `Bearer ${token}`,
