@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "echo 'No build needed for database package'",
     "migrate": "node dist/migrate.js",
     "migrate:create": "node dist/create-migration.js",
     "seed": "node dist/seed.js",

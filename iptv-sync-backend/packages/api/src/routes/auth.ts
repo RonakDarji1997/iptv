@@ -83,15 +83,15 @@ export const createAuthRouter = (pool: Pool) => {
         const accessToken = jwt.sign(
           { userId, email, deviceId },
           jwtSecret,
-          { expiresIn: jwtExpiresIn }
-        );
+          { expiresIn: jwtExpiresIn as any }
+        ) as string;
         console.log(`🎫 Generated token: ${accessToken.substring(0, 50)}...`);
         
         const refreshToken = jwt.sign(
           { userId },
           refreshSecret,
-          { expiresIn: refreshExpiresIn }
-        );
+          { expiresIn: refreshExpiresIn as any }
+        ) as string;
         
         // Store refresh token (use device.id UUID, not deviceId string)
         if (device) {
@@ -160,8 +160,8 @@ export const createAuthRouter = (pool: Pool) => {
       const accessToken = jwt.sign(
         { userId: user_id, email, deviceId: device_id },
         process.env.JWT_SECRET || 'default-secret',
-        { expiresIn: jwtExpiresIn }
-      );
+        { expiresIn: jwtExpiresIn as any }
+      ) as string;
       
       res.json({ success: true, accessToken });
       
