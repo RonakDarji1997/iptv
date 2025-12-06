@@ -76,19 +76,21 @@ export const createAuthRouter = (pool: Pool) => {
         // Generate tokens
         const jwtSecret = process.env.JWT_SECRET || 'default-secret';
         const refreshSecret = process.env.JWT_REFRESH_SECRET || 'default-refresh-secret';
+        const jwtExpiresIn: string = process.env.JWT_EXPIRES_IN || '7d';
+        const refreshExpiresIn: string = process.env.JWT_REFRESH_EXPIRES_IN || '30d';
         
         console.log(`🔐 Creating token with secret: ${jwtSecret}`);
         const accessToken = jwt.sign(
           { userId, email, deviceId },
           jwtSecret,
-          { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+          { expiresIn: jwtExpiresIn }
         );
         console.log(`🎫 Generated token: ${accessToken.substring(0, 50)}...`);
         
         const refreshToken = jwt.sign(
           { userId },
           refreshSecret,
-          { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d' }
+          { expiresIn: refreshExpiresIn }
         );
         
         // Store refresh token (use device.id UUID, not deviceId string)
@@ -154,10 +156,11 @@ export const createAuthRouter = (pool: Pool) => {
       const { user_id, email, device_id } = result.rows[0];
       
       // Generate new access token
+      const jwtExpiresIn: string = process.env.JWT_EXPIRES_IN || '7d';
       const accessToken = jwt.sign(
         { userId: user_id, email, deviceId: device_id },
         process.env.JWT_SECRET || 'default-secret',
-        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+        { expiresIn: jwtExpiresIn }
       );
       
       res.json({ success: true, accessToken });
