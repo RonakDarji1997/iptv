@@ -30,10 +30,9 @@ RUN npm ci --omit=dev
 
 # Copy built files from builder
 COPY --from=builder /app/packages/api/dist ./packages/api/dist
-COPY --from=builder /app/packages/database/dist ./packages/database/dist
 
 # Copy database migrations
-COPY --from=builder /app/packages/database/migrations ./packages/database/migrations
+COPY packages/database/migrations ./packages/database/migrations
 
 # Create logs directory
 RUN mkdir -p /app/logs
