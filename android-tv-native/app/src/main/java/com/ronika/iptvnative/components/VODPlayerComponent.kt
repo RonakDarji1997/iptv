@@ -324,23 +324,26 @@ class VODPlayerComponent @JvmOverloads constructor(
         scope.launch {
             subtitleService.subtitleFlow.collectLatest { event ->
                 when (event) {
-                    is SubtitleService.SubtitleEvent.Started -> {
-                        Log.d(TAG, "Subtitle generation started: ${event.message}")
+                    is SubtitleService.SubtitleEvent.Connected -> {
+                        Log.d(TAG, "🔗 Subtitle service connected: ${event.videoId}")
                     }
-                    is SubtitleService.SubtitleEvent.TrackReady -> {
-                        Log.d(TAG, "Subtitle track ready: ${event.subtitleUrl}")
-                        loadSubtitleTrack(event.subtitleUrl)
+                    is SubtitleService.SubtitleEvent.Progress -> {
+                        Log.d(TAG, "⏳ Progress: ${event.percent.toInt()}% (${event.processedSeconds}/${event.totalDuration}s)")
                     }
                     is SubtitleService.SubtitleEvent.Subtitle -> {
                         // Show subtitle text overlay
+                        Log.d(TAG, "📝 [Showing] [${event.startTime.toInt()}s - ${event.endTime.toInt()}s] \"${event.text}\"")
                         showSubtitleText(event.text)
                     }
+                    is SubtitleService.SubtitleEvent.Complete -> {
+                        Log.d(TAG, "✅ ${event.message}")
+                    }
                     is SubtitleService.SubtitleEvent.Error -> {
-                        Log.e(TAG, "Subtitle error: ${event.message}")
+                        Log.e(TAG, "❌ Subtitle error: ${event.message}")
                         android.widget.Toast.makeText(context, "Subtitle error: ${event.message}", android.widget.Toast.LENGTH_SHORT).show()
                     }
                     is SubtitleService.SubtitleEvent.Stopped -> {
-                        Log.d(TAG, "Subtitle generation stopped")
+                        Log.d(TAG, "🛑 Subtitle generation stopped")
                         hideSubtitleText()
                     }
                     null -> {}
@@ -614,20 +617,36 @@ class VODPlayerComponent @JvmOverloads constructor(
     
     private val handler = Handler(Looper.getMainLooper())
 
+    private fun generateVideoId(): String {
+        val title = currentSeriesTitle ?: currentMovieTitle
+        val sanitized = title.replace(Regex("[^a-zA-Z0-9]"), "_")
+        return "tv_$sanitized"
+    }
+
     private fun toggleSubtitles() {
         hasSubtitles = !hasSubtitles
-        Log.d(TAG, "SUBTITLE_TOGGLE: hasSubtitles=$hasSubtitles, streamUrl=$currentStreamUrl")
+        Log.d(TAG, "🎬 CC button toggled: ${!hasSubtitles} → $hasSubtitles")
         subtitleButton.alpha = if (hasSubtitles) 1.0f else 0.6f
         
         if (hasSubtitles) {
             // Start subtitle generation
             val currentPosition = player?.currentPosition ?: 0L
-            Log.d(TAG, "SUBTITLE_TOGGLE: Starting subtitle service with position=$currentPosition")
-            subtitleStreamId = subtitleService.start(currentStreamUrl, "auto", currentPosition)
+            val currentPositionSec = currentPosition / 1000
+            val videoId = generateVideoId()
+            
+            // Cancel previous generation if running
+            if (subtitleStreamId != null) {
+                Log.d(TAG, "🔄 Cancelling previous generation...")
+                subtitleService.stop()
+                stopSubtitlePolling()
+            }
+            
+            Log.d(TAG, "  ▶️ Starting generation from: ${currentPositionSec}s")
+            subtitleStreamId = subtitleService.start(currentStreamUrl, videoId, "auto", currentPosition)
             android.widget.Toast.makeText(context, "Starting subtitles...", android.widget.Toast.LENGTH_SHORT).show()
         } else {
             // Stop subtitle generation and polling
-            Log.d(TAG, "SUBTITLE_TOGGLE: Stopping subtitle service")
+            Log.d(TAG, "🛑 Stopping subtitle service")
             subtitleService.stop()
             subtitleStreamId = null
             stopSubtitlePolling()
@@ -645,11 +664,13 @@ class VODPlayerComponent @JvmOverloads constructor(
         applyAspectRatio()
         
         // Stop any existing subtitles and polling
-        stopSubtitlePolling()
-        if (hasSubtitles) {
+        if (hasSubtitles || subtitleStreamId != null) {
+            Log.d(TAG, "🧹 Cleanup: Cancelling subtitle generation for new playback")
             subtitleService.stop()
+            stopSubtitlePolling()
             hasSubtitles = false
             subtitleButton.alpha = 0.6f
+            subtitleStreamId = null
         }
         
         contentTitle.text = title
@@ -697,11 +718,13 @@ class VODPlayerComponent @JvmOverloads constructor(
         applyAspectRatio()
         
         // Stop any existing subtitles and polling
-        stopSubtitlePolling()
-        if (hasSubtitles) {
+        if (hasSubtitles || subtitleStreamId != null) {
+            Log.d(TAG, "🧹 Cleanup: Cancelling subtitle generation for new playback")
             subtitleService.stop()
+            stopSubtitlePolling()
             hasSubtitles = false
             subtitleButton.alpha = 0.6f
+            subtitleStreamId = null
         }
         
         contentTitle.text = title
@@ -986,9 +1009,12 @@ class VODPlayerComponent @JvmOverloads constructor(
 
     fun stop() {
         // Stop subtitle service
-        if (hasSubtitles) {
+        if (hasSubtitles || subtitleStreamId != null) {
+            Log.d(TAG, "🧹 Player stop: Cancelling subtitle generation")
             subtitleService.stop()
+            stopSubtitlePolling()
             hasSubtitles = false
+            subtitleStreamId = null
         }
         
         // Save progress before stopping
@@ -1084,10 +1110,12 @@ class VODPlayerComponent @JvmOverloads constructor(
 
     fun release() {
         // Stop subtitle service and polling
-        stopSubtitlePolling()
-        if (hasSubtitles) {
+        if (hasSubtitles || subtitleStreamId != null) {
+            Log.d(TAG, "🧹 Player release: Cancelling subtitle generation")
             subtitleService.stop()
+            stopSubtitlePolling()
             hasSubtitles = false
+            subtitleStreamId = null
         }
         
         // Save progress before releasing

@@ -8,6 +8,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.ronika.iptvnative.sync.IPTVSyncService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -118,8 +119,8 @@ class CloudAuthActivity : AppCompatActivity() {
             try {
                 val syncService = IPTVSyncService(this@CloudAuthActivity)
                 
-                // Authenticate
-                val authenticated = syncService.ensureAuthenticated()
+                // Authenticate with user credentials
+                val authenticated = syncService.ensureAuthenticated(email, password)
                 
                 if (authenticated) {
                     tvStatus.text = "✅ Authentication successful!"
@@ -128,20 +129,17 @@ class CloudAuthActivity : AppCompatActivity() {
                     val prefs = getSharedPreferences("iptv_sync_prefs", MODE_PRIVATE)
                     prefs.edit().putBoolean("cloud_sync_enabled", true).apply()
                     
-                    if (uploadExisting) {
-                        // Upload existing data to cloud
-                        tvStatus.text = "☁️ Uploading existing data..."
-                        syncService.syncEverything(this@CloudAuthActivity)
-                        tvStatus.text = "✅ Data uploaded successfully!"
-                    } else if (isNewUser) {
-                        // Pull data from cloud if available
-                        tvStatus.text = "📥 Checking for existing data..."
-                        val hasData = syncService.pullAllData(this@CloudAuthActivity)
-                        if (hasData) {
-                            tvStatus.text = "✅ Data restored from cloud!"
-                        } else {
-                            tvStatus.text = "✅ Ready to add providers!"
-                        }
+                    // Small delay to ensure SharedPreferences is committed across processes
+                    delay(100)
+                    
+                    // Always pull data from backend after login (like mobile app)
+                    tvStatus.text = "📥 Fetching provider data from cloud..."
+                    val hasData = syncService.pullAllData(this@CloudAuthActivity)
+                    
+                    if (hasData) {
+                        tvStatus.text = "✅ Provider data restored from cloud!"
+                    } else {
+                        tvStatus.text = "✅ No existing data found!"
                     }
                     
                     withContext(Dispatchers.Main) {

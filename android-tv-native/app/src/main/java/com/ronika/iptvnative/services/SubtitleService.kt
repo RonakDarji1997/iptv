@@ -1,27 +1,26 @@
 package com.ronika.iptvnative.services
 
 import android.util.Log
+import com.ronika.iptvnative.constants.ApiConstants
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.sse.EventSource
+import okhttp3.sse.EventSourceListener
+import okhttp3.sse.EventSources
 import org.json.JSONObject
-import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * Subtitle Service - Backend Stream Approach
+ * Subtitle Service - SSE Streaming Approach (matches mobile app)
  * 
  * Architecture:
- * 1. Android sends stream URL to backend
- * 2. Backend uses FFmpeg to listen to stream and extract audio
- * 3. Backend sends audio chunks to Whisper for transcription
- * 4. Backend generates VTT subtitle file
- * 5. Android loads subtitle track from backend URL
+ * 1. Connect to backend SSE endpoint: /api/subtitles/generate-stream
+ * 2. Receive real-time subtitle and progress events
+ * 3. Cancel generation via DELETE: /api/subtitles/generate/{videoId}
  */
 class SubtitleService {
     
@@ -32,29 +31,34 @@ class SubtitleService {
     private val scope = CoroutineScope(Dispatchers.IO)
     
     // Backend configuration
-    private val backendUrl = "http://100.92.195.14:8770"
+    private val backendUrl = ApiConstants.SUBTITLE_SERVICE_URL
     
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)  // Increased to 90s (backend waits 60s for first subtitle)
-        .writeTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(ApiConstants.CONNECT_TIMEOUT, TimeUnit.SECONDS)
+        .readTimeout(ApiConstants.SSE_READ_TIMEOUT, TimeUnit.SECONDS)  // No timeout for SSE
+        .writeTimeout(ApiConstants.WRITE_TIMEOUT, TimeUnit.SECONDS)
         .build()
     
     // State
-    private var isRunning = false
-    private var currentStreamId: String? = null
-    private var currentLanguage: String = "auto"
+    private var eventSource: EventSource? = null
+    private var currentVideoId: String? = null
     
     // Events
     sealed class SubtitleEvent {
-        data class Started(val message: String) : SubtitleEvent()
-        data class TrackReady(val subtitleUrl: String) : SubtitleEvent()
-        data class Subtitle(
-            val text: String,
-            val timestamp: Long,
-            val language: String,
-            val confidence: Float
+        data class Connected(val videoId: String) : SubtitleEvent()
+        data class Progress(
+            val percent: Double,
+            val processedSeconds: Long,
+            val totalDuration: Long,
+            val estimatedTime: Long
         ) : SubtitleEvent()
+        data class Subtitle(
+            val index: Int,
+            val startTime: Double,
+            val endTime: Double,
+            val text: String
+        ) : SubtitleEvent()
+        data class Complete(val message: String) : SubtitleEvent()
         data class Error(val message: String) : SubtitleEvent()
         object Stopped : SubtitleEvent()
     }
@@ -63,203 +67,150 @@ class SubtitleService {
     val subtitleFlow: StateFlow<SubtitleEvent?> = _subtitleFlow
     
     /**
-     * Start subtitle generation for a stream URL
-     * Backend will listen to the stream and generate subtitles
+     * Start subtitle generation with SSE streaming
      */
-    fun start(streamUrl: String, language: String = "auto", startPosition: Long = 0): String? {
-        if (isRunning) {
-            Log.w(TAG, "Subtitle service already running - canceling old job and starting new one")
-            stop() // Cancel old job
-        }
+    fun start(streamUrl: String, videoId: String, language: String = "auto", startPosition: Long = 0): String {
+        // Close any existing connection
+        close()
         
-        this.currentLanguage = language
-        isRunning = true
+        currentVideoId = videoId
+        val startPositionSec = startPosition / 1000
         
-        var resultStreamId: String? = null
+        Log.d(TAG, "🎬 Starting subtitle generation")
+        Log.d(TAG, "  - videoId: $videoId")
+        Log.d(TAG, "  - startPosition: ${startPositionSec}s")
         
-        scope.launch {
-            try {
-                _subtitleFlow.emit(SubtitleEvent.Started("Requesting subtitle generation..."))
-                
-                // Request backend to start subtitle generation
-                val streamId = requestSubtitleGeneration(streamUrl, language, startPosition)
-                
-                if (streamId != null) {
-                    currentStreamId = streamId
-                    val subtitleUrl = "$backendUrl/subtitle/$streamId.vtt"
-                    
-                    Log.d(TAG, "✅ Subtitle generation started")
-                    Log.d(TAG, "Stream ID: $streamId")
-                    Log.d(TAG, "Subtitle URL: $subtitleUrl")
-                    
-                    _subtitleFlow.emit(SubtitleEvent.TrackReady(subtitleUrl))
-                    resultStreamId = streamId
-                } else {
-                    _subtitleFlow.emit(SubtitleEvent.Error("Failed to start subtitle generation"))
-                    isRunning = false
+        // Build SSE URL
+        val url = HttpUrl.Builder()
+            .scheme("http")
+            .host("api.iptv.ronika.co")
+            .addPathSegments("subtitle/api/subtitles/generate-stream")
+            .addQueryParameter("streamUrl", streamUrl)
+            .addQueryParameter("videoId", videoId)
+            .addQueryParameter("language", language)
+            .addQueryParameter("model", "tiny")
+            .addQueryParameter("startPosition", startPositionSec.toString())
+            .build()
+        
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .build()
+        
+        eventSource = EventSources.createFactory(client)
+            .newEventSource(request, object : EventSourceListener() {
+                override fun onOpen(eventSource: EventSource, response: Response) {
+                    Log.d(TAG, "✅ SSE connection opened")
                 }
                 
-            } catch (e: Exception) {
-                Log.e(TAG, "Error starting subtitles", e)
-                _subtitleFlow.emit(SubtitleEvent.Error("Error: ${e.message}"))
-                isRunning = false
-            }
-        }
+                override fun onEvent(
+                    eventSource: EventSource,
+                    id: String?,
+                    type: String?,
+                    data: String
+                ) {
+                    scope.launch {
+                        try {
+                            val json = JSONObject(data)
+                            when (json.optString("type")) {
+                                "connected" -> {
+                                    Log.d(TAG, "🔗 Connected")
+                                    _subtitleFlow.emit(SubtitleEvent.Connected(videoId))
+                                }
+                                "progress" -> {
+                                    val percent = json.optDouble("percent", 0.0)
+                                    val processed = json.optLong("processedSeconds", 0)
+                                    val total = json.optLong("totalDuration", 0)
+                                    val estimated = json.optLong("estimatedTime", 0)
+                                    
+                                    Log.d(TAG, "⏳ Progress: ${percent.toInt()}% ($processed/${total}s)")
+                                    _subtitleFlow.emit(
+                                        SubtitleEvent.Progress(percent, processed, total, estimated)
+                                    )
+                                }
+                                "subtitle" -> {
+                                    val index = json.optInt("index", 0)
+                                    val startTime = json.optDouble("startTime", 0.0)
+                                    val endTime = json.optDouble("endTime", 0.0)
+                                    val text = json.optString("text", "")
+                                    
+                                    Log.d(TAG, "📝 [Received] [${startTime.toInt()}s - ${endTime.toInt()}s] \"$text\"")
+                                    _subtitleFlow.emit(
+                                        SubtitleEvent.Subtitle(index, startTime, endTime, text)
+                                    )
+                                }
+                                "complete" -> {
+                                    Log.d(TAG, "✅ [Subtitles] Generation complete!")
+                                    _subtitleFlow.emit(SubtitleEvent.Complete("Generation complete"))
+                                    close()
+                                }
+                                "error" -> {
+                                    val message = json.optString("message", "Unknown error")
+                                    Log.e(TAG, "❌ [Subtitles] Error: $message")
+                                    _subtitleFlow.emit(SubtitleEvent.Error(message))
+                                    close()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error parsing SSE event", e)
+                        }
+                    }
+                }
+                
+                override fun onClosed(eventSource: EventSource) {
+                    Log.d(TAG, "SSE connection closed")
+                    scope.launch {
+                        _subtitleFlow.emit(SubtitleEvent.Stopped)
+                    }
+                }
+                
+                override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                    Log.e(TAG, "SSE connection failed", t)
+                    scope.launch {
+                        _subtitleFlow.emit(SubtitleEvent.Error(t?.message ?: "Connection failed"))
+                    }
+                }
+            })
         
-        Log.d(TAG, "Subtitle service started for stream: $streamUrl")
-        return resultStreamId
+        return videoId
     }
     
     /**
      * Stop subtitle generation
      */
     fun stop() {
-        if (!isRunning) {
-            return
-        }
-        
-        scope.launch {
-            try {
-                currentStreamId?.let { streamId ->
-                    stopSubtitleGeneration(streamId)
+        currentVideoId?.let { videoId ->
+            scope.launch {
+                try {
+                    Log.d(TAG, "🛑 Sending cancel request for videoId: $videoId")
+                    
+                    val request = Request.Builder()
+                        .url("$backendUrl/api/subtitles/generate/$videoId")
+                        .delete()
+                        .build()
+                    
+                    val response = client.newCall(request).execute()
+                    Log.d(TAG, "🛑 Cancel response: ${response.code}")
+                    
+                    if (response.isSuccessful) {
+                        Log.d(TAG, "✅ Subtitle generation cancelled")
+                    } else {
+                        Log.e(TAG, "❌ Failed to cancel: ${response.code}")
+                    }
+                    
+                    _subtitleFlow.emit(SubtitleEvent.Stopped)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error canceling generation", e)
                 }
-                
-                _subtitleFlow.emit(SubtitleEvent.Stopped)
-                
-            } catch (e: Exception) {
-                Log.e(TAG, "Error stopping subtitles", e)
-            } finally {
-                isRunning = false
-                currentStreamId = null
             }
         }
-        
-        Log.d(TAG, "Subtitle service stopped")
+        close()
     }
     
-    /**
-     * Request backend to start subtitle generation
-     * POST /start-subtitle { streamUrl, language, startPosition }
-     */
-    private suspend fun requestSubtitleGeneration(streamUrl: String, language: String, startPosition: Long): String? {
-        return try {
-            val startPositionSeconds = startPosition / 1000
-            Log.d(TAG, "🔢 Position conversion: ${startPosition}ms → ${startPositionSeconds}s")
-            
-            val json = JSONObject().apply {
-                put("streamUrl", streamUrl)
-                put("language", language)
-                put("startPosition", startPositionSeconds) // Convert ms to seconds
-            }
-            
-            Log.d(TAG, "📤 Sending to backend: $backendUrl/start-subtitle")
-            Log.d(TAG, "📤 Request body: $json")
-            
-            val body = json.toString().toRequestBody("application/json".toMediaType())
-            
-            val request = Request.Builder()
-                .url("$backendUrl/start-subtitle")
-                .post(body)
-                .build()
-            
-            val response = client.newCall(request).execute()
-            
-            Log.d(TAG, "📥 Response status: ${response.code} ${response.message}")
-            Log.d(TAG, "📥 Response headers: ${response.headers}")
-            
-            if (response.isSuccessful) {
-                val responseBody = response.body?.string()
-                Log.d(TAG, "📥 Response body: $responseBody")
-                val responseJson = JSONObject(responseBody ?: "{}")
-                
-                Log.d(TAG, "📥 Backend response: $responseJson")
-                
-                responseJson.optString("streamId", "")
-            } else {
-                Log.e(TAG, "Backend error: ${response.code} ${response.message}")
-                val errorBody = response.body?.string()
-                Log.e(TAG, "Backend error body: $errorBody")
-                null
-            }
-            
-        } catch (e: IOException) {
-            Log.e(TAG, "Network error requesting subtitle generation", e)
-            null
-        } catch (e: Exception) {
-            Log.e(TAG, "Error requesting subtitle generation", e)
-            null
-        }
-    }
-    
-    /**
-     * Request backend to stop subtitle generation
-     * POST /stop-subtitle { streamId }
-     */
-    private suspend fun stopSubtitleGeneration(streamId: String) {
-        try {
-            val json = JSONObject().apply {
-                put("streamId", streamId)
-            }
-            
-            Log.d(TAG, "🛑 Sending stop request to backend: $backendUrl/stop-subtitle")
-            Log.d(TAG, "🛑 Stream ID: $streamId")
-            
-            val body = json.toString().toRequestBody("application/json".toMediaType())
-            
-            val request = Request.Builder()
-                .url("$backendUrl/stop-subtitle")
-                .post(body)
-                .build()
-            
-            val response = client.newCall(request).execute()
-            
-            Log.d(TAG, "🛑 Response status: ${response.code} ${response.message}")
-            Log.d(TAG, "🛑 Response headers: ${response.headers}")
-            
-            if (response.isSuccessful) {
-                val responseBody = response.body?.string()
-                Log.d(TAG, "🛑 Response body: $responseBody")
-                Log.d(TAG, "✅ Subtitle generation stopped for stream: $streamId")
-            } else {
-                Log.e(TAG, "❌ Failed to stop subtitle generation: ${response.code}")
-                val errorBody = response.body?.string()
-                Log.e(TAG, "❌ Stop error body: $errorBody")
-            }
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Error stopping subtitle generation", e)
-        }
-    }
-    
-    /**
-     * Check if backend is available
-     */
-    suspend fun checkBackendHealth(): Boolean {
-        return try {
-            val request = Request.Builder()
-                .url("$backendUrl/health")
-                .get()
-                .build()
-            
-            val response = client.newCall(request).execute()
-            val isHealthy = response.isSuccessful
-            
-            Log.d(TAG, "🏥 Health check response status: ${response.code} ${response.message}")
-            Log.d(TAG, "🏥 Health check response headers: ${response.headers}")
-            
-            if (isHealthy) {
-                val body = response.body?.string()
-                Log.d(TAG, "🏥 Backend health: $body")
-            } else {
-                val errorBody = response.body?.string()
-                Log.e(TAG, "🏥 Backend health check failed: ${response.code} ${response.message}, body: $errorBody")
-            }
-            
-            isHealthy
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Backend health check failed", e)
-            false
-        }
+    private fun close() {
+        Log.d(TAG, "🧹 Closing SSE connection")
+        eventSource?.cancel()
+        eventSource = null
+        currentVideoId = null
     }
 }

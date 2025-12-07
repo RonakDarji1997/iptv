@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
+import com.ronika.iptvnative.constants.ApiConstants
 import com.ronika.iptvnative.database.entities.ProviderEntity
 import com.ronika.iptvnative.database.entities.CategoryEntity
 import com.ronika.iptvnative.database.entities.ChannelEntity
@@ -22,8 +23,8 @@ class IPTVSyncService(private val context: Context) {
     companion object {
         private const val TAG = "IPTVSyncService"
         
-        // Backend URL - Update this with your server IP
-        private const val BACKEND_URL = "http://192.168.2.69:3001/api"
+        // Backend URL - Use production endpoint (includes /api for auth routes)
+        private val BACKEND_URL = ApiConstants.BACKEND_URL
         
         // User credentials
         private const val USER_EMAIL = "ronakdarji1997@gmail.com"
@@ -124,14 +125,24 @@ class IPTVSyncService(private val context: Context) {
      * Login or register user
      * This should be called on first launch
      */
-    suspend fun ensureAuthenticated(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun ensureAuthenticated(email: String? = null, password: String? = null): Boolean = withContext(Dispatchers.IO) {
         try {
             if (isLoggedIn()) {
                 return@withContext true
             }
             
-            // For now, we'll use a simple approach - login with email
-            // In production, you'd implement proper authentication
+            // Use provided credentials or fall back to stored values
+            val userEmail = email ?: prefs.getString("user_email", null) ?: USER_EMAIL
+            val userPassword = password ?: prefs.getString("user_password", null)
+            
+            if (userPassword == null) {
+                Log.e(TAG, "❌ No password provided for authentication")
+                return@withContext false
+            }
+            
+            // Generate username from email (part before @)
+            val username = userEmail.substringBefore('@')
+            
             val url = URL("$BACKEND_URL/auth/register")
             val connection = url.openConnection() as HttpURLConnection
             
@@ -143,29 +154,54 @@ class IPTVSyncService(private val context: Context) {
                 connection.readTimeout = 10000
                 
                 val loginData = mapOf(
-                    "email" to USER_EMAIL,
-                    "password" to "default_password_change_me", // Should be set properly
+                    "email" to userEmail,
+                    "password" to userPassword,
                     "deviceId" to getDeviceId(),
-                    "deviceName" to android.os.Build.MODEL,
-                    "deviceModel" to android.os.Build.MODEL
+                    "deviceName" to "Android TV"
                 )
                 
                 connection.outputStream.use { os ->
                     os.write(gson.toJson(loginData).toByteArray())
                 }
                 
-                if (connection.responseCode == 200) {
+                if (connection.responseCode == 200 || connection.responseCode == 201) {
                     val response = connection.inputStream.bufferedReader().use { it.readText() }
+                    Log.d(TAG, "📥 Auth response: $response")
+                    
                     val authResponse = gson.fromJson(response, Map::class.java)
                     
-                    prefs.edit().apply {
-                        putString(KEY_ACCESS_TOKEN, authResponse["accessToken"] as? String)
-                        putString(KEY_REFRESH_TOKEN, authResponse["refreshToken"] as? String)
-                        putString(KEY_USER_ID, authResponse["userId"] as? String)
-                        apply()
+                    // Backend returns: {accessToken, refreshToken, userId}
+                    val accessToken = authResponse["accessToken"] as? String
+                    val refreshToken = authResponse["refreshToken"] as? String
+                    val userId = authResponse["userId"] as? String
+                    
+                    if (accessToken == null || userId == null) {
+                        Log.e(TAG, "❌ Invalid auth response - missing accessToken or userId")
+                        return@withContext false
                     }
                     
-                    Log.d(TAG, "✅ Authentication successful")
+                    Log.d(TAG, "💾 Saving tokens - accessToken length: ${accessToken.length}, userId: $userId")
+                    
+                    // Save credentials synchronously with commit()
+                    val editor = prefs.edit()
+                    editor.putString(KEY_ACCESS_TOKEN, accessToken)
+                    editor.putString(KEY_REFRESH_TOKEN, refreshToken)
+                    editor.putString(KEY_USER_ID, userId)
+                    editor.putString("user_email", userEmail)
+                    editor.putString("user_password", userPassword)
+                    val committed = editor.commit()
+                    
+                    Log.d(TAG, "✅ Tokens saved (committed: $committed)")
+                    
+                    // Verify token was written
+                    val verifyToken = prefs.getString(KEY_ACCESS_TOKEN, null)
+                    Log.d(TAG, "🔍 Verification read - token exists: ${verifyToken != null}, length: ${verifyToken?.length}")
+                    
+                    if (!committed || verifyToken == null) {
+                        Log.e(TAG, "❌ Token save verification failed!")
+                        return@withContext false
+                    }
+                    
                     true
                 } else {
                     Log.e(TAG, "❌ Authentication failed: ${connection.responseCode}")
@@ -537,12 +573,15 @@ class IPTVSyncService(private val context: Context) {
      */
     suspend fun pullAllData(context: Context): Boolean = withContext(Dispatchers.IO) {
         try {
+            val token = prefs.getString(KEY_ACCESS_TOKEN, null)
+            Log.d(TAG, "🔍 Checking auth - token exists: ${token != null}, token value: ${token?.take(20)}...")
+            
             if (!isLoggedIn()) {
-                Log.e(TAG, "Cannot pull data - not authenticated")
+                Log.e(TAG, "Cannot pull data - not authenticated (token is null)")
                 return@withContext false
             }
             
-            Log.d(TAG, "📥 Pulling all data from cloud...")
+            Log.d(TAG, "📥 Pulling all data from cloud via GET /sync/pull...")
             
             val url = URL("$BACKEND_URL/sync/pull")
             val connection = url.openConnection() as HttpURLConnection
@@ -563,6 +602,9 @@ class IPTVSyncService(private val context: Context) {
                         val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(context)
                         
                         // Parse and insert providers
+                        // Create mapping: backend UUID -> provider_id
+                        val providerIdMap = mutableMapOf<String, String>()
+                        
                         val providersArray = data.getAsJsonArray("providers")
                         if (providersArray != null && providersArray.size() > 0) {
                             Log.d(TAG, "📦 Found ${providersArray.size()} providers in cloud")
@@ -571,8 +613,14 @@ class IPTVSyncService(private val context: Context) {
                             for (i in 0 until providersArray.size()) {
                                 val p = providersArray[i].asJsonObject
                                 
+                                val backendId = p.get("id")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                                val providerId = p.get("provider_id")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                                
+                                // Map backend UUID to provider_id for category lookup
+                                providerIdMap[backendId] = providerId
+                                
                                 val provider = com.ronika.iptvnative.database.entities.ProviderEntity(
-                                    id = p.get("provider_id")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                                    id = providerId,
                                     name = p.get("name")?.takeIf { !it.isJsonNull }?.asString ?: "",
                                     type = p.get("type")?.takeIf { !it.isJsonNull }?.asString ?: "",
                                     serverUrl = p.get("server_url")?.takeIf { !it.isJsonNull }?.asString ?: "",
@@ -606,9 +654,13 @@ class IPTVSyncService(private val context: Context) {
                             for (i in 0 until categoriesArray.size()) {
                                 val c = categoriesArray[i].asJsonObject
                                 
+                                // Backend returns provider_id as UUID, map it to provider_id string
+                                val backendProviderId = c.get("provider_id")?.asString ?: ""
+                                val mappedProviderId = providerIdMap[backendProviderId] ?: backendProviderId
+                                
                                 val category = com.ronika.iptvnative.database.entities.CategoryEntity(
                                     id = c.get("id")?.asString ?: "",
-                                    providerId = c.get("provider_id")?.asString ?: "",
+                                    providerId = mappedProviderId,
                                     externalId = c.get("id")?.asString ?: "",
                                     name = c.get("name")?.asString ?: "",
                                     type = c.get("type")?.asString ?: "live",
