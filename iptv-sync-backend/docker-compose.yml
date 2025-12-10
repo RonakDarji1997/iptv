@@ -11,7 +11,7 @@ services:
       POSTGRES_PASSWORD: test123
       POSTGRES_INITDB_ARGS: "-E UTF8"
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./packages/database/init:/docker-entrypoint-initdb.d
