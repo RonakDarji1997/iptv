@@ -64,6 +64,10 @@ services:
         condition: service_healthy
     volumes:
       - ./logs:/app/logs
+    networks:
+      default:
+        aliases:
+          - iptv-api
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
