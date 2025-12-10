@@ -6,13 +6,15 @@ const nextConfig = {
     domains: ['localhost'],
     unoptimized: true
   },
-  async rewrites() {
-    return [
-      {
-        source: '/api/:path*',
-        destination: process.env.NEXT_PUBLIC_API_URL + '/api/:path*',
-      },
-    ];
+  // Remove rewrites - using Next.js API routes instead
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '10mb',
+    },
+  },
+  // Increase header size limit to fix 431 errors
+  serverRuntimeConfig: {
+    maxHeaderSize: 16384, // 16KB
   },
 }
 

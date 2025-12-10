@@ -308,16 +308,21 @@ export const stalkerAuthService = new StalkerAuthService()
 export interface Provider {
   id: string
   provider_id?: string
-  type: 'STALKER' | 'XTREAM' | 'M3U'
+  type: 'STALKER' | 'XTREAM' | 'M3U' | 'stalker' | 'xtream' | 'm3u'
   name: string
   url?: string
   server_url?: string
+  mac_address?: string
+  serial_number?: string
+  token?: string
   isActive?: boolean
   is_active?: boolean
+  is_configured?: boolean
   createdAt?: string
   created_at?: string
   lastSync?: string
   last_sync?: string
+  synced_at?: string
 }
 
 export interface AddProviderRequest {
@@ -361,7 +366,33 @@ class ProviderService {
     })
     const providers = response.data.data?.providers || []
     console.log('Raw providers from backend:', providers)
+    
+    // Map backend response to Provider interface
+    // Filter out providers with "pending" or empty server URLs
     return providers
+      .filter((p: any) => {
+        const serverUrl = p.server_url || p.url
+        return serverUrl && serverUrl !== 'pending' && serverUrl.trim() !== ''
+      })
+      .map((p: any) => ({
+        id: p.id || p.provider_id,
+        provider_id: p.provider_id,
+        type: p.type,
+        name: p.name,
+        url: p.server_url || p.url,
+        server_url: p.server_url,
+        mac_address: p.mac_address,
+        serial_number: p.serial_number,
+        token: p.token,
+        isActive: p.is_active,
+        is_active: p.is_active,
+        is_configured: p.is_configured,
+        createdAt: p.created_at,
+        created_at: p.created_at,
+        lastSync: p.synced_at || p.updated_at,
+        last_sync: p.synced_at,
+        synced_at: p.synced_at,
+      }))
   }
 
   async addProvider(data: AddProviderRequest): Promise<Provider> {

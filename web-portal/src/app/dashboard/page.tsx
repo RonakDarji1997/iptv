@@ -155,7 +155,7 @@ export default function DashboardPage() {
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex-1">
                     <h3 className="text-xl font-bold mb-1">{provider.name}</h3>
-                    <p className="text-sm text-gray-400">{provider.type}</p>
+                    <p className="text-sm text-gray-400 capitalize">{provider.type}</p>
                   </div>
 
                   <div className="flex items-center space-x-2">
@@ -167,12 +167,33 @@ export default function DashboardPage() {
                   </div>
                 </div>
 
-                <div className="mb-4">
-                  <p className="text-sm text-gray-400 truncate">{provider.url}</p>
-                  {provider.lastSync && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      Last sync: {new Date(provider.lastSync).toLocaleString()}
+                <div className="mb-4 space-y-2">
+                  {/* Server URL */}
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Server URL:</p>
+                    <p className="text-sm text-gray-300 truncate font-mono">
+                      {provider.server_url || provider.url || 'Not configured'}
                     </p>
+                  </div>
+                  
+                  {/* MAC Address */}
+                  {provider.mac_address && (
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">MAC Address:</p>
+                      <p className="text-sm text-blue-400 font-mono">
+                        {provider.mac_address}
+                      </p>
+                    </div>
+                  )}
+                  
+                  {/* Last Sync */}
+                  {provider.lastSync && (
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Last Sync:</p>
+                      <p className="text-xs text-gray-400">
+                        {new Date(provider.lastSync).toLocaleString()}
+                      </p>
+                    </div>
                   )}
                 </div>
 

@@ -140,8 +140,8 @@ export const createSyncRouter = (pool: Pool) => {
               is_enabled = EXCLUDED.is_enabled,
               sort_order = EXCLUDED.sort_order,
               updated_at = NOW()`,
-            [cat.id, userId, providerUuid, cat.name, cat.type, cat.contentType,
-             cat.censored || 0, cat.isEnabled !== false, cat.sortOrder || 0]
+            [cat.category_id, userId, providerUuid, cat.name, cat.type, cat.content_type,
+             cat.censored || 0, cat.is_enabled !== false, cat.sort_order || 0]
           );
           syncedCount++;
         }
