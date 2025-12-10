@@ -22,8 +22,14 @@ export async function GET(request: NextRequest) {
       headers: getAuthHeader(request),
     })
 
-    const data = await response.json()
-    return NextResponse.json(data, { status: response.status })
+    const text = await response.text();
+    try {
+      const data = JSON.parse(text);
+      return NextResponse.json(data, { status: response.status });
+    } catch (err) {
+      console.error('Upstream response was not JSON:', text);
+      return NextResponse.json({ error: 'Upstream response was not JSON' }, { status: 500 });
+    }
   } catch (error) {
     console.error('Sync pull error:', error)
     return NextResponse.json({ error: 'Sync failed' }, { status: 500 })

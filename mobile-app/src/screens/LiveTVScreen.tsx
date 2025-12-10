@@ -15,23 +15,26 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { COLORS, SPACING } from '../constants';
 import { LoadingIndicator, ErrorState, EmptyState, LiveTVPlayer } from '../components';
+import { ProviderDropdown } from '../components/ProviderDropdown';
 import { CategoryRepository } from '../repositories';
 import { Category } from '../types';
 import { StalkerPortalClient, StalkerChannel } from '../services/StalkerPortalClient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { ProviderService } from '../services/ProviderService';
 
 const { width } = Dimensions.get('window');
 const isTablet = width >= 768;
 const THUMBNAIL_WIDTH = isTablet ? (width - SPACING.lg * 7) / 5 : (width - SPACING.lg * 5) / 3;
 const THUMBNAIL_HEIGHT = THUMBNAIL_WIDTH * 1.5;
 const MAX_THUMBNAILS = 25;
-const FALLBACK_IMAGE = 'https://via.placeholder.com/300x450/1a1a1a/ffffff?text=No+Image';
+const FALLBACK_IMAGE = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzAwIiBoZWlnaHQ9IjQ1MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMzAwIiBoZWlnaHQ9IjQ1MCIgZmlsbD0iIzFhMWExYSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LXNpemU9IjIwIiBmaWxsPSIjZmZmZmZmIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSI+Tm8gSW1hZ2U8L3RleHQ+PC9zdmc+';
 
 export default function LiveTVScreen() {
   const navigation = useNavigation();
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
+  const [selectedProviderId, setSelectedProviderId] = useState<string | undefined>(undefined);
   const [channels, setChannels] = useState<StalkerChannel[]>([]);
   const [categoryChannels, setCategoryChannels] = useState<Record<string, StalkerChannel[]>>({});
   const [channelCategoryMap, setChannelCategoryMap] = useState<Record<string, string>>({});
@@ -43,12 +46,59 @@ export default function LiveTVScreen() {
   const [hasMore, setHasMore] = useState(true);
   const [stalkerClient, setStalkerClient] = useState<StalkerPortalClient | null>(null);
   const [portalUrl, setPortalUrl] = useState<string>('');
+  const [loadedCategoryIds, setLoadedCategoryIds] = useState<Set<string>>(new Set());
   const isFocusedRef = React.useRef(true);
+  const stalkerClientRef = React.useRef<StalkerPortalClient | null>(null);
+  const loadedCategoryIdsRef = React.useRef<Set<string>>(new Set());
+
+  // Update refs when state changes
+  React.useEffect(() => {
+    stalkerClientRef.current = stalkerClient;
+  }, [stalkerClient]);
+
+  React.useEffect(() => {
+    loadedCategoryIdsRef.current = loadedCategoryIds;
+  }, [loadedCategoryIds]);
+
+  // Lazy loading configuration - must remain stable
+  const handleViewableItemsChanged = React.useCallback(({ viewableItems }: any) => {
+    // Load channels for categories that come into view
+    if (stalkerClientRef.current && isFocusedRef.current) {
+      viewableItems.forEach((viewableItem: any) => {
+        const category = viewableItem.item;
+        if (category && !loadedCategoryIdsRef.current.has(category.id)) {
+          loadCategoryChannels(category, stalkerClientRef.current);
+        }
+      });
+    }
+  }, []); // Empty deps - callback never changes
+
+  const viewabilityConfig = React.useRef({
+    itemVisiblePercentThreshold: 50,
+  }).current;
+
+  // Reload categories when provider selection changes
+  useEffect(() => {
+    if (stalkerClient) {
+      loadCategories(stalkerClient, selectedProviderId);
+      // Clear loaded category channels when provider changes
+      setCategoryChannels({});
+      setLoadedCategoryIds(new Set());
+    }
+  }, [selectedProviderId]);
 
   useEffect(() => {
     const init = async () => {
+      // Load the first active provider as default
+      const activeProviders = await ProviderService.getActiveProviders();
+      console.log('🏢 [LiveTV] Active providers:', activeProviders.map(p => ({ id: p.id, name: p.name })));
+      if (activeProviders.length > 0 && !selectedProviderId) {
+        console.log('🎯 [LiveTV] Setting default provider:', activeProviders[0].id, activeProviders[0].name);
+        setSelectedProviderId(activeProviders[0].id);
+      }
+      
       const client = await initStalkerClient();
-      await loadCategories(client);
+      await loadCategories(client, selectedProviderId);
     };
     init();
     
@@ -108,33 +158,19 @@ export default function LiveTVScreen() {
     }
   };
 
-  const loadCategories = async (client?: StalkerPortalClient | null) => {
+  const loadCategories = async (client?: StalkerPortalClient | null, providerId?: string) => {
     try {
+      console.log(`📺 [LiveTV] Loading categories for provider: ${providerId || 'ALL'}`);
       setCategoriesLoading(true);
-      const cats = await CategoryRepository.getLiveCategories();
-      setCategories(cats);
-      setCategoriesLoading(false); // Show categories immediately
-      
-      // Use provided client or fall back to state
-      const activeClient = client || stalkerClient;
-      
-      // If stalker client is available, load channel previews progressively
-      if (activeClient) {
-        for (const cat of cats) {
-          // Stop if screen is not focused
-          if (!isFocusedRef.current) {
-            console.log('⏸️ Stopping channel loading - screen not focused');
-            break;
-          }
-          
-          try {
-            await loadCategoryChannels(cat, activeClient);
-          } catch (error) {
-            console.error(`❌ Error loading ${cat.name}:`, error);
-          }
-        }
+      const cats = await CategoryRepository.getLiveCategories(providerId);
+      console.log(`✅ [LiveTV] Loaded ${cats.length} categories`);
+      if (cats.length > 0) {
+        console.log('📋 [LiveTV] First 3 categories:', cats.slice(0, 3).map(c => ({ name: c.name, id: c.id })));
       }
+      setCategories(cats);
+      setCategoriesLoading(false); // Show categories immediately without waiting for channels
     } catch (err) {
+      console.error('❌ [LiveTV] Error loading categories:', err);
       setCategoriesLoading(false);
       // Silently handle error
     }
@@ -142,10 +178,12 @@ export default function LiveTVScreen() {
 
   const loadCategoryChannels = async (category: Category, client?: StalkerPortalClient | null) => {
     const activeClient = client || stalkerClient;
-    if (!activeClient || categoryChannels[category.id]) return;
+    if (!activeClient || loadedCategoryIds.has(category.id)) return;
     
     try {
       console.log(`📡 Loading channels preview for category: ${category.name}`);
+      setLoadedCategoryIds(prev => new Set(prev).add(category.id));
+      
       const response = await activeClient.getChannelsByCategory(category.id, 1);
       const channelsList = response.channels || [];
       const limitedChannels = channelsList.slice(0, MAX_THUMBNAILS);
@@ -309,12 +347,18 @@ export default function LiveTVScreen() {
         onPress={() => handleChannelPress(item)}
         activeOpacity={0.7}
       >
-        <Image
-          source={{ uri: imageUrl }}
-          style={styles.thumbnailImage}
-          resizeMode="cover"
-          onError={() => setHasError(true)}
-        />
+        {hasError ? (
+          <View style={[styles.thumbnailImage, styles.noImagePlaceholder]}>
+            <Ionicons name="tv-outline" size={48} color="#666" />
+          </View>
+        ) : (
+          <Image
+            source={{ uri: imageUrl }}
+            style={styles.thumbnailImage}
+            resizeMode="cover"
+            onError={() => setHasError(true)}
+          />
+        )}
         <Text style={styles.thumbnailTitle} numberOfLines={2}>
           {item.name || 'Untitled'}
         </Text>
@@ -323,6 +367,9 @@ export default function LiveTVScreen() {
   });
 
   const renderCategoryRow = ({ item: category }: { item: Category }) => {
+    const channels = categoryChannels[category.id] || [];
+    const isLoaded = loadedCategoryIds.has(category.id);
+    
     return (
       <View style={styles.categoryRow}>
         <View style={styles.categoryHeader}>
@@ -336,19 +383,24 @@ export default function LiveTVScreen() {
           </TouchableOpacity>
         </View>
         
-        <FlatList
-          horizontal
-          data={categoryChannels[category.id] || []}
-          renderItem={({ item }) => <ChannelThumbnail item={item} />}
-          keyExtractor={(item) => item.id}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.thumbnailList}
-          ListEmptyComponent={
-            <View style={styles.loadingThumbnails}>
-              <ActivityIndicator size="small" color={COLORS.primary} />
-            </View>
-          }
-        />
+        {!isLoaded ? (
+          <View style={styles.loadingThumbnails}>
+            <Text style={styles.loadingText}>Loading...</Text>
+          </View>
+        ) : channels.length > 0 ? (
+          <FlatList
+            horizontal
+            data={channels}
+            renderItem={({ item }) => <ChannelThumbnail item={item} />}
+            keyExtractor={(item) => item.id}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.thumbnailList}
+          />
+        ) : (
+          <View style={styles.loadingThumbnails}>
+            <Text style={styles.loadingText}>No channels</Text>
+          </View>
+        )}
       </View>
     );
   };
@@ -436,11 +488,24 @@ export default function LiveTVScreen() {
   return (
     <>
       <View style={styles.container}>
+        <View style={styles.header}>
+          <ProviderDropdown
+            selectedProviderId={selectedProviderId}
+            onProviderSelect={setSelectedProviderId}
+            style={styles.providerDropdown}
+          />
+        </View>
         <FlatList
           data={categories}
           renderItem={renderCategoryRow}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.categoriesContainer}
+          onViewableItemsChanged={handleViewableItemsChanged}
+          viewabilityConfig={viewabilityConfig}
+          removeClippedSubviews={true}
+          maxToRenderPerBatch={5}
+          updateCellsBatchingPeriod={50}
+          windowSize={10}
         />
       </View>
       
@@ -470,6 +535,15 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: SPACING.md,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  providerDropdown: {
+    flex: 1,
   },
   categoriesContainer: {
     padding: SPACING.lg,
@@ -510,6 +584,11 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: COLORS.backgroundLight,
   },
+  noImagePlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#1a1a1a',
+  },
   thumbnailTitle: {
     color: COLORS.text,
     fontSize: 14,
@@ -520,6 +599,10 @@ const styles = StyleSheet.create({
     height: THUMBNAIL_HEIGHT,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  loadingText: {
+    color: COLORS.textMuted,
+    fontSize: 14,
   },
   header: {
     flexDirection: 'row',

@@ -6,6 +6,7 @@ export interface Category {
   censored: boolean;
   type: 'LIVE' | 'MOVIE' | 'SERIES';
   isEnabled?: boolean;
+  providerId?: string;
 }
 
 export interface CategoriesResponse {

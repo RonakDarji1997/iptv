@@ -16,6 +16,9 @@ import SearchScreen from './src/screens/SearchScreen';
 import MovieDetailScreen from './src/screens/MovieDetailScreen';
 import SeriesDetailScreen from './src/screens/SeriesDetailScreen';
 import LoginScreen from './src/screens/LoginScreen';
+import { ProviderSelectionScreen } from './src/screens/ProviderSelectionScreen';
+import { ProviderSettingsScreen } from './src/screens/ProviderSettingsScreen';
+import { ProviderService } from './src/services/ProviderService';
 
 // Tab icon component with proper icons
 const TabIcon = ({ name, focused, size = 24 }: { name: string; focused: boolean; size?: number }) => {
@@ -24,6 +27,7 @@ const TabIcon = ({ name, focused, size = 24 }: { name: string; focused: boolean;
     Movies: { focused: 'film', unfocused: 'film-outline' },
     Series: { focused: 'play-circle', unfocused: 'play-circle-outline' },
     Search: { focused: 'search', unfocused: 'search-outline' },
+    Settings: { focused: 'settings', unfocused: 'settings-outline' },
   };
 
   const iconName = iconMap[name] ? (focused ? iconMap[name].focused : iconMap[name].unfocused) : 'apps';
@@ -95,6 +99,11 @@ function TabNavigator({ onLogout }: { onLogout: () => void }) {
         name="Search" 
         component={SearchScreen}
       />
+      <Tab.Screen 
+        name="Settings" 
+        component={ProviderSettingsScreen}
+        options={{ title: 'Settings' }}
+      />
     </Tab.Navigator>
   );
 }
@@ -102,6 +111,7 @@ function TabNavigator({ onLogout }: { onLogout: () => void }) {
 export default function App() {
   const [isInitialized, setIsInitialized] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [needsProviderSelection, setNeedsProviderSelection] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -141,11 +151,20 @@ export default function App() {
             return;
           }
           
-          console.log('🔄 Syncing categories from Stalker portal...');
-          const syncSuccess = await StalkerSyncService.syncCategories(true);
+          console.log('🔄 Syncing categories from backend...');
+          const CategoryRepositoryModule = await import('./src/repositories/CategoryRepository');
+          const CategoryRepository = CategoryRepositoryModule.CategoryRepository;
+          const syncSuccess = await CategoryRepository.syncFromBackend(true);
           
           if (!syncSuccess) {
-            setSyncError('Failed to sync categories from portal');
+            setSyncError('Failed to sync categories from backend');
+          }
+          
+          // Check if we have multiple providers and need to show selection screen
+          console.log('🔍 Checking for multiple providers...');
+          const hasMultiple = await ProviderService.hasMultipleProviders();
+          if (hasMultiple && isMounted) {
+            setNeedsProviderSelection(true);
           }
         }
       } catch (error) {
@@ -202,6 +221,13 @@ export default function App() {
       if (!syncSuccess) {
         setSyncError('Failed to sync categories from portal');
       }
+      
+      // Check if we have multiple providers and need to show selection screen
+      console.log('🔍 Checking for multiple providers...');
+      const hasMultiple = await ProviderService.hasMultipleProviders();
+      if (hasMultiple) {
+        setNeedsProviderSelection(true);
+      }
     } catch (error) {
       console.error('❌ Post-login sync failed:', error);
       setSyncError('Failed to sync data');
@@ -243,7 +269,24 @@ export default function App() {
             },
             headerBackTitle: 'Back',
           }}
+          initialRouteName={needsProviderSelection ? 'ProviderSelection' : 'Main'}
         >
+          {needsProviderSelection && (
+            <Stack.Screen 
+              name="ProviderSelection" 
+              component={ProviderSelectionScreen}
+              options={{ 
+                headerShown: false,
+                gestureEnabled: false,
+              }}
+              listeners={{
+                focus: () => {
+                  // Once provider selection is done, mark as no longer needed
+                  setNeedsProviderSelection(false);
+                }
+              }}
+            />
+          )}
           <Stack.Screen 
             name="Main" 
             options={{ headerShown: false }}
@@ -259,6 +302,13 @@ export default function App() {
             name="SeriesDetail" 
             component={SeriesDetailScreen}
             options={{ title: 'Series Details' }}
+          />
+          <Stack.Screen 
+            name="ProviderSettings" 
+            component={ProviderSettingsScreen}
+            options={{ 
+              headerShown: false,
+            }}
           />
         </Stack.Navigator>
       </NavigationContainer>

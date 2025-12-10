@@ -12,7 +12,7 @@ export class ChannelRepository {
       const db = await Database.getDatabase();
       
       // First get the internal category UUID from category_id
-      const categoryResult = await db.getAllAsync<{ id: string }>(`
+      const categoryResult = await db.getAllRows<{ id: string }>(`
         SELECT id FROM categories WHERE category_id = ? AND content_type = 'live' LIMIT 1
       `, [categoryId]);
 
@@ -24,7 +24,7 @@ export class ChannelRepository {
       const categoryUuid = categoryResult[0].id;
 
       // Check if we have channels for this category
-      const countResult = await db.getAllAsync<{ count: number }>(`
+      const countResult = await db.getAllRows<{ count: number }>(`
         SELECT COUNT(*) as count FROM channels WHERE category_id = ?
       `, [categoryUuid]);
 
@@ -37,7 +37,7 @@ export class ChannelRepository {
       }
 
       // Get channels for this category
-      const result = await db.getAllAsync<{
+      const result = await db.getAllRows<{
         channel_id: string;
         name: string;
         url: string;
@@ -74,7 +74,7 @@ export class ChannelRepository {
   static async getAllChannels(): Promise<Channel[]> {
     try {
       const db = await Database.getDatabase();
-      const result = await db.getAllAsync<{
+      const result = await db.getAllRows<{
         channel_id: string;
         name: string;
         url: string;
@@ -111,7 +111,7 @@ export class ChannelRepository {
   static async searchChannels(query: string): Promise<Channel[]> {
     try {
       const db = await Database.getDatabase();
-      const result = await db.getAllAsync<{
+      const result = await db.getAllRows<{
         channel_id: string;
         name: string;
         url: string;

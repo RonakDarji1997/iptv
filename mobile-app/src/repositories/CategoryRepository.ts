@@ -11,14 +11,28 @@ export class CategoryRepository {
    * Get live TV categories from local database
    * Database is the source of truth
    */
-  static async getLiveCategories(): Promise<Category[]> {
+  static async getLiveCategories(providerId?: string): Promise<Category[]> {
     try {
+      console.log(`🔍 [getLiveCategories] Filtering by providerId: ${providerId || 'ALL'}`);
       const db = await Database.getDatabase();
-      const result = await db.getAllAsync<any>(`
+      let query = `
         SELECT * FROM categories 
         WHERE type = 'LIVE' AND is_enabled = 1
-        ORDER BY censored ASC, sort_order ASC, name ASC
-      `);
+      `;
+      const params: any[] = [];
+      
+      if (providerId) {
+        query += ` AND provider_id = ?`;
+        params.push(providerId);
+      }
+      
+      query += ` ORDER BY censored ASC, sort_order ASC, name ASC`;
+      
+      const result = await db.getAllRows<any>(query, params);
+      console.log(`✅ [getLiveCategories] Found ${result.length} categories for provider: ${providerId || 'ALL'}`);
+      if (result.length > 0) {
+        console.log(`📋 First 3 categories:`, result.slice(0, 3).map(r => ({ name: r.name, provider_id: r.provider_id })));
+      }
 
       return result.map(row => ({
         id: row.category_id,
@@ -28,6 +42,7 @@ export class CategoryRepository {
         censored: row.censored,
         isEnabled: row.is_enabled === 1,
         sortOrder: row.sort_order,
+        providerId: row.provider_id,
       }));
     } catch (error) {
       console.error('Failed to get live categories from DB:', error);
@@ -38,14 +53,28 @@ export class CategoryRepository {
   /**
    * Get movie categories from local database
    */
-  static async getMovieCategories(): Promise<Category[]> {
+  static async getMovieCategories(providerId?: string): Promise<Category[]> {
     try {
+      console.log(`🔍 [getMovieCategories] Filtering by providerId: ${providerId || 'ALL'}`);
       const db = await Database.getDatabase();
-      const result = await db.getAllAsync<any>(`
+      let query = `
         SELECT * FROM categories 
         WHERE content_type = 'movie' AND is_enabled = 1
-        ORDER BY censored ASC, sort_order ASC, name ASC
-      `);
+      `;
+      const params: any[] = [];
+      
+      if (providerId) {
+        query += ` AND provider_id = ?`;
+        params.push(providerId);
+      }
+      
+      query += ` ORDER BY censored ASC, sort_order ASC, name ASC`;
+      
+      const result = await db.getAllRows<any>(query, params);
+      console.log(`✅ [getMovieCategories] Found ${result.length} categories for provider: ${providerId || 'ALL'}`);
+      if (result.length > 0) {
+        console.log(`📋 First 3 categories:`, result.slice(0, 3).map(r => ({ name: r.name, provider_id: r.provider_id })));
+      }
 
       return result.map(row => ({
         id: row.category_id,
@@ -55,6 +84,7 @@ export class CategoryRepository {
         censored: row.censored,
         isEnabled: row.is_enabled === 1,
         sortOrder: row.sort_order,
+        providerId: row.provider_id,
       }));
     } catch (error) {
       console.error('Failed to get movie categories from DB:', error);
@@ -65,14 +95,28 @@ export class CategoryRepository {
   /**
    * Get series categories from local database
    */
-  static async getSeriesCategories(): Promise<Category[]> {
+  static async getSeriesCategories(providerId?: string): Promise<Category[]> {
     try {
+      console.log(`🔍 [getSeriesCategories] Filtering by providerId: ${providerId || 'ALL'}`);
       const db = await Database.getDatabase();
-      const result = await db.getAllAsync<any>(`
+      let query = `
         SELECT * FROM categories 
         WHERE content_type = 'series' AND is_enabled = 1
-        ORDER BY censored ASC, sort_order ASC, name ASC
-      `);
+      `;
+      const params: any[] = [];
+      
+      if (providerId) {
+        query += ` AND provider_id = ?`;
+        params.push(providerId);
+      }
+      
+      query += ` ORDER BY censored ASC, sort_order ASC, name ASC`;
+      
+      const result = await db.getAllRows<any>(query, params);
+      console.log(`✅ [getSeriesCategories] Found ${result.length} categories for provider: ${providerId || 'ALL'}`);
+      if (result.length > 0) {
+        console.log(`📋 First 3 categories:`, result.slice(0, 3).map(r => ({ name: r.name, provider_id: r.provider_id })));
+      }
 
       return result.map(row => ({
         id: row.category_id,
@@ -82,6 +126,7 @@ export class CategoryRepository {
         censored: row.censored,
         isEnabled: row.is_enabled === 1,
         sortOrder: row.sort_order,
+        providerId: row.provider_id,
       }));
     } catch (error) {
       console.error('Failed to get series categories from DB:', error);
@@ -111,20 +156,25 @@ export class CategoryRepository {
       console.log('🔄 Starting backend sync...');
       const syncData = await backendClient.syncPull();
 
+      console.log('📥 Backend sync response:', JSON.stringify(syncData).substring(0, 500));
+
       if (!syncData.success || !syncData.data) {
         throw new Error('Sync failed');
       }
 
       const db = await Database.getDatabase();
       const { providers, categories, channels, progress } = syncData.data;
+      
+      console.log(`📦 Received from backend: ${providers.length} providers, ${categories.length} categories, ${channels.length} channels`);
+      console.log('🏢 Providers:', providers.map(p => ({ id: p.provider_id, name: p.name, active: p.is_active })));
 
       // Begin transaction
-      await db.execAsync('BEGIN TRANSACTION');
+      await db.beginTransaction();
 
       try {
         // Insert providers
         for (const provider of providers) {
-          await db.runAsync(
+          await db.runQuery(
             `INSERT OR REPLACE INTO providers (
               id, user_id, provider_id, name, type, server_url, username, password,
               mac_address, serial_number, token, configuration, is_active, is_configured,
@@ -156,7 +206,7 @@ export class CategoryRepository {
 
         // Insert categories
         for (const category of categories) {
-          await db.runAsync(
+          await db.runQuery(
             `INSERT OR REPLACE INTO categories (
               id, user_id, provider_id, category_id, name, type, content_type,
               censored, is_enabled, sort_order, created_at, updated_at
@@ -180,7 +230,7 @@ export class CategoryRepository {
 
         // Insert channels
         for (const channel of channels) {
-          await db.runAsync(
+          await db.runQuery(
             `INSERT OR REPLACE INTO channels (
               id, user_id, category_id, channel_id, name, url, cmd, logo,
               number, is_active, external_id, created_at, updated_at
@@ -205,7 +255,7 @@ export class CategoryRepository {
 
         // Insert watch progress
         for (const prog of progress) {
-          await db.runAsync(
+          await db.runQuery(
             `INSERT OR REPLACE INTO watch_progress (
               id, user_id, content_id, content_type, content_name, provider_id,
               current_position, duration, last_watched_at, created_at, updated_at
@@ -226,7 +276,7 @@ export class CategoryRepository {
           );
         }
 
-        await db.execAsync('COMMIT');
+        await db.commit();
 
         // Update last sync time
         await AsyncStorage.setItem(LAST_SYNC_KEY, Date.now().toString());
@@ -234,7 +284,7 @@ export class CategoryRepository {
         console.log(`✅ Sync complete: ${providers.length} providers, ${categories.length} categories, ${channels.length} channels`);
         return true;
       } catch (error) {
-        await db.execAsync('ROLLBACK');
+        await db.rollback();
         throw error;
       }
     } catch (error) {

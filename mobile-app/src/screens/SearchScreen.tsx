@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, TextInput, FlatList, StyleSheet, Text, TouchableOpacity, Image, Dimensions } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES } from '../constants';
 import { LoadingIndicator, EmptyState } from '../components';
 import { StalkerPortalClient, StalkerVodItem } from '../services/StalkerPortalClient';
@@ -129,17 +130,19 @@ export default function SearchScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>
-      <View style={styles.searchContainer}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search movies, series, channels..."
-          placeholderTextColor={COLORS.textMuted}
-          value={query}
-          onChangeText={handleTextChange}
-          autoCorrect={false}
-          autoCapitalize="none"
-          returnKeyType="search"
-        />
+      <View style={styles.header}>
+        <View style={styles.searchContainer}>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search movies, series, channels..."
+            placeholderTextColor={COLORS.textMuted}
+            value={query}
+            onChangeText={handleTextChange}
+            autoCorrect={false}
+            autoCapitalize="none"
+            returnKeyType="search"
+          />
+        </View>
       </View>
 
       {loading ? (
@@ -166,12 +169,17 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background,
   },
-  searchContainer: {
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.md,
     backgroundColor: COLORS.backgroundLight,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
+  },
+  searchContainer: {
+    flex: 1,
   },
   searchInput: {
     backgroundColor: COLORS.cardBackground,

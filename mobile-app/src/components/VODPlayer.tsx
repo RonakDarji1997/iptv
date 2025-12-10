@@ -94,6 +94,11 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
       setIsLoading(true);
       setError(null);
       
+      console.log('🎬 [VODPlayer] Initializing video...');
+      console.log('  Stream URL:', streamUrl);
+      console.log('  Title:', title);
+      console.log('  Platform:', Platform.OS);
+      
       // Configure audio mode for Expo Go
       const { Audio } = await import('expo-av');
       await Audio.setAudioModeAsync({
@@ -104,20 +109,13 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
         playThroughEarpieceAndroid: false,
       });
       
-      if (videoRef.current) {
-        await videoRef.current.loadAsync(
-          { uri: streamUrl },
-          { 
-            shouldPlay: true,
-            volume: 1.0,
-            isMuted: false,
-            progressUpdateIntervalMillis: 500,
-          },
-          false
-        );
-      }
+      console.log('✅ [VODPlayer] Audio mode configured, video will auto-load from source prop');
+      
+      // With source prop, video loads automatically
+      // The onPlaybackStatusUpdate will handle the rest
+      
     } catch (err: any) {
-      console.error('❌ Failed to load video:', err);
+      console.error('❌ Failed to initialize video:', err);
       console.error('❌ Error details:', JSON.stringify(err));
       
       let errorMessage = 'Failed to load video';
@@ -131,7 +129,7 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
       
       setError(errorMessage);
     }
-  }, [streamUrl]);
+  }, [streamUrl, title]);
 
   useEffect(() => {
     // Load video immediately
@@ -213,6 +211,15 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
   }, [showControls]);
 
   const handlePlaybackStatusUpdate = (status: AVPlaybackStatus) => {
+    console.log('🔔 [VODPlayer] Status update:', {
+      isLoaded: status.isLoaded,
+      isPlaying: status.isLoaded && status.isPlaying,
+      isBuffering: status.isLoaded && status.isBuffering,
+      positionMillis: status.isLoaded && status.positionMillis,
+      durationMillis: status.isLoaded && status.durationMillis,
+      error: !status.isLoaded && status.error,
+    });
+    
     if (status.isLoaded) {
       setIsLoading(false);
       setIsPlaying(status.isPlaying);
@@ -220,6 +227,7 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
       
       // Reset retry count on successful playback
       if (status.isPlaying) {
+        console.log('✅ [VODPlayer] Video is now playing!');
         setRetryCount(0);
         setError(null);
       }
@@ -419,7 +427,60 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
-  return (
+  return Platform.OS === 'web' ? (
+    <View style={styles.safeArea}>
+      <View style={styles.container}>
+        <StatusBar hidden />
+        <View style={styles.videoContainer}>
+          <video
+            ref={videoRef as any}
+            src={streamUrl}
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'contain',
+              backgroundColor: '#000',
+            }}
+            controls
+            autoPlay
+            onLoadedMetadata={(e: any) => {
+              console.log('🎬 [VODPlayer Web] Video loaded');
+              setIsLoading(false);
+            }}
+            onPlay={() => {
+              console.log('✅ [VODPlayer Web] Video playing');
+              setIsPlaying(true);
+            }}
+            onPause={() => {
+              console.log('⏸️ [VODPlayer Web] Video paused');
+              setIsPlaying(false);
+            }}
+            onError={(e: any) => {
+              console.error('❌ [VODPlayer Web] Video error:', e);
+              setError('Failed to load video');
+              setIsLoading(false);
+            }}
+          />
+          
+          {/* Close Button Overlay */}
+          <TouchableOpacity 
+            onPress={onClose} 
+            style={{
+              position: 'absolute',
+              top: 20,
+              right: 20,
+              backgroundColor: 'rgba(0, 0, 0, 0.7)',
+              borderRadius: 20,
+              padding: 8,
+              zIndex: 1000,
+            }}
+          >
+            <Ionicons name="close" size={28} color={COLORS.text} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  ) : (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
       <View style={styles.container}>
         <StatusBar hidden />
@@ -427,9 +488,13 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
         <Video
           ref={videoRef}
           style={styles.video}
+          source={{ uri: streamUrl }}
           resizeMode={resizeMode}
           onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
           useNativeControls={false}
+          shouldPlay={true}
+          volume={1.0}
+          isMuted={false}
         />
 
         {/* Loading Indicator */}
@@ -705,14 +770,21 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#000',
+    ...(Platform.OS === 'web' && {
+      width: '100vw' as any,
+      height: '100vh' as any,
+      overflow: 'hidden' as any,
+    }),
   },
   container: {
     flex: 1,
     backgroundColor: '#000',
+    overflow: 'hidden',
   },
   videoContainer: {
     flex: 1,
     backgroundColor: '#000',
+    overflow: 'hidden',
   },
   video: {
     position: 'absolute',

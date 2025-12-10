@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, Image, Text, TouchableOpacity, StyleSheet, Modal, Alert, ActivityIndicator } from 'react-native';
+import { View, ScrollView, Image, Text, TouchableOpacity, StyleSheet, Modal, Alert, ActivityIndicator, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, SPACING, FONT_SIZES, IS_TABLET } from '../constants';
 import { VODPlayer } from '../components';
@@ -126,17 +126,19 @@ export default function MovieDetailScreen({ route, navigation }: any) {
               <View style={styles.infoSection}>
                 <Text style={styles.title}>{movie.name}</Text>
                 
-                <View style={styles.metaRow}>
-                  {movie.year && (
-                    <Text style={styles.metaText}>{movie.year?.toString() || ''}</Text>
-                  )}
-                  {movie.rating_imdb && movie.rating_imdb > 0 && (
-                    <>
-                      <Text style={styles.metaDot}>•</Text>
-                      <Text style={styles.metaText}>⭐ {movie.rating_imdb.toFixed(1)}</Text>
-                    </>
-                  )}
-                </View>
+                {(movie.year || (movie.rating_imdb && movie.rating_imdb > 0)) && (
+                  <View style={styles.metaRow}>
+                    {movie.year && (
+                      <Text style={styles.metaText}>{movie.year?.toString() || ''}</Text>
+                    )}
+                    {movie.rating_imdb && movie.rating_imdb > 0 && (
+                      <>
+                        <Text style={styles.metaDot}>•</Text>
+                        <Text style={styles.metaText}>⭐ {movie.rating_imdb.toFixed(1)}</Text>
+                      </>
+                    )}
+                  </View>
+                )}
 
                 {movie.genres_str && (
                   <Text style={styles.genres}>{movie.genres_str}</Text>
@@ -194,19 +196,29 @@ export default function MovieDetailScreen({ route, navigation }: any) {
 
       {/* Fullscreen Player Modal */}
       {playingMovie && (
-        <Modal
-          visible={true}
-          animationType="slide"
-          onRequestClose={() => setPlayingMovie(null)}
-          statusBarTranslucent={true}
-          presentationStyle="fullScreen"
-        >
-          <VODPlayer
-            streamUrl={playingMovie.streamUrl}
-            title={movie.name}
-            onClose={() => setPlayingMovie(null)}
-          />
-        </Modal>
+        Platform.OS === 'web' ? (
+          <View style={StyleSheet.absoluteFillObject}>
+            <VODPlayer
+              streamUrl={playingMovie.streamUrl}
+              title={movie.name}
+              onClose={() => setPlayingMovie(null)}
+            />
+          </View>
+        ) : (
+          <Modal
+            visible={true}
+            animationType="slide"
+            onRequestClose={() => setPlayingMovie(null)}
+            statusBarTranslucent={true}
+            presentationStyle="fullScreen"
+          >
+            <VODPlayer
+              streamUrl={playingMovie.streamUrl}
+              title={movie.name}
+              onClose={() => setPlayingMovie(null)}
+            />
+          </Modal>
+        )
       )}
     </>
   );

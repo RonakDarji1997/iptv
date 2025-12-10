@@ -95,6 +95,10 @@ export const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
       setIsLoading(true);
       setError(null);
       
+      console.log('🎬 [LiveTVPlayer] Starting video load...');
+      console.log('  Stream URL:', streamUrl);
+      console.log('  Channel:', channel.name);
+      
       // Configure audio mode for Expo Go
       const { Audio } = await import('expo-av');
       await Audio.setAudioModeAsync({
@@ -119,12 +123,33 @@ export const LiveTVPlayer: React.FC<LiveTVPlayerProps> = ({
           false
         );
         console.log('✅ Video loaded successfully');
+        
+        // Try to play explicitly after load
+        setTimeout(async () => {
+          try {
+            if (videoRef.current) {
+              const status = await videoRef.current.getStatusAsync();
+              console.log('📊 Video status after load:', {
+                isLoaded: status.isLoaded,
+                isPlaying: status.isLoaded && status.isPlaying,
+                shouldPlay: status.isLoaded && status.shouldPlay,
+              });
+              
+              if (status.isLoaded && !status.isPlaying) {
+                console.log('🔄 Explicitly calling playAsync()...');
+                await videoRef.current.playAsync();
+              }
+            }
+          } catch (e) {
+            console.error('❌ Error in explicit play:', e);
+          }
+        }, 500);
       }
     } catch (err) {
-      console.log('⚠️ Failed to load stream');
+      console.error('❌ Failed to load stream:', err);
       setError('Failed to load stream');
     }
-  }, [streamUrl]);
+  }, [streamUrl, channel.name]);
 
   const refreshStream = useCallback(async () => {
     console.log('🔄 Refreshing stream (token may have expired)...');

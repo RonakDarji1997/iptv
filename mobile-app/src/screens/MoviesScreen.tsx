@@ -13,11 +13,13 @@ import {
 } from 'react-native';
 import { COLORS, SPACING, API_CONFIG } from '../constants';
 import { LoadingIndicator, ErrorState, EmptyState } from '../components';
+import { ProviderDropdown } from '../components/ProviderDropdown';
 import { CategoryRepository } from '../repositories';
 import { Category } from '../types';
 import { StalkerPortalClient, StalkerVodItem } from '../services/StalkerPortalClient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { ProviderService } from '../services/ProviderService';
 
 const { width } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -29,6 +31,7 @@ const FALLBACK_IMAGE = 'https://via.placeholder.com/300x450/1a1a1a/ffffff?text=N
 export default function MoviesScreen({ navigation }: any) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
+  const [selectedProviderId, setSelectedProviderId] = useState<string | undefined>(undefined);
   const [categoriesLoading, setCategoriesLoading] = useState(true);
   const [syncWaitComplete, setSyncWaitComplete] = useState(false);
   const [categoryMovies, setCategoryMovies] = useState<Record<string, StalkerVodItem[]>>({});
@@ -38,13 +41,42 @@ export default function MoviesScreen({ navigation }: any) {
   const [hasMore, setHasMore] = useState(true);
   const [stalkerClient, setStalkerClient] = useState<StalkerPortalClient | null>(null);
   const [portalUrl, setPortalUrl] = useState<string>('');
+  const [loadedCategoryIds, setLoadedCategoryIds] = useState<Set<string>>(new Set());
   const isFocusedRef = React.useRef(true);
+  const stalkerClientRef = React.useRef<StalkerPortalClient | null>(null);
+  const loadedCategoryIdsRef = React.useRef<Set<string>>(new Set());
+
+  // Update refs when state changes
+  React.useEffect(() => {
+    stalkerClientRef.current = stalkerClient;
+  }, [stalkerClient]);
+
+  React.useEffect(() => {
+    loadedCategoryIdsRef.current = loadedCategoryIds;
+  }, [loadedCategoryIds]);
+
+  // Reload categories when provider selection changes
+  useEffect(() => {
+    if (stalkerClient) {
+      loadCategories(stalkerClient, selectedProviderId);
+      setCategoryMovies({});
+      setLoadedCategoryIds(new Set());
+    }
+  }, [selectedProviderId]);
 
   useEffect(() => {
     const init = async () => {
+      // Load the first active provider as default
+      const activeProviders = await ProviderService.getActiveProviders();
+      console.log('🎬 [Movies] Active providers:', activeProviders.map(p => ({ id: p.id, name: p.name })));
+      if (activeProviders.length > 0 && !selectedProviderId) {
+        console.log('🎯 [Movies] Setting default provider:', activeProviders[0].id, activeProviders[0].name);
+        setSelectedProviderId(activeProviders[0].id);
+      }
+      
       const client = await initStalkerClient();
       if (client) {
-        await loadCategories(client);
+        await loadCategories(client, selectedProviderId);
       }
     };
     init();
@@ -107,27 +139,12 @@ export default function MoviesScreen({ navigation }: any) {
     }
   };
 
-  const loadCategories = async (client?: StalkerPortalClient | null) => {
+  const loadCategories = async (client?: StalkerPortalClient | null, providerId?: string) => {
     try {
       setCategoriesLoading(true);
-      const cats = await CategoryRepository.getMovieCategories();
+      const cats = await CategoryRepository.getMovieCategories(providerId);
       setCategories(cats);
-      setCategoriesLoading(false); // Show categories immediately
-      
-      // Load movie previews progressively for all categories (like LiveTV)
-      const activeClient = client || stalkerClient;
-      if (activeClient) {
-        for (const cat of cats) {
-          // Stop if screen is not focused
-          if (!isFocusedRef.current) break;
-          
-          try {
-            await loadCategoryMovies(cat, activeClient);
-          } catch (error) {
-            console.error(`❌ Error loading ${cat.name}:`, error);
-          }
-        }
-      }
+      setCategoriesLoading(false); // Show categories immediately without loading movies
     } catch (err) {
       console.error('Error loading movie categories:', err);
       setCategoriesLoading(false);
@@ -136,10 +153,11 @@ export default function MoviesScreen({ navigation }: any) {
 
   const loadCategoryMovies = async (category: Category, client?: StalkerPortalClient | null) => {
     const activeClient = client || stalkerClient;
-    if (!activeClient || categoryMovies[category.id]) return;
+    if (!activeClient || loadedCategoryIds.has(category.id)) return;
     
     try {
       console.log(`📡 Loading movies for category: ${category.name}`);
+      setLoadedCategoryIds(prev => new Set(prev).add(category.id));
       
       const response = await activeClient.getVodItemsByCategory(category.id, 1);
       const limitedMovies = (response.items || []).slice(0, MAX_THUMBNAILS);
@@ -253,7 +271,41 @@ export default function MoviesScreen({ navigation }: any) {
     setPage(1);
   };
 
+  const MovieThumbnail = React.memo(({ item }: { item: StalkerVodItem }) => {
+    const [hasError, setHasError] = React.useState<boolean>(false);
+    const imageUrl = item.screenshot_uri 
+      ? `${portalUrl}${item.screenshot_uri}` 
+      : FALLBACK_IMAGE;
+
+    return (
+      <TouchableOpacity
+        style={styles.thumbnail}
+        onPress={() => handleMoviePress(item)}
+        activeOpacity={0.7}
+      >
+        {hasError ? (
+          <View style={[styles.thumbnailImage, styles.noImagePlaceholder]}>
+            <Ionicons name="film-outline" size={48} color="#666" />
+          </View>
+        ) : (
+          <Image
+            source={{ uri: imageUrl }}
+            style={styles.thumbnailImage}
+            resizeMode="cover"
+            onError={() => setHasError(true)}
+          />
+        )}
+        <Text style={styles.thumbnailTitle} numberOfLines={2}>
+          {item.name || 'Untitled'}
+        </Text>
+      </TouchableOpacity>
+    );
+  });
+
   const renderCategoryRow = ({ item: category }: { item: Category }) => {
+    const movies = categoryMovies[category.id] || [];
+    const isLoaded = loadedCategoryIds.has(category.id);
+    
     return (
       <View style={styles.categoryRow}>
         <View style={styles.categoryHeader}>
@@ -267,46 +319,27 @@ export default function MoviesScreen({ navigation }: any) {
           </TouchableOpacity>
         </View>
         
-        <FlatList
-          horizontal
-          data={categoryMovies[category.id] || []}
-          renderItem={renderMovieThumbnail}
-          keyExtractor={(item) => item.id}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.thumbnailList}
-          ListEmptyComponent={
-            <View style={styles.loadingThumbnails}>
-              <ActivityIndicator size="small" color={COLORS.primary} />
-            </View>
-          }
-        />
+        {!isLoaded ? (
+          <View style={styles.loadingThumbnails}>
+            <Text style={styles.loadingText}>Loading...</Text>
+          </View>
+        ) : movies.length > 0 ? (
+          <FlatList
+            horizontal
+            data={movies}
+            renderItem={renderMovieThumbnail}
+            keyExtractor={(item) => item.id}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.thumbnailList}
+          />
+        ) : (
+          <View style={styles.loadingThumbnails}>
+            <Text style={styles.loadingText}>No movies</Text>
+          </View>
+        )}
       </View>
     );
   };
-
-  const MovieThumbnail = React.memo(({ item }: { item: StalkerVodItem }) => {
-    const imageUrl = item.screenshot_uri 
-      ? `${portalUrl}${item.screenshot_uri}` 
-      : FALLBACK_IMAGE;
-
-    return (
-      <TouchableOpacity
-        style={styles.thumbnail}
-        onPress={() => handleMoviePress(item)}
-        activeOpacity={0.7}
-      >
-        <Image
-          source={{ uri: imageUrl }}
-          style={styles.thumbnailImage}
-          resizeMode="cover"
-          defaultSource={require('../../assets/icon.png')}
-        />
-        <Text style={styles.thumbnailTitle} numberOfLines={2}>
-          {item.name || 'Untitled'}
-        </Text>
-      </TouchableOpacity>
-    );
-  });
 
   const MovieCard = React.memo(({ item }: { item: StalkerVodItem }) => {
     const imageUrl = item.screenshot_uri 
@@ -339,6 +372,22 @@ export default function MoviesScreen({ navigation }: any) {
       </TouchableOpacity>
     );
   });
+
+  // Lazy loading configuration - must be before any conditional returns
+  const handleViewableItemsChanged = React.useCallback(({ viewableItems }: any) => {
+    if (stalkerClientRef.current && isFocusedRef.current) {
+      viewableItems.forEach((viewableItem: any) => {
+        const category = viewableItem.item;
+        if (category && !loadedCategoryIdsRef.current.has(category.id)) {
+          loadCategoryMovies(category, stalkerClientRef.current);
+        }
+      });
+    }
+  }, []); // Empty deps - callback never changes
+
+  const viewabilityConfig = React.useRef({
+    itemVisiblePercentThreshold: 50,
+  }).current;
 
   const renderMovieThumbnail = ({ item }: { item: StalkerVodItem }) => {
     return <MovieThumbnail item={item} />;
@@ -398,11 +447,24 @@ export default function MoviesScreen({ navigation }: any) {
     <>
       <View style={styles.container}>
         <StatusBar hidden={false} />
+        <View style={styles.header}>
+          <ProviderDropdown
+            selectedProviderId={selectedProviderId}
+            onProviderSelect={setSelectedProviderId}
+            style={styles.providerDropdown}
+          />
+        </View>
         <FlatList
           data={categories}
           renderItem={renderCategoryRow}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.categoryList}
+          onViewableItemsChanged={handleViewableItemsChanged}
+          viewabilityConfig={viewabilityConfig}
+          removeClippedSubviews={true}
+          maxToRenderPerBatch={5}
+          updateCellsBatchingPeriod={50}
+          windowSize={10}
         />
       </View>
     </>
@@ -413,6 +475,15 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: SPACING.md,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  providerDropdown: {
+    flex: 1,
   },
   categoryList: {
     padding: SPACING.lg,
@@ -453,6 +524,11 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: COLORS.backgroundLight,
   },
+  noImagePlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#1a1a1a',
+  },
   thumbnailPlaceholder: {
     width: THUMBNAIL_WIDTH,
     height: THUMBNAIL_HEIGHT,
@@ -460,6 +536,10 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.backgroundLight,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  loadingText: {
+    color: COLORS.textMuted,
+    fontSize: 14,
   },
   thumbnailTitle: {
     color: COLORS.text,

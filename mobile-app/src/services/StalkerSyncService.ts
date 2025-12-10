@@ -2,6 +2,7 @@ import { Database } from '../database/Database';
 import { StalkerPortalClient } from '../services/StalkerPortalClient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { backendClient } from './backend/BackendClient';
+import { ProviderService } from './ProviderService';
 
 const PROVIDER_KEY = 'stalker_provider_config';
 const LAST_SYNC_KEY = 'last_stalker_sync';
@@ -75,7 +76,12 @@ export class StalkerSyncService {
         return false;
       }
 
-      const provider = syncData.data.providers[0]; // Use first provider
+      // Save all providers using ProviderService
+      console.log('💾 Saving all providers from backend...');
+      await ProviderService.updateFromBackendSync(syncData.data.providers);
+      console.log(`✅ Saved ${syncData.data.providers.length} providers`);
+
+      const provider = syncData.data.providers[0]; // Use first provider for legacy support
       console.log('Provider from backend:', JSON.stringify(provider));
       
       const config: ProviderConfig = {
@@ -163,11 +169,11 @@ export class StalkerSyncService {
       const userId = 'mobile-user'; // Simple user ID for mobile
 
       // Begin transaction
-      await db.execAsync('BEGIN TRANSACTION');
+      await db.beginTransaction();
 
       try {
         // Insert provider if doesn't exist
-        await db.runAsync(
+        await db.runQuery(
           `INSERT OR REPLACE INTO providers (
             id, user_id, provider_id, name, type, server_url, is_active, is_configured
           ) VALUES (?, ?, ?, ?, ?, ?, 1, 1)`,
@@ -178,7 +184,7 @@ export class StalkerSyncService {
         for (const cat of categories.liveCategories) {
           if (cat.id === '*') continue; // Skip "All" category
           
-          await db.runAsync(
+          await db.runQuery(
             `INSERT OR REPLACE INTO categories (
               id, user_id, provider_id, category_id, name, type, content_type,
               censored, is_enabled, sort_order
@@ -198,7 +204,7 @@ export class StalkerSyncService {
 
         // Insert movie categories
         for (const cat of categories.movieCategories) {
-          await db.runAsync(
+          await db.runQuery(
             `INSERT OR REPLACE INTO categories (
               id, user_id, provider_id, category_id, name, type, content_type,
               censored, is_enabled, sort_order
@@ -218,7 +224,7 @@ export class StalkerSyncService {
 
         // Insert series categories
         for (const cat of categories.seriesCategories) {
-          await db.runAsync(
+          await db.runQuery(
             `INSERT OR REPLACE INTO categories (
               id, user_id, provider_id, category_id, name, type, content_type,
               censored, is_enabled, sort_order
@@ -236,7 +242,7 @@ export class StalkerSyncService {
           );
         }
 
-        await db.execAsync('COMMIT');
+        await db.commit();
 
         // Note: Backend proxy already cached categories in PostgreSQL when we fetched them
         // No need to push back - that would be redundant
@@ -247,7 +253,7 @@ export class StalkerSyncService {
         console.log(`✅ Sync complete: ${categories.liveCategories.length} live, ${categories.movieCategories.length} movies, ${categories.seriesCategories.length} series`);
         return true;
       } catch (error) {
-        await db.execAsync('ROLLBACK');
+        await db.rollback();
         throw error;
       }
     } catch (error) {
@@ -275,7 +281,7 @@ export class StalkerSyncService {
       const userId = 'mobile-user';
 
       // Get internal category UUID
-      const categoryResult = await db.getAllAsync<{ id: string }>(`
+      const categoryResult = await db.getAllRows<{ id: string }>(`
         SELECT id FROM categories WHERE category_id = ? AND content_type = 'live' LIMIT 1
       `, [categoryId]);
 
@@ -287,7 +293,7 @@ export class StalkerSyncService {
 
       // Insert channels
       for (const channel of channels) {
-        await db.runAsync(
+        await db.runQuery(
           `INSERT OR REPLACE INTO channels (
             id, user_id, category_id, channel_id, name, url, cmd, logo, number, is_active
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,

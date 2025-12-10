@@ -1,6 +1,7 @@
 export interface Provider {
   id: string;
   name: string;
+  type?: string; // Provider type (e.g., 'stalker', 'xtream')
   serverUrl: string;
   macAddress: string;
   token?: string;
