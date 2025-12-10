@@ -25,44 +25,45 @@ class FavoriteRepository(context: Context) {
     /**
      * Check if an item is a favorite
      */
-    suspend fun isFavorite(itemId: String, type: String): Boolean {
-        return favoriteDao.isFavorite(itemId, type)
+    suspend fun isFavorite(itemId: String, type: String, providerId: String): Boolean {
+        return favoriteDao.isFavorite(itemId, type, providerId)
     }
     
     /**
      * Add an item to favorites with full details
      */
-    suspend fun addFavorite(itemId: String, type: String, name: String = "", poster: String? = null, cmd: String? = null) {
+    suspend fun addFavorite(itemId: String, type: String, providerId: String, name: String = "", poster: String? = null, cmd: String? = null) {
         val favorite = FavoriteEntity(
             itemId = itemId,
             itemType = type,
+            providerId = providerId,
             itemName = name,
             itemPoster = poster,
             itemCmd = cmd,
             addedAt = System.currentTimeMillis()
         )
         favoriteDao.insert(favorite)
-        Log.d(TAG, "Added favorite: $name (id=$itemId, type=$type)")
+        Log.d(TAG, "Added favorite: $name (id=$itemId, type=$type, provider=$providerId)")
     }
     
     /**
      * Remove an item from favorites
      */
-    suspend fun removeFavorite(itemId: String, type: String) {
-        favoriteDao.delete(itemId, type)
-        Log.d(TAG, "Removed favorite: id=$itemId, type=$type")
+    suspend fun removeFavorite(itemId: String, type: String, providerId: String) {
+        favoriteDao.delete(itemId, type, providerId)
+        Log.d(TAG, "Removed favorite: id=$itemId, type=$type, provider=$providerId")
     }
     
     /**
      * Toggle favorite status - returns new favorite state
      */
-    suspend fun toggleFavorite(itemId: String, type: String, name: String = "", poster: String? = null, cmd: String? = null): Boolean {
-        val isFav = isFavorite(itemId, type)
+    suspend fun toggleFavorite(itemId: String, type: String, providerId: String, name: String = "", poster: String? = null, cmd: String? = null): Boolean {
+        val isFav = isFavorite(itemId, type, providerId)
         if (isFav) {
-            removeFavorite(itemId, type)
+            removeFavorite(itemId, type, providerId)
             return false
         } else {
-            addFavorite(itemId, type, name, poster, cmd)
+            addFavorite(itemId, type, providerId, name, poster, cmd)
             return true
         }
     }
@@ -77,16 +78,16 @@ class FavoriteRepository(context: Context) {
     /**
      * Get favorites by type
      */
-    suspend fun getFavoritesByType(type: String): List<FavoriteEntity> {
-        return favoriteDao.getFavoritesByType(type)
+    suspend fun getFavoritesByType(type: String, providerId: String): List<FavoriteEntity> {
+        return favoriteDao.getFavoritesByType(type, providerId)
     }
     
     /**
      * Get favorite movies with their full details (from FavoriteEntity directly)
      */
-    suspend fun getFavoriteMovies(): List<MovieWithFavorite> {
-        val favorites = favoriteDao.getFavoritesByType(TYPE_MOVIE)
-        Log.d(TAG, "Getting favorite movies: ${favorites.size} found")
+    suspend fun getFavoriteMovies(providerId: String): List<MovieWithFavorite> {
+        val favorites = favoriteDao.getFavoritesByType(TYPE_MOVIE, providerId)
+        Log.d(TAG, "Getting favorite movies: ${favorites.size} found for provider $providerId")
         return favorites.map { fav ->
             MovieWithFavorite(
                 id = fav.itemId,
@@ -102,9 +103,9 @@ class FavoriteRepository(context: Context) {
     /**
      * Get favorite series with their full details (from FavoriteEntity directly)
      */
-    suspend fun getFavoriteSeries(): List<SeriesWithFavorite> {
-        val favorites = favoriteDao.getFavoritesByType(TYPE_SERIES)
-        Log.d(TAG, "Getting favorite series: ${favorites.size} found")
+    suspend fun getFavoriteSeries(providerId: String): List<SeriesWithFavorite> {
+        val favorites = favoriteDao.getFavoritesByType(TYPE_SERIES, providerId)
+        Log.d(TAG, "Getting favorite series: ${favorites.size} found for provider $providerId")
         return favorites.map { fav ->
             SeriesWithFavorite(
                 id = fav.itemId,

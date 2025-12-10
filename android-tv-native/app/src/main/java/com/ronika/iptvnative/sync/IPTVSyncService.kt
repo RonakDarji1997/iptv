@@ -394,17 +394,19 @@ class IPTVSyncService(private val context: Context) {
                 connection.connectTimeout = 15000
                 connection.readTimeout = 15000
                 
-                val categoryData = categories.map { cat ->
-                    CategoryData(
-                        categoryId = cat.id,
-                        externalId = cat.externalId,
-                        name = cat.name,
-                        type = cat.type,
-                        contentType = cat.contentType,
-                        censored = cat.censored,
-                        isEnabled = cat.isEnabled
-                    )
-                }
+                val categoryData = categories
+                    .filter { it.id.isNotEmpty() } // Filter out categories with empty/null IDs
+                    .map { cat ->
+                        CategoryData(
+                            categoryId = cat.id,
+                            externalId = cat.externalId,
+                            name = cat.name,
+                            type = cat.type,
+                            contentType = cat.contentType,
+                            censored = cat.censored,
+                            isEnabled = cat.isEnabled
+                        )
+                    }
                 
                 val syncRequest = SyncCategoryRequest(
                     providerId = providerId,
@@ -708,19 +710,29 @@ class IPTVSyncService(private val context: Context) {
                                 // Map backend UUID to provider_id for category lookup
                                 providerIdMap[backendId] = providerId
                                 
+                                val macAddress = p.get("mac_address")?.takeIf { !it.isJsonNull }?.asString
+                                val token = p.get("token")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                                val serverUrl = p.get("server_url")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                                
+                                // Provider is configured if it has MAC, token, and valid server URL
+                                val isConfigured = !macAddress.isNullOrEmpty() && 
+                                                   token.isNotEmpty() && 
+                                                   serverUrl.isNotEmpty() && 
+                                                   serverUrl != "pending"
+                                
                                 val provider = com.ronika.iptvnative.database.entities.ProviderEntity(
                                     id = providerId,
                                     name = p.get("name")?.takeIf { !it.isJsonNull }?.asString ?: "",
                                     type = p.get("type")?.takeIf { !it.isJsonNull }?.asString ?: "",
-                                    serverUrl = p.get("server_url")?.takeIf { !it.isJsonNull }?.asString ?: "",
-                                    macAddress = p.get("mac_address")?.takeIf { !it.isJsonNull }?.asString,
+                                    serverUrl = serverUrl,
+                                    macAddress = macAddress,
                                     serialNumber = p.get("serial_number")?.takeIf { !it.isJsonNull }?.asString,
-                                    token = p.get("token")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                                    token = token,
                                     username = p.get("username")?.takeIf { !it.isJsonNull }?.asString,
                                     password = p.get("password")?.takeIf { !it.isJsonNull }?.asString,
-                                    setupStep = 2, // Force to category selection (skip handshake/profile)
+                                    setupStep = if (isConfigured) 4 else 2, // Step 4 if configured, else category selection
                                     isActive = p.get("is_active")?.asBoolean ?: true,
-                                    isConfigured = false, // Mark as not configured to trigger setup flow
+                                    isConfigured = isConfigured, // Auto-detect based on credentials
                                     includeTv = p.get("include_tv")?.asBoolean ?: true,
                                     includeVod = p.get("include_vod")?.asBoolean ?: true,
                                     adultPassword = p.get("adult_password")?.takeIf { !it.isJsonNull }?.asString
@@ -735,41 +747,64 @@ class IPTVSyncService(private val context: Context) {
                             // Check for duplicates before inserting
                             val existingProviders = database.providerDao().getAllProvidersList()
                             
+                            var insertedCount = 0
+                            var updatedCount = 0
+                            
                             providers.forEach { provider ->
-                                // Check if provider already exists by ID, MAC, and token
-                                // This allows same portal with different MAC addresses (multiple accounts)
-                                val isDuplicate = existingProviders.any { existing ->
-                                    existing.id == provider.id ||  // Same provider ID from cloud
-                                    (existing.macAddress == provider.macAddress &&
-                                     existing.serverUrl == provider.serverUrl &&
-                                     existing.token == provider.token)  // Exact same credentials
-                                }
+                                // Check if provider already exists by ID
+                                val existingProvider = existingProviders.find { it.id == provider.id }
                                 
-                                if (!isDuplicate) {
-                                    // Link provider to user and insert
-                                    val providerWithUser = provider.copy(userId = userId)
-                                    database.providerDao().insertProvider(providerWithUser)
-                                    Log.d(TAG, "✅ Inserted new provider: ${provider.name} (MAC: ${provider.macAddress})")
+                                if (existingProvider == null) {
+                                    // Check if same credentials exist (different ID = multiple accounts on same portal)
+                                    val sameCredentials = existingProviders.any { existing ->
+                                        existing.macAddress == provider.macAddress &&
+                                        existing.serverUrl == provider.serverUrl &&
+                                        existing.token == provider.token
+                                    }
+                                    
+                                    if (!sameCredentials) {
+                                        // New provider - insert it
+                                        val providerWithUser = provider.copy(userId = userId)
+                                        database.providerDao().insertProvider(providerWithUser)
+                                        insertedCount++
+                                        Log.d(TAG, "✅ Inserted new provider: ${provider.name} (MAC: ${provider.macAddress})")
+                                    } else {
+                                        Log.d(TAG, "⏭️ Skipped provider with same credentials: ${provider.name}")
+                                    }
                                 } else {
-                                    Log.d(TAG, "⏭️ Skipped duplicate provider: ${provider.name} (ID: ${provider.id})")
+                                    // Provider exists - update if not configured or if data changed
+                                    if (!existingProvider.isConfigured || 
+                                        existingProvider.name != provider.name ||
+                                        existingProvider.serverUrl != provider.serverUrl ||
+                                        existingProvider.macAddress != provider.macAddress ||
+                                        existingProvider.token != provider.token) {
+                                        
+                                        // Keep existing user preferences, but update configuration status
+                                        val updatedProvider = provider.copy(
+                                            userId = existingProvider.userId,
+                                            isConfigured = provider.isConfigured, // Use auto-detected status
+                                            isActive = provider.isActive || existingProvider.isActive,
+                                            setupStep = provider.setupStep // Update setup step based on configuration
+                                        )
+                                        database.providerDao().updateProvider(updatedProvider)
+                                        updatedCount++
+                                        Log.d(TAG, "🔄 Updated provider: ${provider.name} (configured: ${updatedProvider.isConfigured})")
+                                    } else {
+                                        Log.d(TAG, "⏭️ Skipped configured provider: ${provider.name}")
+                                    }
                                 }
                             }
                             
-                            val insertedCount = providers.count { provider ->
-                                !existingProviders.any { existing ->
-                                    existing.id == provider.id ||
-                                    (existing.macAddress == provider.macAddress &&
-                                     existing.serverUrl == provider.serverUrl &&
-                                     existing.token == provider.token)
-                                }
-                            }
-                            Log.d(TAG, "✅ Inserted $insertedCount new providers, skipped ${providers.size - insertedCount} duplicates")
+                            Log.d(TAG, "✅ Provider sync complete: $insertedCount new, $updatedCount updated, ${providers.size - insertedCount - updatedCount} skipped")
                         }
                         
                         // Parse and insert categories
                         val categoriesArray = data.getAsJsonArray("categories")
                         if (categoriesArray != null && categoriesArray.size() > 0) {
                             Log.d(TAG, "📂 Found ${categoriesArray.size()} categories in cloud")
+                            
+                            // Get existing categories to avoid duplicates
+                            val existingCategories = database.categoryDao().getAllCategories()
                             
                             val categories = mutableListOf<com.ronika.iptvnative.database.entities.CategoryEntity>()
                             for (i in 0 until categoriesArray.size()) {
@@ -779,21 +814,41 @@ class IPTVSyncService(private val context: Context) {
                                 val backendProviderId = c.get("provider_id")?.asString ?: ""
                                 val mappedProviderId = providerIdMap[backendProviderId] ?: backendProviderId
                                 
-                                val category = com.ronika.iptvnative.database.entities.CategoryEntity(
-                                    id = c.get("id")?.asString ?: "",
-                                    providerId = mappedProviderId,
-                                    externalId = c.get("id")?.asString ?: "",
-                                    name = c.get("name")?.asString ?: "",
-                                    type = c.get("type")?.asString ?: "live",
-                                    contentType = c.get("type")?.asString ?: "live",
-                                    censored = 0,
-                                    isEnabled = true
-                                )
-                                categories.add(category)
+                                val categoryExternalId = c.get("id")?.asString ?: ""
+                                val categoryName = c.get("name")?.asString ?: ""
+                                val categoryType = c.get("type")?.asString ?: "live"
+                                
+                                // Check if category already exists (by externalId + providerId + type)
+                                val isDuplicate = existingCategories.any { existing ->
+                                    existing.externalId == categoryExternalId &&
+                                    existing.providerId == mappedProviderId &&
+                                    existing.type == categoryType
+                                }
+                                
+                                if (!isDuplicate) {
+                                    // Generate unique ID combining provider, external ID, and type
+                                    val uniqueId = "${mappedProviderId}_${categoryExternalId}_${categoryType}"
+                                    
+                                    val category = com.ronika.iptvnative.database.entities.CategoryEntity(
+                                        id = uniqueId,
+                                        providerId = mappedProviderId,
+                                        externalId = categoryExternalId,
+                                        name = categoryName,
+                                        type = categoryType,
+                                        contentType = categoryType,
+                                        censored = 0,
+                                        isEnabled = true
+                                    )
+                                    categories.add(category)
+                                }
                             }
                             
-                            database.categoryDao().insertAll(categories)
-                            Log.d(TAG, "✅ Inserted ${categories.size} categories")
+                            if (categories.isNotEmpty()) {
+                                database.categoryDao().upsertCategories(categories)
+                                Log.d(TAG, "✅ Upserted ${categories.size} categories from cloud")
+                            } else {
+                                Log.d(TAG, "⏭️  No categories to sync from cloud")
+                            }
                         }
                         
                         // Parse and insert channels
@@ -931,11 +986,15 @@ class IPTVSyncService(private val context: Context) {
                             }
                             
                             if (categories.isNotEmpty()) {
-                                database.categoryDao().insertAll(categories)
+                                database.categoryDao().upsertCategories(categories)
                                 Log.d(TAG, "  ✅ Saved ${categories.size} live TV categories")
                                 
-                                // Sync categories to backend
-                                syncCategoriesToCloud(provider.id, categories)
+                                // Sync to cloud to update external_id
+                                try {
+                                    syncCategoriesToCloud(provider.id, categories)
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "  ⚠️ Failed to sync live categories to cloud: ${e.message}")
+                                }
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "  ❌ Failed to fetch live TV categories: ${e.message}")
@@ -962,11 +1021,15 @@ class IPTVSyncService(private val context: Context) {
                             }
                             
                             if (vodCategories.isNotEmpty()) {
-                                database.categoryDao().insertAll(vodCategories)
+                                database.categoryDao().upsertCategories(vodCategories)
                                 Log.d(TAG, "  ✅ Saved ${vodCategories.size} VOD categories")
                                 
-                                // Sync categories to backend
-                                syncCategoriesToCloud(provider.id, vodCategories)
+                                // Sync to cloud to update external_id
+                                try {
+                                    syncCategoriesToCloud(provider.id, vodCategories)
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "  ⚠️ Failed to sync VOD categories to cloud: ${e.message}")
+                                }
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "  ❌ Failed to fetch VOD categories: ${e.message}")
@@ -993,11 +1056,15 @@ class IPTVSyncService(private val context: Context) {
                             }
                             
                             if (seriesCategories.isNotEmpty()) {
-                                database.categoryDao().insertAll(seriesCategories)
+                                database.categoryDao().upsertCategories(seriesCategories)
                                 Log.d(TAG, "  ✅ Saved ${seriesCategories.size} series categories")
                                 
-                                // Sync categories to backend
-                                syncCategoriesToCloud(provider.id, seriesCategories)
+                                // Sync to cloud to update external_id
+                                try {
+                                    syncCategoriesToCloud(provider.id, seriesCategories)
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "  ⚠️ Failed to sync series categories to cloud: ${e.message}")
+                                }
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "  ❌ Failed to fetch series categories: ${e.message}")
@@ -1225,8 +1292,8 @@ class IPTVSyncService(private val context: Context) {
                     val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(context)
                     val categories = response.data?.categories?.filter { it.providerId == providerId } ?: emptyList()
                     
-                    for (category in categories) {
-                        val entity = CategoryEntity(
+                    val entities = categories.map { category ->
+                        CategoryEntity(
                             id = category.categoryId,
                             providerId = providerId,
                             externalId = category.categoryId,
@@ -1236,7 +1303,10 @@ class IPTVSyncService(private val context: Context) {
                             censored = category.censored,
                             isEnabled = category.isEnabled
                         )
-                        database.categoryDao().insert(entity)
+                    }
+                    
+                    if (entities.isNotEmpty()) {
+                        database.categoryDao().upsertCategories(entities)
                     }
                     
                     Log.d(TAG, "✅ Downloaded ${categories.size} categories to local DB")

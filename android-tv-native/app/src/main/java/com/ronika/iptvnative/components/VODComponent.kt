@@ -772,7 +772,7 @@ class VODComponent @JvmOverloads constructor(
         scope.launch {
             val repository = com.ronika.iptvnative.repository.WatchProgressRepository(context)
             val contentType = if (vodType == VODType.SERIES) "SERIES" else "MOVIE"
-            val progress = repository.getProgress(item.id, contentType)
+            val progress = repository.getProgress(item.id, contentType, currentProviderId ?: "")
             
             Log.d(TAG, "Checking progress for ${item.name} ($contentType): ${progress?.progressPercentage}%")
             
@@ -790,7 +790,7 @@ class VODComponent @JvmOverloads constructor(
         scope.launch {
             try {
                 val type = if (item.isSeries) FavoriteRepository.TYPE_SERIES else FavoriteRepository.TYPE_MOVIE
-                currentItemFavorited = favoriteRepository.isFavorite(item.id, type)
+                currentItemFavorited = favoriteRepository.isFavorite(item.id, type, currentProviderId ?: "")
                 withContext(Dispatchers.Main) {
                     updateFavoriteButtonUI()
                 }
@@ -908,6 +908,7 @@ class VODComponent @JvmOverloads constructor(
                         currentItemFavorited = favoriteRepository.toggleFavorite(
                             itemId = item.id, 
                             type = type,
+                            providerId = currentProviderId ?: "",
                             name = item.name,
                             poster = item.posterUrl,
                             cmd = item.cmd
@@ -1094,6 +1095,30 @@ class VODComponent @JvmOverloads constructor(
         }
     }
     
+    fun refreshProgress() {
+        if (isDetailScreenVisible && currentDetailItem != null) {
+            val item = currentDetailItem!!
+            scope.launch {
+                val repository = com.ronika.iptvnative.repository.WatchProgressRepository(context)
+                val contentType = if (vodType == VODType.SERIES) "SERIES" else "MOVIE"
+                val progress = repository.getProgress(item.id, contentType, currentProviderId ?: "")
+                
+                Log.d(TAG, "Refreshing progress for ${item.name} ($contentType): ${progress?.progressPercentage}%")
+                
+                withContext(Dispatchers.Main) {
+                    if (progress != null && progress.currentPosition > 0) {
+                        val percentage = progress.progressPercentage
+                        detailPlayButton.text = "▶ Resume ($percentage%)"
+                        Log.d(TAG, "Updated play button to show Resume ($percentage%)")
+                    } else {
+                        detailPlayButton.text = "▶ Play"
+                        Log.d(TAG, "Updated play button to show Play")
+                    }
+                }
+            }
+        }
+    }
+    
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_BACK) {
             // If detail screen is visible, go back to grid OR invoke callback if fullscreen
@@ -1200,7 +1225,7 @@ class VODComponent @JvmOverloads constructor(
                     scope.launch {
                         try {
                             val repository = com.ronika.iptvnative.repository.WatchProgressRepository(context)
-                            val progress = repository.getProgress(item.id, "MOVIE")
+                            val progress = repository.getProgress(item.id, "MOVIE", currentProviderId ?: "")
                             
                             withContext(Dispatchers.Main) {
                                 if (progress != null && progress.currentPosition > 0 && progress.duration > 0) {

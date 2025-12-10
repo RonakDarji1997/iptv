@@ -20,7 +20,7 @@ import com.ronika.iptvnative.database.entities.*
         UserEntity::class,
         PlayerSettingsEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -102,6 +102,29 @@ abstract class AppDatabase : RoomDatabase() {
                 }
             }
         }
+        
+        // Migration from version 10 to 11: Add providerId field to favorites table
+        // Makes favorites provider-specific to support multiple providers
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Add providerId column with empty string as default for existing rows
+                database.execSQL("ALTER TABLE `favorites` ADD COLUMN `providerId` TEXT NOT NULL DEFAULT ''")
+                
+                // Drop old unique index
+                database.execSQL("DROP INDEX IF EXISTS `index_favorites_itemId_itemType`")
+                
+                // Create new unique index with providerId
+                database.execSQL(
+                    """CREATE UNIQUE INDEX IF NOT EXISTS `index_favorites_itemId_itemType_providerId` 
+                    ON `favorites` (`itemId`, `itemType`, `providerId`)"""
+                )
+                
+                // Create index on providerId for filtering
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_favorites_providerId` ON `favorites` (`providerId`)"
+                )
+            }
+        }
 
         // Migration from version 8 to 9: Add userId column to providers table
         // Links providers to users for cloud sync without deleting existing data
@@ -162,7 +185,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "iptv_database"
                 )
-                    .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
+                    .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

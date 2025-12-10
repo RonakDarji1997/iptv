@@ -17,6 +17,7 @@ class WatchProgressRepository(context: Context) {
     suspend fun saveProgress(
         contentId: String,
         contentType: String,
+        providerId: String,
         title: String,
         posterUrl: String?,
         currentPosition: Long,
@@ -36,12 +37,12 @@ class WatchProgressRepository(context: Context) {
             
             when {
                 percentage in 5..95 -> {
-                    Log.d(TAG, "Saving progress: $title ($contentType) - $percentage% watched")
+                    Log.d(TAG, "Saving progress: $title ($contentType, provider=$providerId) - $percentage% watched")
                     // Check if entry exists
                     val existing = if (episodeId != null) {
-                        watchProgressDao.getEpisodeProgress(contentId, episodeId)
+                        watchProgressDao.getEpisodeProgress(contentId, episodeId, providerId)
                     } else {
-                        watchProgressDao.getProgress(contentId, contentType)
+                        watchProgressDao.getProgress(contentId, contentType, providerId)
                     }
                     
                     Log.d(TAG, "Existing entry found: ${existing != null}")
@@ -61,6 +62,7 @@ class WatchProgressRepository(context: Context) {
                         WatchProgress(
                             contentId = contentId,
                             contentType = contentType,
+                            providerId = providerId,
                             title = title,
                             posterUrl = posterUrl,
                             episodeId = episodeId,
@@ -78,7 +80,7 @@ class WatchProgressRepository(context: Context) {
                 percentage >= 95 -> {
                     // If watched more than 95%, remove from continue watching
                     if (episodeId != null) {
-                        val existing = watchProgressDao.getEpisodeProgress(contentId, episodeId)
+                        val existing = watchProgressDao.getEpisodeProgress(contentId, episodeId, providerId)
                         existing?.let { watchProgressDao.deleteProgressById(it.id) }
                     } else {
                         watchProgressDao.deleteProgress(contentId)
@@ -91,30 +93,30 @@ class WatchProgressRepository(context: Context) {
         }
     }
     
-    suspend fun getProgress(contentId: String, contentType: String): WatchProgress? = 
+    suspend fun getProgress(contentId: String, contentType: String, providerId: String): WatchProgress? = 
         withContext(Dispatchers.IO) {
-            watchProgressDao.getProgress(contentId, contentType)
+            watchProgressDao.getProgress(contentId, contentType, providerId)
         }
     
-    suspend fun getEpisodeProgress(contentId: String, episodeId: String): WatchProgress? =
+    suspend fun getEpisodeProgress(contentId: String, episodeId: String, providerId: String): WatchProgress? =
         withContext(Dispatchers.IO) {
-            watchProgressDao.getEpisodeProgress(contentId, episodeId)
+            watchProgressDao.getEpisodeProgress(contentId, episodeId, providerId)
         }
     
-    suspend fun getContinueWatchingMovies(limit: Int = 20): List<WatchProgress> =
+    suspend fun getContinueWatchingMovies(providerId: String, limit: Int = 20): List<WatchProgress> =
         withContext(Dispatchers.IO) {
-            val movies = watchProgressDao.getProgressByType("MOVIE", limit)
-            Log.d(TAG, "Retrieved ${movies.size} Continue Watching movies from DB")
+            val movies = watchProgressDao.getProgressByType("MOVIE", providerId, limit)
+            Log.d(TAG, "Retrieved ${movies.size} Continue Watching movies from DB for provider $providerId")
             movies.forEach { 
                 Log.d(TAG, "  - ${it.title}: ${it.progressPercentage}% (${it.contentId})") 
             }
             movies
         }
     
-    suspend fun getContinueWatchingSeries(limit: Int = 20): List<WatchProgress> =
+    suspend fun getContinueWatchingSeries(providerId: String, limit: Int = 20): List<WatchProgress> =
         withContext(Dispatchers.IO) {
             // Get only one entry per series (latest watched episode)
-            watchProgressDao.getLatestSeriesProgress(limit)
+            watchProgressDao.getLatestSeriesProgress(providerId, limit)
         }
     
     suspend fun getAllContinueWatching(): List<WatchProgress> =

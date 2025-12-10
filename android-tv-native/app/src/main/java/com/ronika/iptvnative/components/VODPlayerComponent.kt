@@ -93,6 +93,7 @@ class VODPlayerComponent @JvmOverloads constructor(
     private var currentSeasonId: String? = null  // Track seasonId for progress tracking
     private var currentSeasonNumber: Int? = null
     private var currentEpisodeNumber: Int? = null
+    private var currentProviderId: String? = null
     private val progressRepository = WatchProgressRepository(context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val progressSaveHandler = Handler(Looper.getMainLooper())
@@ -824,6 +825,7 @@ class VODPlayerComponent @JvmOverloads constructor(
                         progressRepository.saveProgress(
                             contentId = currentContentId!!,
                             contentType = currentContentType!!,
+                            providerId = currentProviderId ?: "",
                             title = titleToSave,  // Use series title for series, movie title for movies
                             posterUrl = currentPosterUrl,
                             currentPosition = position,
@@ -864,6 +866,7 @@ class VODPlayerComponent @JvmOverloads constructor(
     fun setContentInfo(
         contentId: String,
         contentType: String,
+        providerId: String,
         posterUrl: String?,
         cmd: String,
         episodeId: String? = null,
@@ -873,13 +876,14 @@ class VODPlayerComponent @JvmOverloads constructor(
     ) {
         this.currentContentId = contentId
         this.currentContentType = contentType
+        this.currentProviderId = providerId
         this.currentPosterUrl = posterUrl
         this.currentCmd = cmd
         this.currentEpisodeId = episodeId
         this.currentSeasonId = seasonId
         this.currentSeasonNumber = seasonNumber
         this.currentEpisodeNumber = episodeNumber
-        Log.d(TAG, "Set content info for progress tracking: $contentId ($contentType), seasonId=$seasonId")
+        Log.d(TAG, "Set content info for progress tracking: $contentId ($contentType), provider=$providerId, seasonId=$seasonId")
     }
 
     fun stop() {

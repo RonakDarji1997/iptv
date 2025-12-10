@@ -69,6 +69,7 @@ class SettingsComponent @JvmOverloads constructor(
     // Playlist section views
     private lateinit var btnManageCategories: LinearLayout
     private lateinit var btnSyncCategories: LinearLayout
+    private lateinit var btnCleanDatabase: LinearLayout
     private lateinit var btnUpdatePlaylist: LinearLayout
     private lateinit var btnAddPlaylist: LinearLayout
     private lateinit var activePlaylistsContainer: LinearLayout
@@ -135,6 +136,7 @@ class SettingsComponent @JvmOverloads constructor(
         // Playlist section views
         btnManageCategories = findViewById(R.id.btn_manage_categories)
         btnSyncCategories = findViewById(R.id.btn_sync_categories)
+        btnCleanDatabase = findViewById(R.id.btn_clean_database)
         btnUpdatePlaylist = findViewById(R.id.btn_update_playlist)
         btnAddPlaylist = findViewById(R.id.btn_add_playlist)
         activePlaylistsContainer = findViewById(R.id.active_playlists_container)
@@ -261,6 +263,10 @@ class SettingsComponent @JvmOverloads constructor(
             } ?: run {
                 Toast.makeText(context, "No playlist configured", Toast.LENGTH_SHORT).show()
             }
+        }
+        
+        btnCleanDatabase.setOnClickListener {
+            cleanDatabase()
         }
         
         btnUpdatePlaylist.setOnClickListener {
@@ -929,46 +935,35 @@ class SettingsComponent @JvmOverloads constructor(
     }
     
     private fun syncCategoriesFromServer(providerId: String) {
-        syncStatusText.text = "Syncing with server..."
+        syncStatusText.text = "Syncing from server..."
         syncStatusText.setTextColor(0xFFFFA500.toInt()) // Orange
         
         coroutineScope.launch {
             try {
                 val syncService = IPTVSyncService(context)
                 
-                // Step 1: Upload local data to server (all providers and categories)
-                syncStatusText.text = "Uploading local data to server..."
-                val uploadSuccess = syncService.syncToServer()
-                
-                // Step 2: Download any new data from server (merge without duplicates)
+                // ONLY download from server - do NOT upload to avoid duplicates
                 syncStatusText.text = "Downloading data from server..."
                 syncService.syncFromCloud()
                 
+                // Also sync providers (to get new ones if added from other device)
+                syncStatusText.text = "Syncing providers..."
+                syncService.syncProvidersFromBackend()
+                
                 withContext(Dispatchers.Main) {
-                    if (uploadSuccess) {
-                        syncStatusText.text = "Sync completed successfully!"
-                        syncStatusText.setTextColor(0xFF4CAF50.toInt()) // Green
-                        Toast.makeText(context, "All data synced with server!", Toast.LENGTH_SHORT).show()
+                    syncStatusText.text = "Sync completed successfully!"
+                    syncStatusText.setTextColor(0xFF4CAF50.toInt()) // Green
+                    Toast.makeText(context, "Data synced from server!", Toast.LENGTH_SHORT).show()
                         
                         // Reset status text after 3 seconds
-                        postDelayed({
-                            syncStatusText.text = "Sync with server (backup & restore)"
-                            syncStatusText.setTextColor(0xFF888888.toInt())
-                        }, 3000)
-                        
-                        // Refresh provider list and UI
-                        loadData()
-                        onProviderStatusChangedCallback?.invoke()
-                    } else {
-                        syncStatusText.text = "Sync failed - check authentication"
-                        syncStatusText.setTextColor(0xFFF44336.toInt()) // Red
-                        Toast.makeText(context, "Sync failed - please login first", Toast.LENGTH_SHORT).show()
-                        
-                        postDelayed({
-                            syncStatusText.text = "Sync with server (backup & restore)"
-                            syncStatusText.setTextColor(0xFF888888.toInt())
-                        }, 3000)
-                    }
+                    postDelayed({
+                        syncStatusText.text = "Sync from server (pull only)"
+                        syncStatusText.setTextColor(0xFF888888.toInt())
+                    }, 3000)
+                    
+                    // Refresh provider list and UI
+                    loadData()
+                    onProviderStatusChangedCallback?.invoke()
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error syncing", e)
@@ -978,7 +973,7 @@ class SettingsComponent @JvmOverloads constructor(
                     Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
                     
                     postDelayed({
-                        syncStatusText.text = "Sync with server (backup & restore)"
+                        syncStatusText.text = "Sync from server (pull only)"
                         syncStatusText.setTextColor(0xFF888888.toInt())
                     }, 3000)
                 }
@@ -1001,5 +996,52 @@ class SettingsComponent @JvmOverloads constructor(
         }
         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
         Log.d(TAG, "Bitrate display toggled: $newState")
+    }
+    
+    private fun cleanDatabase() {
+        android.app.AlertDialog.Builder(context)
+            .setTitle("Clean Database")
+            .setMessage("This will remove duplicate categories from the database. Continue?")
+            .setPositiveButton("Clean") { _, _ ->
+                coroutineScope.launch {
+                    try {
+                        Toast.makeText(context, "Checking for duplicates...", Toast.LENGTH_SHORT).show()
+                        
+                        // First check what we'll find
+                        val checkResult = withContext(Dispatchers.IO) {
+                            com.ronika.iptvnative.utils.DatabaseCleanupUtil.checkForDuplicates(context)
+                        }
+                        Log.d(TAG, checkResult)
+                        
+                        // Now remove duplicates
+                        val (duplicatesFound, duplicatesRemoved) = withContext(Dispatchers.IO) {
+                            com.ronika.iptvnative.utils.DatabaseCleanupUtil.removeDuplicateCategories(context)
+                        }
+                        
+                        val message = if (duplicatesRemoved > 0) {
+                            "✅ Removed $duplicatesRemoved duplicate categories"
+                        } else {
+                            "✅ No duplicates found! Database is clean."
+                        }
+                        
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                            
+                            // Reload settings data and refresh category sidebar
+                            if (duplicatesRemoved > 0) {
+                                loadData()
+                                // Trigger callback to refresh category sidebar in MainActivity
+                                onProviderStatusChangedCallback?.invoke()
+                            }
+                        }
+                        
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error cleaning database", e)
+                        Toast.makeText(context, "❌ Error: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 }

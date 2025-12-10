@@ -171,6 +171,7 @@ class SeriesDetailComponent @JvmOverloads constructor(
                     isFavorited = favoriteRepository.toggleFavorite(
                         itemId = seriesId,
                         type = FavoriteRepository.TYPE_SERIES,
+                        providerId = currentProviderId ?: "",
                         name = seriesName,
                         poster = posterUrl,
                         cmd = null
@@ -269,7 +270,7 @@ class SeriesDetailComponent @JvmOverloads constructor(
         // Check favorite status
         scope.launch {
             try {
-                isFavorited = favoriteRepository.isFavorite(id, FavoriteRepository.TYPE_SERIES)
+                isFavorited = favoriteRepository.isFavorite(id, FavoriteRepository.TYPE_SERIES, currentProviderId ?: "")
                 withContext(Dispatchers.Main) {
                     updateFavoriteButtonUI()
                 }
@@ -299,7 +300,7 @@ class SeriesDetailComponent @JvmOverloads constructor(
         withContext(Dispatchers.IO) {
             try {
                 val repository = com.ronika.iptvnative.repository.WatchProgressRepository(context)
-                val progress = repository.getProgress(seriesId, "SERIES")
+                val progress = repository.getProgress(seriesId, "SERIES", currentProviderId ?: "")
                 
                 withContext(Dispatchers.Main) {
                     if (progress != null && progress.currentPosition > 0) {
@@ -439,7 +440,7 @@ class SeriesDetailComponent @JvmOverloads constructor(
         seasonTitle.text = "${season.name} ($episodeCount ${if (episodeCount == 1) "Episode" else "Episodes"})"
         
         // Setup horizontal episodes recycler
-        val episodeAdapter = EpisodeHorizontalAdapter(episodes, seriesId, posterUrl) { episode ->
+        val episodeAdapter = EpisodeHorizontalAdapter(episodes, seriesId, currentProviderId ?: "", posterUrl) { episode ->
             Log.d(TAG, "Episode clicked: ${episode.name}")
             // Track playing episode
             currentPlayingSeasonId = episode.seasonId

@@ -270,21 +270,31 @@ class MainActivity : ComponentActivity() {
                     return@launch
                 }
                 
-                Log.d(TAG, "🔄 Starting bidirectional sync...")
+                Log.d(TAG, "🔄 Starting cloud pull sync (read-only)...")
                 
-                // 1. Pull from cloud first (download settings, passwords, etc.)
+                // Only pull from cloud on app load (download settings, passwords, etc.)
+                // Do NOT push - that causes duplicates and should only happen on explicit "Update Playlist"
                 Log.d(TAG, "⬇️ Pulling data from cloud...")
                 syncService.syncFromCloud()
                 
-                // 2. Push any local changes to cloud
-                Log.d(TAG, "⬆️ Pushing local changes to cloud...")
-                val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(this@MainActivity)
-                val providers = withContext(Dispatchers.IO) {
-                    database.providerDao().getAllProvidersList()
-                }
-                syncService.syncAllProviders(providers)
+                // Also sync providers to get new ones added from other devices
+                Log.d(TAG, "⬇️ Syncing providers from cloud...")
+                val providersUpdated = syncService.syncProvidersFromBackend()
                 
-                Log.d(TAG, "✅ Bidirectional sync completed")
+                if (providersUpdated) {
+                    Log.d(TAG, "✅ Providers updated - refreshing UI...")
+                    // Refresh UI on main thread
+                    withContext(Dispatchers.Main) {
+                        // Refresh settings component if initialized
+                        if (::settingsComponent.isInitialized) {
+                            settingsComponent.refresh()
+                        }
+                        // Refresh category sidebar
+                        categorySidebar.refreshCategories()
+                    }
+                }
+                
+                Log.d(TAG, "✅ Cloud pull sync completed (no push to avoid duplicates)")
                 
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Sync error (non-critical): ${e.message}", e)
@@ -1091,6 +1101,7 @@ class MainActivity : ComponentActivity() {
                                 contentType = "SERIES",
                                 posterUrl = seriesItem.posterUrl,
                                 cmd = vodCmd,
+                                providerId = vodComponent.getCurrentProviderId() ?: "",
                                 episodeId = episodeId,
                                 seasonId = seasonId,  // Pass seasonId for progress tracking
                                 seasonNumber = seasonNum.toIntOrNull(),
@@ -1101,7 +1112,7 @@ class MainActivity : ComponentActivity() {
                         // Check for saved progress for this specific episode
                         val repository = com.ronika.iptvnative.repository.WatchProgressRepository(applicationContext)
                         val compositeKey = "${seasonId}_${episodeId}"  // Match the composite key format
-                        val progress = repository.getEpisodeProgress(seriesId, compositeKey)
+                        val progress = repository.getEpisodeProgress(seriesId, compositeKey, vodComponent.getCurrentProviderId() ?: "")
                         val startPosition = progress?.currentPosition ?: 0L
                         
                         // Play series - this will set currentMovieTitle to the episode format
@@ -1201,7 +1212,8 @@ class MainActivity : ComponentActivity() {
                         contentId = movieId,
                         contentType = "MOVIE",
                         posterUrl = vodItem.posterUrl,
-                        cmd = cmd ?: ""
+                        cmd = cmd ?: "",
+                        providerId = vodComponent.getCurrentProviderId() ?: ""
                     )
                     
                     // Play M3U movie directly with URL from cmd
@@ -1271,12 +1283,13 @@ class MainActivity : ComponentActivity() {
                             contentId = movieId,
                             contentType = "MOVIE",
                             posterUrl = vodItem.posterUrl,
-                            cmd = cmd ?: ""
+                            cmd = cmd ?: "",
+                            providerId = vodComponent.getCurrentProviderId() ?: ""
                         )
                         
                         // Check for saved progress and seek to it
                         val repository = com.ronika.iptvnative.repository.WatchProgressRepository(applicationContext)
-                        val progress = repository.getProgress(movieId, "MOVIE")
+                        val progress = repository.getProgress(movieId, "MOVIE", vodComponent.getCurrentProviderId() ?: "")
                         val startPosition = progress?.currentPosition ?: 0L
                         
                         vodPlayer.playMovie(streamUrl, title, startPosition)
@@ -1350,6 +1363,7 @@ class MainActivity : ComponentActivity() {
             vodComponent.setFullscreen(true)
             vodComponent.visibility = android.view.View.VISIBLE
             vodComponent.post {
+                vodComponent.refreshProgress()
                 vodComponent.focusPlayButton()
             }
             Log.d(TAG, "Returned to movie detail from search, VOD container visible, stack: $navigationStack")
@@ -1359,8 +1373,9 @@ class MainActivity : ComponentActivity() {
             vodContainer.visibility = android.view.View.VISIBLE
             
             // VOD component should still be showing detail screen
-            // Focus the play button in detail screen
+            // Refresh progress and focus the play button in detail screen
             vodComponent.post {
+                vodComponent.refreshProgress()
                 vodComponent.focusPlayButton()
             }
             Log.d(TAG, "Returned to movie detail, stack: $navigationStack")
@@ -1424,10 +1439,11 @@ class MainActivity : ComponentActivity() {
     fun showMoviesCategory(categoryName: String, providerId: String? = null) {
         Log.d(TAG, "Showing Movies category: $categoryName, providerId: $providerId")
         
-        // Check if this is "Continue Watching" category
-        if (categoryName == "Continue Watching") {
+        // Check if this is "Continue Watching" category (with or without emoji)
+        val cleanCategoryName = categoryName.replace("▶️ ", "").replace("⭐ ", "")
+        if (cleanCategoryName == "Continue Watching") {
             showContinueWatchingMovies()
-        } else if (categoryName == "Favourites") {
+        } else if (cleanCategoryName == "Favourites") {
             showFavouriteMovies()
         } else {
             // Check if category is censored
@@ -1456,10 +1472,11 @@ class MainActivity : ComponentActivity() {
     fun showSeriesCategory(categoryName: String, providerId: String? = null) {
         Log.d(TAG, "Showing Series category: $categoryName, providerId: $providerId")
         
-        // Check if this is "Continue Watching" category
-        if (categoryName == "Continue Watching") {
+        // Check if this is "Continue Watching" category (with or without emoji)
+        val cleanCategoryName = categoryName.replace("▶️ ", "").replace("⭐ ", "")
+        if (cleanCategoryName == "Continue Watching") {
             showContinueWatchingSeries()
-        } else if (categoryName == "Favourites") {
+        } else if (cleanCategoryName == "Favourites") {
             showFavouriteSeries()
         } else {
             // Check if category is censored
@@ -1523,7 +1540,7 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun showContinueWatchingMovies() {
-        Log.d(TAG, "Loading Continue Watching movies")
+        Log.d(TAG, "📺📺📺 ========== LOADING CONTINUE WATCHING MOVIES ==========")
         
         // Mark that we came from category
         currentNavigationSource = NavigationSource.CATEGORY
@@ -1551,8 +1568,18 @@ class MainActivity : ComponentActivity() {
         // Load continue watching items from database
         lifecycleScope.launch {
             try {
+                // Get active provider ID
+                val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(applicationContext)
+                val activeProvider = database.providerDao().getActiveProvider()
+                val providerId = activeProvider?.id ?: vodComponent.getCurrentProviderId() ?: ""
+                
+                Log.d(TAG, "📺 Loading Continue Watching movies for provider: $providerId")
+                Log.d(TAG, "📺 Active provider: ${activeProvider?.name} (${activeProvider?.id})")
+                
                 val repository = com.ronika.iptvnative.repository.WatchProgressRepository(applicationContext)
-                val progressList = repository.getContinueWatchingMovies()
+                val progressList = repository.getContinueWatchingMovies(providerId)
+                
+                Log.d(TAG, "📺 Continue Watching query returned ${progressList.size} items")
                 
                 // Convert WatchProgress to VODItem
                 val vodItems = progressList.map { progress ->
@@ -1608,8 +1635,15 @@ class MainActivity : ComponentActivity() {
         // Load continue watching items from database
         lifecycleScope.launch {
             try {
+                // Get active provider ID
+                val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(applicationContext)
+                val activeProvider = database.providerDao().getActiveProvider()
+                val providerId = activeProvider?.id ?: vodComponent.getCurrentProviderId() ?: ""
+                
+                Log.d(TAG, "Loading Continue Watching series for provider: $providerId")
+                
                 val repository = com.ronika.iptvnative.repository.WatchProgressRepository(applicationContext)
-                val progressList = repository.getContinueWatchingSeries()
+                val progressList = repository.getContinueWatchingSeries(providerId)
                 
                 // Convert WatchProgress to VODItem
                 val vodItems = progressList.map { progress ->
@@ -1669,8 +1703,15 @@ class MainActivity : ComponentActivity() {
         // Load favourite movies from database
         lifecycleScope.launch {
             try {
+                // Get active provider ID
+                val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(applicationContext)
+                val activeProvider = database.providerDao().getActiveProvider()
+                val providerId = activeProvider?.id ?: vodComponent.getCurrentProviderId() ?: ""
+                
+                Log.d(TAG, "Loading Favourite movies for provider: $providerId")
+                
                 val repository = com.ronika.iptvnative.repository.FavoriteRepository(applicationContext)
-                val favourites = repository.getFavoriteMovies()
+                val favourites = repository.getFavoriteMovies(providerId)
                 
                 // Convert to VODItem
                 val vodItems = favourites.map { movie ->
@@ -1726,8 +1767,15 @@ class MainActivity : ComponentActivity() {
         // Load favourite series from database
         lifecycleScope.launch {
             try {
+                // Get active provider ID
+                val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(applicationContext)
+                val activeProvider = database.providerDao().getActiveProvider()
+                val providerId = activeProvider?.id ?: vodComponent.getCurrentProviderId() ?: ""
+                
+                Log.d(TAG, "Loading Favourite series for provider: $providerId")
+                
                 val repository = com.ronika.iptvnative.repository.FavoriteRepository(applicationContext)
-                val favourites = repository.getFavoriteSeries()
+                val favourites = repository.getFavoriteSeries(providerId)
                 
                 // Convert to VODItem
                 val vodItems = favourites.map { series ->
@@ -1814,6 +1862,10 @@ class MainActivity : ComponentActivity() {
             Log.d(TAG, "Update playlist requested from settings - doing full resync for ALL providers")
             lifecycleScope.launch {
                 try {
+                    // First, clean local database duplicates
+                    Log.d(TAG, "🧹 Cleaning local database duplicates before sync...")
+                    cleanLocalDatabaseDuplicates()
+                    
                     val categoryRepository = CategoryRepository(this@MainActivity)
                     // Full resync ALL providers: deletes all categories, re-fetches from API, checks is_series for each
                     val result = categoryRepository.fullResyncAllProviders()
@@ -1860,6 +1912,47 @@ class MainActivity : ComponentActivity() {
         }
         
         Log.d(TAG, "Settings component initialized")
+    }
+    
+    /**
+     * Clean local database duplicates (same as server cleanup logic)
+     * Keeps only the first occurrence of each category (by name + type + providerId)
+     */
+    private suspend fun cleanLocalDatabaseDuplicates() = withContext(Dispatchers.IO) {
+        try {
+            val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(this@MainActivity)
+            val allCategories = database.categoryDao().getAllCategories()
+            
+            Log.d(TAG, "📊 Total categories before cleanup: ${allCategories.size}")
+            
+            // Group by unique key (name + type + providerId)
+            val grouped = allCategories.groupBy { "${it.name}_${it.type}_${it.providerId}" }
+            
+            // Find duplicates
+            val duplicatesToDelete = mutableListOf<com.ronika.iptvnative.database.entities.CategoryEntity>()
+            grouped.forEach { (key, categories) ->
+                if (categories.size > 1) {
+                    // Keep first, delete rest
+                    duplicatesToDelete.addAll(categories.drop(1))
+                    Log.d(TAG, "🗑️ Found ${categories.size} duplicates of: ${categories[0].name} (${categories[0].type})")
+                }
+            }
+            
+            if (duplicatesToDelete.isNotEmpty()) {
+                duplicatesToDelete.forEach { category ->
+                    database.categoryDao().delete(category)
+                }
+                Log.d(TAG, "✅ Deleted ${duplicatesToDelete.size} duplicate categories")
+            } else {
+                Log.d(TAG, "✅ No duplicates found in local database")
+            }
+            
+            val finalCount = database.categoryDao().getAllCategories().size
+            Log.d(TAG, "📊 Total categories after cleanup: $finalCount")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error cleaning local database duplicates", e)
+        }
     }
     
     private fun showSearchFullscreen() {

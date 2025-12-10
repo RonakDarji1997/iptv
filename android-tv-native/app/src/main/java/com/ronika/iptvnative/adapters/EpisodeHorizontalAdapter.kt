@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 class EpisodeHorizontalAdapter(
     private val episodes: List<Episode>,
     private val seriesId: String,
+    private val providerId: String,
     private val seriesPosterUrl: String?,
     private val onEpisodeClick: (Episode) -> Unit
 ) : RecyclerView.Adapter<EpisodeHorizontalAdapter.EpisodeViewHolder>() {
@@ -111,7 +112,7 @@ class EpisodeHorizontalAdapter(
                 val progress = withContext(Dispatchers.IO) {
                     // Check for progress using composite key: seasonId_episodeId
                     val compositeKey = "${episode.seasonId}_${episode.id}"
-                    repository.getEpisodeProgress(seriesId, compositeKey)
+                    repository.getEpisodeProgress(seriesId, compositeKey, providerId)
                 }
                 
                 if (progress != null && progress.currentPosition > 0) {

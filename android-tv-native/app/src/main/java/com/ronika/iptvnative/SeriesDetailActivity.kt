@@ -69,6 +69,7 @@ class SeriesDetailActivity : ComponentActivity() {
     private var country: String? = null
     private var genres: String? = null
     private var totalSeasons: String? = null
+    private var providerId: String = ""
     
     private var seasons = mutableListOf<Season>()
     private var allEpisodesBySeason = mutableMapOf<String, List<Episode>>()
@@ -91,6 +92,13 @@ class SeriesDetailActivity : ComponentActivity() {
         country = intent.getStringExtra("COUNTRY")
         genres = intent.getStringExtra("GENRES")
         totalSeasons = intent.getStringExtra("TOTAL_SEASONS")
+        
+        // Get active provider for progress tracking
+        lifecycleScope.launch {
+            val db = com.ronika.iptvnative.database.AppDatabase.getDatabase(applicationContext)
+            val activeProvider = db.providerDao().getActiveProvider()
+            providerId = activeProvider?.id ?: ""
+        }
         
         android.util.Log.d("SeriesDetail", "===== RECEIVED INTENT DATA =====")
         android.util.Log.d("SeriesDetail", "Series ID: $seriesId")
@@ -353,7 +361,7 @@ class SeriesDetailActivity : ComponentActivity() {
         seasonTitle.text = season.name
         
         // Setup horizontal episodes recycler
-        val episodeAdapter = EpisodeHorizontalAdapter(episodes, seriesId, posterUrl) { episode ->
+        val episodeAdapter = EpisodeHorizontalAdapter(episodes, seriesId, posterUrl ?: "", providerId) { episode ->
             lastPlayedEpisodeId = episode.id
             playEpisode(episode)
         }

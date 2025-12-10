@@ -127,12 +127,13 @@ export const createSyncRouter = (pool: Pool) => {
         for (const cat of categories) {
           await client.query(
             `INSERT INTO categories (
-              category_id, user_id, provider_id, name, type, content_type, 
+              category_id, external_id, user_id, provider_id, name, type, content_type, 
               censored, is_enabled, sort_order
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT (user_id, provider_id, category_id) 
             DO UPDATE SET 
+              external_id = EXCLUDED.external_id,
               name = EXCLUDED.name,
               type = EXCLUDED.type,
               content_type = EXCLUDED.content_type,
@@ -140,7 +141,7 @@ export const createSyncRouter = (pool: Pool) => {
               is_enabled = EXCLUDED.is_enabled,
               sort_order = EXCLUDED.sort_order,
               updated_at = NOW()`,
-            [cat.category_id, userId, providerUuid, cat.name, cat.type, cat.content_type,
+            [cat.category_id, cat.external_id, userId, providerUuid, cat.name, cat.type, cat.content_type,
              cat.censored || 0, cat.is_enabled !== false, cat.sort_order || 0]
           );
           syncedCount++;
