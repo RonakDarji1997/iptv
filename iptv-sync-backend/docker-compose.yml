@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: iptv_sync
       POSTGRES_USER: postgres
-        POSTGRES_PASSWORD: test123
+      POSTGRES_PASSWORD: test123
       POSTGRES_INITDB_ARGS: "-E UTF8"
     ports:
       - "5432:5432"
@@ -51,10 +51,10 @@ services:
       DB_PORT: 5432
       DB_NAME: iptv_sync
       DB_USER: postgres
-        DB_PASSWORD: test123
+      DB_PASSWORD: test123
       REDIS_HOST: redis
       REDIS_PORT: 6379
-        REDIS_PASSWORD: test123
+      REDIS_PASSWORD: test123
       JWT_SECRET: change-this-to-a-random-secret-in-production
       JWT_REFRESH_SECRET: change-this-to-another-random-secret-in-production
     depends_on:
@@ -85,7 +85,7 @@ services:
     restart: unless-stopped
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@iptvsync.com
-        PGADMIN_DEFAULT_PASSWORD: test123
+      PGADMIN_DEFAULT_PASSWORD: test123
       PGADMIN_LISTEN_PORT: 80
     ports:
       - "5050:80"
