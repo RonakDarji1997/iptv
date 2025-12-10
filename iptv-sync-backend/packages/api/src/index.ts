@@ -84,10 +84,14 @@ import { createProgressRouter } from './routes/progress';
 import { createStalkerProxyRouter } from './routes/stalker-proxy';
 import { authMiddleware } from './middleware/auth';
 
-// Conditional auth middleware that skips /image endpoint (uses token in query)
+// Conditional auth middleware that skips certain endpoints
 const conditionalAuth = (req: Request, res: Response, next: NextFunction) => {
+  // Skip auth for image proxy (uses token in query)
   if (req.path === '/image') {
-    // Skip auth middleware for images - they use token query param
+    return next();
+  }
+  // Skip auth for setup endpoints (used before user has provider)
+  if (req.path === '/handshake' || req.path === '/profile' || req.path === '/fetch-categories') {
     return next();
   }
   return authMiddleware(req, res, next);

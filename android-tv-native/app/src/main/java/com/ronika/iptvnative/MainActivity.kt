@@ -1060,9 +1060,9 @@ class MainActivity : ComponentActivity() {
                         val vodCmd = "/media/file_$fileId.mpg"
                         Log.d(TAG, "🎬 Constructed VOD CMD: $vodCmd")
                         
-                        // Get tokenized stream URL
-                        Log.d(TAG, "🎬 Step 2: Getting tokenized stream URL...")
-                        val response = client.getVodStreamUrl(vodCmd, "vod")
+                        // Get tokenized stream URL with series parameter for episode
+                        Log.d(TAG, "🎬 Step 2: Getting tokenized stream URL with series=$episodeNum...")
+                        val response = client.getVodStreamUrl(vodCmd, "vod", series = episodeNum)
                         
                         Log.d(TAG, "🎬 Stream URL obtained: ${response.url}")
                         

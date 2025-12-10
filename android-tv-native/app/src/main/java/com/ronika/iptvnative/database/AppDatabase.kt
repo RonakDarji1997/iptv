@@ -20,7 +20,7 @@ import com.ronika.iptvnative.database.entities.*
         UserEntity::class,
         PlayerSettingsEntity::class
     ],
-    version = 8,
+    version = 10,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -80,6 +80,81 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
         
+        // Migration from version 9 to 10: Add password field to user table
+        // Allows storing user credentials for automatic token refresh
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Check if password column already exists
+                val cursor = database.query("PRAGMA table_info(user)")
+                var passwordColumnExists = false
+                while (cursor.moveToNext()) {
+                    val columnName = cursor.getString(cursor.getColumnIndex("name"))
+                    if (columnName == "password") {
+                        passwordColumnExists = true
+                        break
+                    }
+                }
+                cursor.close()
+
+                // Add password column if it doesn't exist
+                if (!passwordColumnExists) {
+                    database.execSQL("ALTER TABLE `user` ADD COLUMN `password` TEXT")
+                }
+            }
+        }
+
+        // Migration from version 8 to 9: Add userId column to providers table
+        // Links providers to users for cloud sync without deleting existing data
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Check if userId column already exists before adding
+                val cursor = database.query("PRAGMA table_info(providers)")
+                var hasUserId = false
+                while (cursor.moveToNext()) {
+                    val columnName = cursor.getString(cursor.getColumnIndex("name"))
+                    if (columnName == "userId") {
+                        hasUserId = true
+                        break
+                    }
+                }
+                cursor.close()
+                
+                // Add userId column only if it doesn't exist
+                if (!hasUserId) {
+                    database.execSQL("ALTER TABLE `providers` ADD COLUMN `userId` INTEGER")
+                }
+                
+                // Update user table schema (remove portalUrl and mac, add password)
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `user_new` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `username` TEXT NOT NULL,
+                        `email` TEXT NOT NULL,
+                        `password` TEXT,
+                        `bearerToken` TEXT NOT NULL,
+                        `tokenExpiry` INTEGER NOT NULL,
+                        `lastSync` INTEGER,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                
+                // Copy existing user data (if any) - password will be null for existing users
+                database.execSQL(
+                    """
+                    INSERT INTO `user_new` (id, username, email, password, bearerToken, tokenExpiry, lastSync, createdAt, updatedAt)
+                    SELECT id, username, email, NULL, bearerToken, tokenExpiry, lastSync, createdAt, updatedAt FROM `user`
+                    """.trimIndent()
+                )
+                
+                // Drop old table and rename new one
+                database.execSQL("DROP TABLE `user`")
+                database.execSQL("ALTER TABLE `user_new` RENAME TO `user`")
+            }
+        }
+        
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -87,7 +162,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "iptv_database"
                 )
-                    .addMigrations(MIGRATION_6_7, MIGRATION_7_8)
+                    .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

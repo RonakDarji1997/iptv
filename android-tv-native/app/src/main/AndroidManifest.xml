@@ -51,7 +51,7 @@
         <!-- Main Activity - Netflix-style component-based architecture -->
         <activity
             android:name=".MainActivity"
-            android:exported="false"
+            android:exported="true"
             android:screenOrientation="landscape" />
         
         <!-- Live TV Channels Activity -->

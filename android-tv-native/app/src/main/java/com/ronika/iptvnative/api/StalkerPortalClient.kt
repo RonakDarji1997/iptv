@@ -253,8 +253,13 @@ class StalkerClient(
     /**
      * Get VOD stream URL using file ID
      */
-    suspend fun getVodStreamUrl(cmd: String, type: String = "vod"): StreamUrlResponse = withContext(Dispatchers.IO) {
-        val url = "${getBaseUrl()}/server/load.php?type=$type&action=create_link&cmd=$cmd&forced_storage=undefined&disable_ad=0&JsHttpRequest=1-xml"
+    suspend fun getVodStreamUrl(cmd: String, type: String = "vod", series: String? = null): StreamUrlResponse = withContext(Dispatchers.IO) {
+        // Build URL with optional series parameter for episodes
+        val baseUrl = "${getBaseUrl()}/server/load.php?type=$type&action=create_link&cmd=$cmd"
+        val seriesParam = if (series != null) "&series=$series" else ""
+        val url = "$baseUrl$seriesParam&force_ch_link_check=0&JsHttpRequest=1-xml"
+        
+        Log.d(TAG, "Getting VOD stream URL: $url")
         
         val request = buildRequest(url)
         

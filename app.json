@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "aa902fae-fcf4-4a22-979a-9aab69f54056"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.ronakdarji.ronikasiptv",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    }
+  }
+}

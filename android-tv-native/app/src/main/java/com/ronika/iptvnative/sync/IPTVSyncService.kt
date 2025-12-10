@@ -40,6 +40,109 @@ class IPTVSyncService(private val context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val gson = Gson()
     
+    /**
+     * Refresh access token when it expires (401 error)
+     * Uses stored email and password to get new token
+     */
+    private suspend fun refreshAccessToken(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            Log.d(TAG, "🔄 Refreshing access token...")
+            
+            // Get stored credentials from database
+            val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(context)
+            val user = database.userDao().getUser()
+            
+            if (user == null) {
+                Log.e(TAG, "❌ No user found in database for token refresh")
+                return@withContext false
+            }
+            
+            if (user.email.isEmpty() || user.password.isNullOrEmpty()) {
+                Log.e(TAG, "❌ User credentials not available for token refresh")
+                return@withContext false
+            }
+            
+            Log.d(TAG, "📧 Using credentials: ${user.email}")
+            
+            // Authenticate with stored credentials, forcing a refresh
+            return@withContext ensureAuthenticated(user.email, user.password, forceRefresh = true)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Token refresh failed: ${e.message}")
+            e.printStackTrace()
+            return@withContext false
+        }
+    }
+    
+    /**
+     * Execute HTTP request with automatic token refresh on 401
+     * @return Response code and body
+     */
+    private suspend fun executeWithRetry(
+        urlString: String,
+        method: String = "POST",
+        body: String? = null,
+        maxRetries: Int = 1
+    ): Pair<Int, String> = withContext(Dispatchers.IO) {
+        var attempts = 0
+        var lastException: Exception? = null
+        
+        while (attempts <= maxRetries) {
+            try {
+                val accessToken = prefs.getString(KEY_ACCESS_TOKEN, null)
+                if (accessToken == null) {
+                    Log.e(TAG, "❌ No access token available")
+                    return@withContext Pair(401, "No access token")
+                }
+                
+                val connection = URL(urlString).openConnection() as HttpURLConnection
+                connection.requestMethod = method
+                connection.setRequestProperty("Authorization", "Bearer $accessToken")
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.connectTimeout = 10000
+                connection.readTimeout = 10000
+                
+                if (body != null && (method == "POST" || method == "PUT")) {
+                    connection.doOutput = true
+                    connection.outputStream.use { os ->
+                        os.write(body.toByteArray())
+                    }
+                }
+                
+                val responseCode = connection.responseCode
+                val responseBody = if (responseCode in 200..299) {
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                } else {
+                    connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                }
+                
+                // If 401 and we haven't retried yet, refresh token and retry
+                if (responseCode == 401 && attempts < maxRetries) {
+                    Log.d(TAG, "⚠️ Got 401, refreshing token (attempt ${attempts + 1}/${maxRetries + 1})...")
+                    if (refreshAccessToken()) {
+                        Log.d(TAG, "✅ Token refreshed, retrying request...")
+                        attempts++
+                        continue
+                    } else {
+                        Log.e(TAG, "❌ Token refresh failed, cannot retry")
+                        return@withContext Pair(401, "Token refresh failed")
+                    }
+                }
+                
+                return@withContext Pair(responseCode, responseBody)
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Request failed (attempt ${attempts + 1}): ${e.message}")
+                lastException = e
+                if (attempts >= maxRetries) {
+                    throw e
+                }
+                attempts++
+            }
+        }
+        
+        throw lastException ?: Exception("Request failed after $maxRetries retries")
+    }
+    
     // Data classes for API
     data class SyncProviderRequest(
         @SerializedName("provider_id") val providerId: String,
@@ -123,11 +226,12 @@ class IPTVSyncService(private val context: Context) {
     
     /**
      * Login or register user
-     * This should be called on first launch
+     * This should be called on first launch or when token expires
+     * @param forceRefresh If true, ignore existing token and get a new one
      */
-    suspend fun ensureAuthenticated(email: String? = null, password: String? = null): Boolean = withContext(Dispatchers.IO) {
+    suspend fun ensureAuthenticated(email: String? = null, password: String? = null, forceRefresh: Boolean = false): Boolean = withContext(Dispatchers.IO) {
         try {
-            if (isLoggedIn()) {
+            if (!forceRefresh && isLoggedIn()) {
                 return@withContext true
             }
             
@@ -139,6 +243,8 @@ class IPTVSyncService(private val context: Context) {
                 Log.e(TAG, "❌ No password provided for authentication")
                 return@withContext false
             }
+            
+            Log.d(TAG, "🔐 Authenticating user: $userEmail")
             
             // Generate username from email (part before @)
             val username = userEmail.substringBefore('@')
@@ -228,51 +334,39 @@ class IPTVSyncService(private val context: Context) {
                 }
             }
             
-            val url = URL("$BACKEND_URL/sync/providers")
-            val connection = url.openConnection() as HttpURLConnection
+            val syncRequest = SyncProviderRequest(
+                providerId = provider.id,
+                name = provider.name,
+                type = provider.type,
+                serverUrl = provider.serverUrl,
+                macAddress = provider.macAddress,
+                serialNumber = provider.serialNumber,
+                token = provider.token,
+                username = provider.username,
+                password = provider.password,
+                configuration = mapOf(
+                    "setupStep" to provider.setupStep,
+                    "lastSync" to System.currentTimeMillis()
+                ),
+                isActive = provider.isActive,
+                isConfigured = provider.isConfigured,
+                includeTv = provider.includeTv,
+                includeVod = provider.includeVod,
+                adultPassword = provider.adultPassword
+            )
             
-            try {
-                connection.requestMethod = "POST"
-                connection.setRequestProperty("Content-Type", "application/json")
-                connection.setRequestProperty("Authorization", "Bearer ${prefs.getString(KEY_ACCESS_TOKEN, "")}")
-                connection.doOutput = true
-                connection.connectTimeout = 15000
-                connection.readTimeout = 15000
-                
-                val syncRequest = SyncProviderRequest(
-                    providerId = provider.id,
-                    name = provider.name,
-                    type = provider.type,
-                    serverUrl = provider.serverUrl,
-                    macAddress = provider.macAddress,
-                    serialNumber = provider.serialNumber,
-                    token = provider.token,
-                    username = provider.username,
-                    password = provider.password,
-                    configuration = mapOf(
-                        "setupStep" to provider.setupStep,
-                        "lastSync" to System.currentTimeMillis()
-                    ),
-                    isActive = provider.isActive,
-                    isConfigured = provider.isConfigured,
-                    includeTv = provider.includeTv,
-                    includeVod = provider.includeVod,
-                    adultPassword = provider.adultPassword
-                )
-                
-                connection.outputStream.use { os ->
-                    os.write(gson.toJson(syncRequest).toByteArray())
-                }
-                
-                if (connection.responseCode in 200..299) {
-                    Log.d(TAG, "✅ Provider synced: ${provider.name}")
-                    true
-                } else {
-                    Log.e(TAG, "❌ Provider sync failed: ${connection.responseCode}")
-                    false
-                }
-            } finally {
-                connection.disconnect()
+            val (responseCode, responseBody) = executeWithRetry(
+                "$BACKEND_URL/sync/providers",
+                "POST",
+                gson.toJson(syncRequest)
+            )
+            
+            if (responseCode in 200..299) {
+                Log.d(TAG, "✅ Provider synced: ${provider.name}")
+                true
+            } else {
+                Log.e(TAG, "❌ Provider sync failed: $responseCode")
+                false
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Provider sync error", e)
@@ -583,17 +677,12 @@ class IPTVSyncService(private val context: Context) {
             
             Log.d(TAG, "📥 Pulling all data from cloud via GET /sync/pull...")
             
-            val url = URL("$BACKEND_URL/sync/pull")
-            val connection = url.openConnection() as HttpURLConnection
+            val (responseCode, response) = executeWithRetry(
+                "$BACKEND_URL/sync/pull",
+                "GET"
+            )
             
-            try {
-                connection.requestMethod = "GET"
-                connection.setRequestProperty("Authorization", "Bearer ${prefs.getString(KEY_ACCESS_TOKEN, "")}")
-                connection.connectTimeout = 30000
-                connection.readTimeout = 30000
-                
-                if (connection.responseCode in 200..299) {
-                    val response = connection.inputStream.bufferedReader().use { it.readText() }
+            if (responseCode in 200..299) {
                     val jsonResponse = gson.fromJson(response, com.google.gson.JsonObject::class.java)
                     
                     if (jsonResponse.get("success").asBoolean) {
@@ -639,10 +728,42 @@ class IPTVSyncService(private val context: Context) {
                                 providers.add(provider)
                             }
                             
+                            // Get user ID for linking providers
+                            val user = database.userDao().getUser()
+                            val userId = user?.id
+                            
+                            // Check for duplicates before inserting
+                            val existingProviders = database.providerDao().getAllProvidersList()
+                            
                             providers.forEach { provider ->
-                                database.providerDao().insertProvider(provider)
+                                // Check if provider already exists by ID, MAC, and token
+                                // This allows same portal with different MAC addresses (multiple accounts)
+                                val isDuplicate = existingProviders.any { existing ->
+                                    existing.id == provider.id ||  // Same provider ID from cloud
+                                    (existing.macAddress == provider.macAddress &&
+                                     existing.serverUrl == provider.serverUrl &&
+                                     existing.token == provider.token)  // Exact same credentials
+                                }
+                                
+                                if (!isDuplicate) {
+                                    // Link provider to user and insert
+                                    val providerWithUser = provider.copy(userId = userId)
+                                    database.providerDao().insertProvider(providerWithUser)
+                                    Log.d(TAG, "✅ Inserted new provider: ${provider.name} (MAC: ${provider.macAddress})")
+                                } else {
+                                    Log.d(TAG, "⏭️ Skipped duplicate provider: ${provider.name} (ID: ${provider.id})")
+                                }
                             }
-                            Log.d(TAG, "✅ Inserted ${providers.size} providers")
+                            
+                            val insertedCount = providers.count { provider ->
+                                !existingProviders.any { existing ->
+                                    existing.id == provider.id ||
+                                    (existing.macAddress == provider.macAddress &&
+                                     existing.serverUrl == provider.serverUrl &&
+                                     existing.token == provider.token)
+                                }
+                            }
+                            Log.d(TAG, "✅ Inserted $insertedCount new providers, skipped ${providers.size - insertedCount} duplicates")
                         }
                         
                         // Parse and insert categories
@@ -750,14 +871,14 @@ class IPTVSyncService(private val context: Context) {
                         
                         Log.d(TAG, "✅ All data pulled from cloud successfully")
                         return@withContext providersArray?.size() ?: 0 > 0
+                    } else {
+                        Log.e(TAG, "❌ Pull data response not successful")
+                        return@withContext false
                     }
+                } else {
+                    Log.e(TAG, "❌ Pull data failed: $responseCode")
+                    return@withContext false
                 }
-                
-                Log.e(TAG, "❌ Pull data failed: ${connection.responseCode}")
-                false
-            } finally {
-                connection.disconnect()
-            }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Pull data error", e)
             false
@@ -914,23 +1035,341 @@ class IPTVSyncService(private val context: Context) {
     }
     
     /**
+     * Sync providers from backend to local database
+     * Downloads all providers for the authenticated user
+     */
+    suspend fun syncProvidersFromBackend(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            Log.d(TAG, "⬇️ Syncing providers from backend...")
+            
+            val accessToken = prefs.getString(KEY_ACCESS_TOKEN, null)
+            if (accessToken == null) {
+                Log.e(TAG, "❌ Not authenticated")
+                return@withContext false
+            }
+            
+            val url = URL("$BACKEND_URL/sync/pull")
+            val connection = url.openConnection() as HttpURLConnection
+            
+            try {
+                connection.requestMethod = "GET"
+                connection.setRequestProperty("Authorization", "Bearer $accessToken")
+                connection.connectTimeout = 30000
+                connection.readTimeout = 30000
+                
+                val responseCode = connection.responseCode
+                if (responseCode == 200) {
+                    val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
+                    val response = gson.fromJson(responseBody, PullSyncResponse::class.java)
+                    
+                    val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(context)
+                    val providers = response.data?.providers ?: emptyList()
+                    
+                    var newProviders = 0
+                    var updatedProviders = 0
+                    
+                    for (providerData in providers) {
+                        // Check if provider already exists
+                        val existing = database.providerDao().getProviderById(providerData.id)
+                        
+                        if (existing == null) {
+                            // New provider - insert it
+                            val entity = ProviderEntity(
+                                id = providerData.id,
+                                name = providerData.name,
+                                type = providerData.type,
+                                serverUrl = providerData.serverUrl ?: "",
+                                macAddress = providerData.macAddress,
+                                serialNumber = providerData.serialNumber,
+                                token = providerData.token,
+                                createdAt = System.currentTimeMillis(),
+                                isActive = providerData.isActive ?: true
+                            )
+                            database.providerDao().insertProvider(entity)
+                            newProviders++
+                            Log.d(TAG, "✅ Added new provider: ${providerData.name} (${providerData.type})")
+                        } else {
+                            // Existing provider - update if any field changed
+                            val needsUpdate = existing.name != providerData.name ||
+                                            existing.serverUrl != (providerData.serverUrl ?: "") ||
+                                            existing.macAddress != providerData.macAddress ||
+                                            existing.serialNumber != providerData.serialNumber ||
+                                            existing.token != providerData.token ||
+                                            existing.isActive != (providerData.isActive ?: true)
+                            
+                            if (needsUpdate) {
+                                val updated = existing.copy(
+                                    name = providerData.name,
+                                    serverUrl = providerData.serverUrl ?: existing.serverUrl,
+                                    macAddress = providerData.macAddress ?: existing.macAddress,
+                                    serialNumber = providerData.serialNumber ?: existing.serialNumber,
+                                    token = providerData.token ?: existing.token,
+                                    isActive = providerData.isActive ?: existing.isActive
+                                )
+                                database.providerDao().updateProvider(updated)
+                                updatedProviders++
+                                Log.d(TAG, "✅ Updated provider: ${providerData.name}")
+                            }
+                        }
+                    }
+                    
+                    Log.d(TAG, "✅ Synced providers: $newProviders new, $updatedProviders updated")
+                    return@withContext true
+                } else {
+                    val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                    Log.e(TAG, "❌ Failed to sync providers: $responseCode - $errorBody")
+                    return@withContext false
+                }
+            } finally {
+                connection.disconnect()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error syncing providers", e)
+            return@withContext false
+        }
+    }
+    
+    /**
+     * Sync provider categories from backend (full-sync endpoint)
+     * This calls the /api/sync/full-sync/:providerId endpoint which:
+     * 1. Fetches categories from Stalker portal
+     * 2. Detects movie vs series
+     * 3. Saves to backend database
+     * 4. Returns stats
+     */
+    suspend fun syncProviderCategories(providerId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            Log.d(TAG, "🔄 Syncing categories for provider: $providerId")
+            
+            val accessToken = prefs.getString(KEY_ACCESS_TOKEN, null)
+            if (accessToken == null) {
+                Log.e(TAG, "❌ Not authenticated")
+                return@withContext false
+            }
+            
+            // Get provider UUID from database
+            val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(context)
+            val provider = database.providerDao().getProviderById(providerId)
+            if (provider == null) {
+                Log.e(TAG, "❌ Provider not found: $providerId")
+                return@withContext false
+            }
+            
+            // Call backend full-sync endpoint
+            val url = URL("$BACKEND_URL/sync/full-sync/${provider.id}")
+            val connection = url.openConnection() as HttpURLConnection
+            
+            try {
+                connection.requestMethod = "POST"
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.setRequestProperty("Authorization", "Bearer $accessToken")
+                connection.doOutput = true
+                connection.connectTimeout = 300000 // 5 minutes for category detection
+                connection.readTimeout = 300000
+                
+                val responseCode = connection.responseCode
+                val responseBody = if (responseCode == 200) {
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                } else {
+                    connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                }
+                
+                if (responseCode == 200) {
+                    val response = gson.fromJson(responseBody, SyncStatsResponse::class.java)
+                    Log.d(TAG, "✅ Categories synced: ${response.stats?.categories} total")
+                    Log.d(TAG, "   - Live TV: ${response.stats?.live}")
+                    Log.d(TAG, "   - Movies: ${response.stats?.movies}")
+                    Log.d(TAG, "   - Series: ${response.stats?.series}")
+                    
+                    // Now pull the categories from backend to local DB
+                    downloadCategoriesFromBackend(providerId)
+                    
+                    return@withContext true
+                } else {
+                    Log.e(TAG, "❌ Failed to sync categories: $responseCode - $responseBody")
+                    return@withContext false
+                }
+            } finally {
+                connection.disconnect()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error syncing categories", e)
+            return@withContext false
+        }
+    }
+    
+    /**
+     * Download categories from backend to local database
+     */
+    private suspend fun downloadCategoriesFromBackend(providerId: String) = withContext(Dispatchers.IO) {
+        try {
+            Log.d(TAG, "⬇️ Downloading categories from backend...")
+            
+            val accessToken = prefs.getString(KEY_ACCESS_TOKEN, null) ?: return@withContext
+            
+            val url = URL("$BACKEND_URL/sync/pull")
+            val connection = url.openConnection() as HttpURLConnection
+            
+            try {
+                connection.requestMethod = "GET"
+                connection.setRequestProperty("Authorization", "Bearer $accessToken")
+                connection.connectTimeout = 30000
+                connection.readTimeout = 30000
+                
+                val responseCode = connection.responseCode
+                if (responseCode == 200) {
+                    val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
+                    val response = gson.fromJson(responseBody, PullSyncResponse::class.java)
+                    
+                    // Filter categories for this provider and save to local DB
+                    val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(context)
+                    val categories = response.data?.categories?.filter { it.providerId == providerId } ?: emptyList()
+                    
+                    for (category in categories) {
+                        val entity = CategoryEntity(
+                            id = category.categoryId,
+                            providerId = providerId,
+                            externalId = category.categoryId,
+                            name = category.name,
+                            type = category.type,
+                            contentType = category.contentType ?: "LIVE",
+                            censored = category.censored,
+                            isEnabled = category.isEnabled
+                        )
+                        database.categoryDao().insert(entity)
+                    }
+                    
+                    Log.d(TAG, "✅ Downloaded ${categories.size} categories to local DB")
+                } else {
+                    Log.e(TAG, "❌ Failed to download categories: $responseCode")
+                }
+            } finally {
+                connection.disconnect()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error downloading categories", e)
+        }
+    }
+    
+    /**
      * Sync FROM cloud TO local database
      * Downloads providers, settings, passwords, categories from cloud
+     * Uses pullAllData which already checks for duplicates
      */
     suspend fun syncFromCloud() = withContext(Dispatchers.IO) {
         try {
             Log.d(TAG, "⬇️ Starting sync from cloud...")
             
-            // TODO: Implement cloud -> local sync
-            // This would download:
-            // 1. Provider settings
-            // 2. Adult passwords
-            // 3. Category enable/disable states
-            // 4. Any other user preferences
+            // Use pullAllData which handles duplicate checking
+            val hasData = pullAllData(context)
             
-            Log.d(TAG, "✅ Sync from cloud completed")
+            if (hasData) {
+                Log.d(TAG, "✅ Sync from cloud completed - data merged")
+            } else {
+                Log.d(TAG, "⏭️ Sync from cloud completed - no new data")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to sync from cloud: ${e.message}", e)
         }
     }
+    
+    /**
+     * Sync TO server FROM local database
+     * Uploads all local providers and categories to server
+     * This is useful when user wants to backup their current data
+     */
+    suspend fun syncToServer(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            if (!ensureAuthenticated()) {
+                Log.e(TAG, "Cannot sync to server - not authenticated")
+                return@withContext false
+            }
+            
+            Log.d(TAG, "⬆️ Starting sync to server...")
+            
+            val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(context)
+            
+            // Get all local providers
+            val providers = database.providerDao().getAllProvidersList()
+            Log.d(TAG, "📤 Syncing ${providers.size} providers to server...")
+            
+            var successCount = 0
+            for (provider in providers) {
+                val success = syncProvider(provider)
+                if (success) {
+                    successCount++
+                    
+                    // Sync categories for this provider
+                    val categories = database.categoryDao().getCategoriesByProviderId(provider.id)
+                    if (categories.isNotEmpty()) {
+                        syncCategories(provider.id, categories)
+                        Log.d(TAG, "📤 Synced ${categories.size} categories for ${provider.name}")
+                    }
+                }
+            }
+            
+            Log.d(TAG, "✅ Sync to server completed - ${successCount}/${providers.size} providers synced")
+            return@withContext successCount > 0
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to sync to server: ${e.message}", e)
+            return@withContext false
+        }
+    }
+    
+    // Data classes for sync responses
+    data class SyncStatsResponse(
+        val success: Boolean,
+        val stats: SyncStats?
+    )
+    
+    data class SyncStats(
+        val categories: Int,
+        val live: Int,
+        val movies: Int,
+        val series: Int
+    )
+    
+    data class PullSyncResponse(
+        val success: Boolean,
+        val data: PullSyncData?
+    )
+    
+    data class PullSyncData(
+        val providers: List<ProviderData>?,
+        val categories: List<CategoryPullData>?,
+        val channels: List<ChannelData>?,
+        val settings: Map<String, Any>?,
+        val progress: List<Any>?
+    )
+    
+    data class ProviderData(
+        val id: String,
+        @SerializedName("provider_id") val providerId: String,
+        @SerializedName("user_id") val userId: String?,
+        val name: String,
+        val type: String,
+        @SerializedName("server_url") val serverUrl: String?,
+        @SerializedName("mac_address") val macAddress: String?,
+        @SerializedName("serial_number") val serialNumber: String?,
+        val token: String?,
+        val username: String?,
+        val password: String?,
+        @SerializedName("is_active") val isActive: Boolean?,
+        @SerializedName("is_configured") val isConfigured: Boolean?,
+        @SerializedName("created_at") val createdAt: String?,
+        @SerializedName("synced_at") val syncedAt: String?
+    )
+    
+    data class CategoryPullData(
+        val id: String,
+        @SerializedName("category_id") val categoryId: String,
+        @SerializedName("provider_id") val providerId: String,
+        val name: String,
+        val type: String,
+        @SerializedName("content_type") val contentType: String?,
+        val censored: Int,
+        @SerializedName("is_enabled") val isEnabled: Boolean,
+        @SerializedName("sort_order") val sortOrder: Int?
+    )
 }

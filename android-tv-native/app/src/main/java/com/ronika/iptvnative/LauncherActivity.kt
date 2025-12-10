@@ -24,6 +24,10 @@ class LauncherActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Set a simple loading screen to prevent black screen
+        setContentView(android.R.layout.simple_list_item_1)
+        
         Log.d(TAG, "onCreate() called")
         
         lifecycleScope.launch {

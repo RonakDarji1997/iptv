@@ -12,6 +12,9 @@ data class ProviderEntity(
     @PrimaryKey
     val id: String, // UUID
     
+    // User association (optional - for cloud sync)
+    val userId: Int? = null,
+    
     // Provider type: "m3u", "xtream", "stalker"
     val type: String,
     

@@ -62,7 +62,6 @@ model Provider {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   
-  devices    Device[]
   profiles   Profile[]
   syncJobs   SyncJob[]
   snapshots  Snapshot[]
@@ -74,24 +73,22 @@ model Provider {
   @@index([userId])
 }
 
-// Devices (TV apps) - each device has a MAC and token
+// Devices (TV apps) - each device belongs to a user
 model Device {
   id         String   @id @default(uuid())
   userId     String
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  providerId String
-  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
   
   deviceName String
-  mac        String
+  mac        String   @unique
   token      String?  // Encrypted
   stbId      String?
   lastActive DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   
+  @@unique([userId, mac])
   @@index([userId])
-  @@index([providerId])
 }
 
 // Profiles (Admin, Kid, Guest) with parental controls
@@ -152,6 +149,7 @@ model Category {
   name       String
   type       CategoryType
   parentId   String?
+  isEnabled  Boolean  @default(true) // Enable/disable category for user
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   

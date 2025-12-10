@@ -20,6 +20,7 @@ import com.ronika.iptvnative.R
 import com.ronika.iptvnative.PortalSetupActivity
 import com.ronika.iptvnative.database.AppDatabase
 import com.ronika.iptvnative.database.entities.ProviderEntity
+import com.ronika.iptvnative.sync.IPTVSyncService
 import com.ronika.iptvnative.utils.AppPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -67,10 +68,12 @@ class SettingsComponent @JvmOverloads constructor(
     
     // Playlist section views
     private lateinit var btnManageCategories: LinearLayout
+    private lateinit var btnSyncCategories: LinearLayout
     private lateinit var btnUpdatePlaylist: LinearLayout
     private lateinit var btnAddPlaylist: LinearLayout
     private lateinit var activePlaylistsContainer: LinearLayout
     private lateinit var lastUpdatedText: TextView
+    private lateinit var syncStatusText: TextView
     
     // Player section views
     private lateinit var btnToggleBitrate: LinearLayout
@@ -129,12 +132,14 @@ class SettingsComponent @JvmOverloads constructor(
         contentPlayer = findViewById(R.id.content_player)
         contentAbout = findViewById(R.id.content_about)
         
-        // Playlist section
+        // Playlist section views
         btnManageCategories = findViewById(R.id.btn_manage_categories)
+        btnSyncCategories = findViewById(R.id.btn_sync_categories)
         btnUpdatePlaylist = findViewById(R.id.btn_update_playlist)
         btnAddPlaylist = findViewById(R.id.btn_add_playlist)
         activePlaylistsContainer = findViewById(R.id.active_playlists_container)
         lastUpdatedText = findViewById(R.id.last_updated_text)
+        syncStatusText = findViewById(R.id.sync_status_text)
         
         // Player section
         btnToggleBitrate = findViewById(R.id.btn_toggle_bitrate)
@@ -227,6 +232,7 @@ class SettingsComponent @JvmOverloads constructor(
         }
         
         btnManageCategories.onFocusChangeListener = contentFocusListener
+        btnSyncCategories.onFocusChangeListener = contentFocusListener
         btnUpdatePlaylist.onFocusChangeListener = contentFocusListener
         btnAddPlaylist.onFocusChangeListener = contentFocusListener
         btnToggleBitrate.onFocusChangeListener = contentFocusListener
@@ -244,6 +250,14 @@ class SettingsComponent @JvmOverloads constructor(
                     putExtra("from_settings", true)
                 }
                 context.startActivity(intent)
+            } ?: run {
+                Toast.makeText(context, "No playlist configured", Toast.LENGTH_SHORT).show()
+            }
+        }
+        
+        btnSyncCategories.setOnClickListener {
+            currentProvider?.let { provider ->
+                syncCategoriesFromServer(provider.id)
             } ?: run {
                 Toast.makeText(context, "No playlist configured", Toast.LENGTH_SHORT).show()
             }
@@ -912,6 +926,64 @@ class SettingsComponent @JvmOverloads constructor(
     
     fun refresh() {
         loadData()
+    }
+    
+    private fun syncCategoriesFromServer(providerId: String) {
+        syncStatusText.text = "Syncing with server..."
+        syncStatusText.setTextColor(0xFFFFA500.toInt()) // Orange
+        
+        coroutineScope.launch {
+            try {
+                val syncService = IPTVSyncService(context)
+                
+                // Step 1: Upload local data to server (all providers and categories)
+                syncStatusText.text = "Uploading local data to server..."
+                val uploadSuccess = syncService.syncToServer()
+                
+                // Step 2: Download any new data from server (merge without duplicates)
+                syncStatusText.text = "Downloading data from server..."
+                syncService.syncFromCloud()
+                
+                withContext(Dispatchers.Main) {
+                    if (uploadSuccess) {
+                        syncStatusText.text = "Sync completed successfully!"
+                        syncStatusText.setTextColor(0xFF4CAF50.toInt()) // Green
+                        Toast.makeText(context, "All data synced with server!", Toast.LENGTH_SHORT).show()
+                        
+                        // Reset status text after 3 seconds
+                        postDelayed({
+                            syncStatusText.text = "Sync with server (backup & restore)"
+                            syncStatusText.setTextColor(0xFF888888.toInt())
+                        }, 3000)
+                        
+                        // Refresh provider list and UI
+                        loadData()
+                        onProviderStatusChangedCallback?.invoke()
+                    } else {
+                        syncStatusText.text = "Sync failed - check authentication"
+                        syncStatusText.setTextColor(0xFFF44336.toInt()) // Red
+                        Toast.makeText(context, "Sync failed - please login first", Toast.LENGTH_SHORT).show()
+                        
+                        postDelayed({
+                            syncStatusText.text = "Sync with server (backup & restore)"
+                            syncStatusText.setTextColor(0xFF888888.toInt())
+                        }, 3000)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error syncing", e)
+                withContext(Dispatchers.Main) {
+                    syncStatusText.text = "Sync error: ${e.message}"
+                    syncStatusText.setTextColor(0xFFF44336.toInt())
+                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                    
+                    postDelayed({
+                        syncStatusText.text = "Sync with server (backup & restore)"
+                        syncStatusText.setTextColor(0xFF888888.toInt())
+                    }, 3000)
+                }
+            }
+        }
     }
     
     private fun toggleBitrateDisplay() {

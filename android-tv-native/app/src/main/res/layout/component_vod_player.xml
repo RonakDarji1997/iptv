@@ -20,20 +20,30 @@
         app:show_subtitle_button="false" />
 
     <!-- Subtitle Overlay -->
-    <TextView
-        android:id="@+id/subtitle_text"
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|center_horizontal"
         android:layout_marginBottom="100dp"
         android:layout_marginStart="60dp"
-        android:layout_marginEnd="60dp"
-        android:gravity="center"
-        android:textColor="#FFFFFFFF"
-        android:textSize="22sp"
-        android:background="#99000000"
-        android:padding="12dp"
-        android:visibility="gone" />
+        android:layout_marginEnd="60dp">
+        
+        <TextView
+            android:id="@+id/subtitle_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:textColor="#FFFFFFFF"
+            android:textSize="22sp"
+            android:background="@drawable/subtitle_background"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:maxWidth="900dp"
+            android:visibility="gone" />
+    </FrameLayout>
 
     <!-- Loading Indicator -->
     <ProgressBar

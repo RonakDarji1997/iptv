@@ -129,6 +129,24 @@ class CloudAuthActivity : AppCompatActivity() {
                     val prefs = getSharedPreferences("iptv_sync_prefs", MODE_PRIVATE)
                     prefs.edit().putBoolean("cloud_sync_enabled", true).apply()
                     
+                    // Save user to database
+                    tvStatus.text = "💾 Saving user data..."
+                    val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(this@CloudAuthActivity)
+                    val syncPrefs = getSharedPreferences("iptv_sync", MODE_PRIVATE)
+                    val token = syncPrefs.getString("access_token", "") ?: ""
+                    
+                    val user = com.ronika.iptvnative.database.entities.UserEntity(
+                        username = email.substringBefore('@'),
+                        email = email,
+                        password = password, // Store for token refresh
+                        bearerToken = token,
+                        tokenExpiry = System.currentTimeMillis() + (24 * 60 * 60 * 1000), // 24 hours
+                        lastSync = System.currentTimeMillis()
+                    )
+                    
+                    database.userDao().insertUser(user)
+                    Log.d(TAG, "✅ User saved to database: ${user.email}")
+                    
                     // Small delay to ensure SharedPreferences is committed across processes
                     delay(100)
                     

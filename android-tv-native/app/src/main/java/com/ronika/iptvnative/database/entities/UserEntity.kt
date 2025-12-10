@@ -9,8 +9,7 @@ data class UserEntity(
     val id: Int = 0,
     val username: String,
     val email: String,
-    val portalUrl: String,
-    val mac: String,
+    val password: String? = null, // Stored for token refresh
     val bearerToken: String,
     val tokenExpiry: Long, // Unix timestamp
     val lastSync: Long? = null, // Unix timestamp

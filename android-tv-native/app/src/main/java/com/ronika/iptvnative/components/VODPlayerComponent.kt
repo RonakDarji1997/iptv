@@ -331,9 +331,14 @@ class VODPlayerComponent @JvmOverloads constructor(
                         Log.d(TAG, "⏳ Progress: ${event.percent.toInt()}% (${event.processedSeconds}/${event.totalDuration}s)")
                     }
                     is SubtitleService.SubtitleEvent.Subtitle -> {
-                        // Show subtitle text overlay
-                        Log.d(TAG, "📝 [Showing] [${event.startTime.toInt()}s - ${event.endTime.toInt()}s] \"${event.text}\"")
-                        showSubtitleText(event.text)
+                        // Add subtitle to cues list (matching mobile app logic)
+                        val newCue = SubtitleCue(
+                            startMs = (event.startTime * 1000).toLong(),
+                            endMs = (event.endTime * 1000).toLong(),
+                            text = event.text
+                        )
+                        subtitleCues = subtitleCues + newCue
+                        Log.d(TAG, "📝 [Received] [${event.startTime.toInt()}s - ${event.endTime.toInt()}s] \"${event.text}\" (total: ${subtitleCues.size})")
                     }
                     is SubtitleService.SubtitleEvent.Complete -> {
                         Log.d(TAG, "✅ ${event.message}")
@@ -400,146 +405,13 @@ class VODPlayerComponent @JvmOverloads constructor(
         }
     }
     
-    // VTT subtitle parsing and display
+    // Subtitle synchronization (matching mobile app logic)
+    // Subtitles received via SSE are stored in memory and matched against player position
     private data class SubtitleCue(val startMs: Long, val endMs: Long, val text: String)
     private var subtitleCues: List<SubtitleCue> = emptyList()
     private var subtitlePollingHandler: Handler? = null
     private var subtitlePollingRunnable: Runnable? = null
-    private var vttRefreshHandler: Handler? = null
-    private var vttRefreshRunnable: Runnable? = null
-    private var currentSubtitleUrl: String? = null
     private var lastDisplayedCueIndex: Int = -1
-    
-    private fun loadSubtitleTrack(subtitleUrl: String) {
-        Log.d(TAG, "Loading VTT subtitles from: $subtitleUrl")
-        currentSubtitleUrl = subtitleUrl
-        
-        // Start polling for subtitle display immediately
-        startSubtitlePolling()
-        
-        // Start VTT refresh polling (fetches VTT every 5 seconds to get new cues)
-        startVttRefreshPolling(subtitleUrl)
-    }
-    
-    private fun startVttRefreshPolling(subtitleUrl: String) {
-        stopVttRefreshPolling()
-        
-        vttRefreshHandler = Handler(Looper.getMainLooper())
-        vttRefreshRunnable = object : Runnable {
-            override fun run() {
-                fetchAndParseVtt(subtitleUrl)
-                vttRefreshHandler?.postDelayed(this, 2000) // Refresh VTT every 2 seconds for real-time subtitles
-            }
-        }
-        // Initial fetch immediately
-        vttRefreshHandler?.post(vttRefreshRunnable!!)
-        Log.d(TAG, "Started VTT refresh polling (every 2s)")
-    }
-    
-    private fun stopVttRefreshPolling() {
-        vttRefreshRunnable?.let { vttRefreshHandler?.removeCallbacks(it) }
-        vttRefreshHandler = null
-        vttRefreshRunnable = null
-    }
-    
-    private fun fetchAndParseVtt(subtitleUrl: String) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val vttContent = java.net.URL(subtitleUrl).readText()
-                val newCues = parseVttContent(vttContent)
-                if (newCues.size != subtitleCues.size) {
-                    Log.d(TAG, "VTT refreshed: ${newCues.size} cues (was ${subtitleCues.size}), content length: ${vttContent.length}")
-                    if (newCues.isNotEmpty()) {
-                        val firstCue = newCues.first()
-                        val lastCue = newCues.last()
-                        Log.d(TAG, "First cue: ${firstCue.startMs}ms-${firstCue.endMs}ms: ${firstCue.text}")
-                        Log.d(TAG, "Last cue: ${lastCue.startMs}ms-${lastCue.endMs}ms: ${lastCue.text}")
-                        
-                        // Show toast only on first load
-                        if (subtitleCues.isEmpty()) {
-                            handler.post {
-                                val firstMin = firstCue.startMs / 60000
-                                val firstSec = (firstCue.startMs % 60000) / 1000
-                                android.widget.Toast.makeText(
-                                    context,
-                                    "✅ ${newCues.size} subtitles loaded (starts at ${firstMin}:${firstSec.toString().padStart(2, '0')})",
-                                    android.widget.Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        }
-                    }
-                }
-                subtitleCues = newCues
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to fetch VTT file: ${e.message}")
-            }
-        }
-    }
-    
-    private fun parseVttContent(vttContent: String): List<SubtitleCue> {
-        val cues = mutableListOf<SubtitleCue>()
-        val lines = vttContent.lines()
-        var i = 0
-        
-        while (i < lines.size) {
-            val line = lines[i].trim()
-            
-            // Look for timestamp line: 00:00:01.000 --> 00:00:03.000
-            if (line.contains("-->")) {
-                val parts = line.split("-->")
-                if (parts.size == 2) {
-                    val startMs = parseVttTimestamp(parts[0].trim())
-                    val endMs = parseVttTimestamp(parts[1].trim())
-                    
-                    // Collect text lines until empty line or end
-                    val textLines = mutableListOf<String>()
-                    i++
-                    while (i < lines.size && lines[i].trim().isNotEmpty()) {
-                        textLines.add(lines[i].trim())
-                        i++
-                    }
-                    
-                    if (textLines.isNotEmpty() && startMs >= 0 && endMs >= 0) {
-                        cues.add(SubtitleCue(startMs, endMs, textLines.joinToString("\n")))
-                    }
-                }
-            }
-            i++
-        }
-        
-        return cues
-    }
-    
-    private fun parseVttTimestamp(timestamp: String): Long {
-        // Parse formats: HH:MM:SS.mmm or MM:SS.mmm
-        return try {
-            val cleanTimestamp = timestamp.replace(",", ".")
-            val parts = cleanTimestamp.split(":")
-            when (parts.size) {
-                3 -> {
-                    // HH:MM:SS.mmm
-                    val hours = parts[0].toLong()
-                    val minutes = parts[1].toLong()
-                    val secondsParts = parts[2].split(".")
-                    val seconds = secondsParts[0].toLong()
-                    val millis = if (secondsParts.size > 1) secondsParts[1].padEnd(3, '0').take(3).toLong() else 0L
-                    hours * 3600000 + minutes * 60000 + seconds * 1000 + millis
-                }
-                2 -> {
-                    // MM:SS.mmm
-                    val minutes = parts[0].toLong()
-                    val secondsParts = parts[1].split(".")
-                    val seconds = secondsParts[0].toLong()
-                    val millis = if (secondsParts.size > 1) secondsParts[1].padEnd(3, '0').take(3).toLong() else 0L
-                    minutes * 60000 + seconds * 1000 + millis
-                }
-                else -> -1L
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse timestamp: $timestamp", e)
-            -1L
-        }
-    }
     
     private fun startSubtitlePolling() {
         stopSubtitlePolling()
@@ -548,24 +420,20 @@ class VODPlayerComponent @JvmOverloads constructor(
         subtitlePollingRunnable = object : Runnable {
             override fun run() {
                 updateSubtitleDisplay()
-                subtitlePollingHandler?.postDelayed(this, 100) // Poll every 100ms
+                subtitlePollingHandler?.postDelayed(this, 100) // Poll every 100ms (matching mobile app)
             }
         }
         subtitlePollingHandler?.post(subtitlePollingRunnable!!)
-        Log.d(TAG, "Started subtitle polling")
+        Log.d(TAG, "Started subtitle polling (checking player position against received subtitles)")
     }
     
     private fun stopSubtitlePolling() {
-        // Stop VTT refresh polling
-        stopVttRefreshPolling()
-        
         // Stop subtitle display polling
         subtitlePollingRunnable?.let { subtitlePollingHandler?.removeCallbacks(it) }
         subtitlePollingHandler = null
         subtitlePollingRunnable = null
         lastDisplayedCueIndex = -1
         subtitleCues = emptyList()
-        currentSubtitleUrl = null
         hideSubtitleText()
         Log.d(TAG, "Stopped subtitle polling")
     }
@@ -575,7 +443,7 @@ class VODPlayerComponent @JvmOverloads constructor(
         
         if (subtitleCues.isEmpty()) return
         
-        // Simple: match player position with VTT timestamps
+        // Match player position with received subtitle timestamps (matching mobile app logic)
         val matchingCue = subtitleCues.find { cue ->
             currentPosition >= cue.startMs && currentPosition <= cue.endMs
         }
@@ -586,7 +454,7 @@ class VODPlayerComponent @JvmOverloads constructor(
                 lastDisplayedCueIndex = cueIndex
                 subtitleText.text = matchingCue.text
                 subtitleText.visibility = VISIBLE
-                Log.d(TAG, "✅ [${matchingCue.startMs}-${matchingCue.endMs}ms]: ${matchingCue.text}")
+                Log.d(TAG, "👁️ [Showing] [${currentPosition}ms / ${matchingCue.startMs}-${matchingCue.endMs}ms]: ${matchingCue.text}")
             }
         } else {
             if (subtitleText.visibility == VISIBLE) {
@@ -638,11 +506,18 @@ class VODPlayerComponent @JvmOverloads constructor(
             if (subtitleStreamId != null) {
                 Log.d(TAG, "🔄 Cancelling previous generation...")
                 subtitleService.stop()
-                stopSubtitlePolling()
             }
+            
+            // Clear previous subtitles
+            subtitleCues = emptyList()
+            lastDisplayedCueIndex = -1
             
             Log.d(TAG, "  ▶️ Starting generation from: ${currentPositionSec}s")
             subtitleStreamId = subtitleService.start(currentStreamUrl, videoId, "auto", currentPosition)
+            
+            // Start polling to display subtitles (checks player position against received subtitles)
+            startSubtitlePolling()
+            
             android.widget.Toast.makeText(context, "Starting subtitles...", android.widget.Toast.LENGTH_SHORT).show()
         } else {
             // Stop subtitle generation and polling

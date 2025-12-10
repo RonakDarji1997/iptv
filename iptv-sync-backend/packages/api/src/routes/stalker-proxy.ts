@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import axios from 'axios';
+import * as crypto from 'crypto';
 
 // Stalker Portal Proxy - Forwards requests to Stalker portal with proper headers
 export const createStalkerProxyRouter = (pool: Pool) => {
@@ -717,6 +718,342 @@ export const createStalkerProxyRouter = (pool: Pool) => {
       const transparentPixel = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
       res.set('Content-Type', 'image/gif');
       res.send(transparentPixel);
+    }
+  });
+
+  // POST /api/stalker-proxy/handshake - Perform Stalker handshake (no auth required for setup)
+  router.post('/handshake', async (req: Request, res: Response) => {
+    try {
+      const { portalUrl, mac, adid } = req.body;
+
+      if (!portalUrl || !mac) {
+        return res.status(400).json({ error: 'portalUrl and mac are required' });
+      }
+
+      // Use provided adid or generate one
+      const deviceAdid = adid || 'd5441597521c851906613d3948d84b8b';
+
+      console.log('🤝 Handshake request:', { portalUrl, mac, adid: deviceAdid });
+
+      // Follow redirects to get final URL (like Android TV does with OkHttp)
+      let baseUrl = portalUrl;
+      
+      try {
+        // Make a HEAD request to the server/load.php endpoint to follow redirects
+        const testUrl = baseUrl.includes('/stalker_portal') 
+          ? `${baseUrl}/server/load.php`
+          : `${baseUrl}/stalker_portal/server/load.php`;
+          
+        console.log('🔍 Checking redirects for:', testUrl);
+        
+        const redirectCheck = await axios.head(testUrl, {
+          maxRedirects: 5,
+          validateStatus: () => true,
+          timeout: 10000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3'
+          }
+        });
+        
+        const redirectedUrl = redirectCheck.request?.res?.responseUrl;
+        
+        if (redirectedUrl && redirectedUrl !== testUrl) {
+          console.log('🔀 Original URL:', portalUrl);
+          console.log('🔀 Redirected to:', redirectedUrl);
+          
+          // Extract base URL by removing everything after /stalker_portal
+          if (redirectedUrl.includes('/stalker_portal')) {
+            baseUrl = redirectedUrl.substring(0, redirectedUrl.indexOf('/stalker_portal') + '/stalker_portal'.length);
+          } else if (redirectedUrl.includes('/portal')) {
+            baseUrl = redirectedUrl.substring(0, redirectedUrl.indexOf('/portal') + '/portal'.length);
+          } else {
+            // Parse to get protocol + host only
+            const urlObj = new URL(redirectedUrl);
+            baseUrl = `${urlObj.protocol}//${urlObj.host}/stalker_portal`;
+          }
+          
+          console.log('✅ Resolved base URL:', baseUrl);
+        } else {
+          // No redirect, ensure we have stalker_portal in the URL
+          baseUrl = portalUrl.replace(/\/$/, '');
+          if (!baseUrl.includes('/stalker_portal')) {
+            baseUrl = `${baseUrl}/stalker_portal`;
+          }
+          console.log('✅ Using original URL:', baseUrl);
+        }
+      } catch (err) {
+        console.log('⚠️ Redirect check failed, using original URL');
+        baseUrl = portalUrl.replace(/\/$/, '');
+        if (!baseUrl.includes('/stalker_portal')) {
+          baseUrl = `${baseUrl}/stalker_portal`;
+        }
+      }
+
+      const url = `${baseUrl}/server/load.php`;
+      const timestamp = Math.floor(Date.now() / 1000);
+      const prehash = '13f08489a13755456b4bb629229e14c1c358ebb1';
+
+      const params = {
+        type: 'stb',
+        action: 'handshake',
+        token: '',
+        prehash: prehash,
+        JsHttpRequest: '1-xml'
+      };
+
+      console.log('📤 Handshake URL:', url);
+      console.log('📤 Handshake params:', params);
+      console.log('📤 MAC:', mac);
+
+      const response = await axios.get(url, {
+        params,
+        headers: {
+          'Cookie': `mac=${mac}; timezone=America/Toronto; adid=${deviceAdid}`,
+          'User-Agent': 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
+          'X-User-Agent': 'Model: MAG270; Link: WiFi',
+        },
+        timeout: 10000,
+      });
+
+      console.log('📥 Handshake response:', response.data);
+
+      if (response.data?.js?.token) {
+        res.json({
+          token: response.data.js.token,
+          random: response.data.js.random,
+          finalUrl: baseUrl
+        });
+      } else {
+        throw new Error('Invalid handshake response');
+      }
+    } catch (error: any) {
+      console.error('❌ Handshake error:', error.message);
+      res.status(500).json({ 
+        error: 'Handshake failed', 
+        details: error.message 
+      });
+    }
+  });
+
+  // POST /api/stalker-proxy/profile - Get Stalker profile (no auth required for setup)
+  router.post('/profile', async (req: Request, res: Response) => {
+    try {
+      const { portalUrl, mac, token, serialNumber, adid } = req.body;
+
+      if (!portalUrl || !mac || !token || !serialNumber) {
+        return res.status(400).json({ 
+          error: 'portalUrl, mac, token, and serialNumber are required' 
+        });
+      }
+
+      // Use provided adid or generate one (MD5 of MAC)
+      const deviceAdid = adid || crypto.createHash('md5').update(mac).digest('hex');
+      
+      // Generate prehash (SHA1 of MAC) - this is used as random in metrics
+      const prehash = crypto.createHash('sha1').update(mac).digest('hex');
+
+      console.log('👤 Profile request:', { portalUrl, mac, serialNumber, prehash });
+
+      const url = `${portalUrl}/server/load.php`;
+      const timestamp = Math.floor(Date.now() / 1000);
+
+      const metrics = JSON.stringify({
+        mac: mac,
+        sn: serialNumber,
+        model: 'MAG270',
+        type: 'STB',
+        uid: '',
+        random: prehash  // Use prehash as random, NOT the random from handshake response!
+      });
+
+      const params = {
+        type: 'stb',
+        action: 'get_profile',
+        ver: 'ImageDescription: 0.2.18-r22-pub-270; ImageDate: Tue Dec 19 11:33:53 EET 2017; PORTAL version: 5.6.1; API Version: JS API version: 328; STB API version: 134; Player Engine version: 0x566',
+        sn: serialNumber,
+        stb_type: 'MAG270',
+        client_type: 'STB',
+        image_version: '0.2.18',
+        device_id: '',
+        device_id2: '',
+        auth_second_step: '1',
+        hw_version: '1.7-BD-00',
+        not_valid_token: '0',
+        metrics: metrics,
+        hw_version_2: 'ecf87650406bba50b0801a4347093864b89b38e6',
+        timestamp: timestamp,
+        api_signature: '262',
+        prehash: 'efd15c16dc497e0839ff5accfdc6ed99c32c4e2a',
+        JsHttpRequest: '1-xml'
+      };
+
+      console.log('📤 Profile URL:', url);
+      console.log('📤 Profile params:', params);
+      console.log('📤 Profile headers:', {
+        'Cookie': `mac=${mac}; timezone=America/Toronto; adid=${deviceAdid}`,
+        'Authorization': `Bearer ${token}`
+      });
+
+      const response = await axios.get(url, {
+        params,
+        headers: {
+          'Cookie': `mac=${mac}; timezone=America/Toronto; adid=${deviceAdid}`,
+          'User-Agent': 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
+          'X-User-Agent': 'Model: MAG270; Link: WiFi',
+          'Authorization': `Bearer ${token}`
+        },
+        timeout: 10000,
+      });
+
+      console.log('📥 Profile response:', response.data);
+
+      if (response.data?.js) {
+        const profileData = response.data.js;
+        
+        // Check if portal requires authentication (status: 2)
+        if (profileData.status === 2) {
+          return res.status(401).json({
+            error: 'Authentication required',
+            status: 2,
+            message: profileData.msg || 'This portal requires username/password authentication',
+            details: profileData
+          });
+        }
+        
+        // Check for other error statuses
+        if (profileData.status === 1) {
+          return res.status(400).json({
+            error: 'Time sync error',
+            status: 1,
+            message: profileData.msg || 'Time on the device is not synchronized',
+            details: profileData
+          });
+        }
+        
+        res.json(profileData);
+      } else {
+        throw new Error('Invalid profile response');
+      }
+    } catch (error: any) {
+      console.error('❌ Profile error:', error.message);
+      res.status(500).json({ 
+        error: 'Profile fetch failed', 
+        details: error.message 
+      });
+    }
+  });
+
+  // POST /api/stalker-proxy/fetch-categories - Fetch all categories from Stalker portal (no auth required for setup)
+  router.post('/fetch-categories', async (req: Request, res: Response) => {
+    try {
+      const { portalUrl, mac, token } = req.body;
+
+      if (!portalUrl || !mac || !token) {
+        return res.status(400).json({ 
+          error: 'portalUrl, mac, and token are required' 
+        });
+      }
+
+      console.log('📋 Fetching categories:', { portalUrl, mac });
+
+      const url = `${portalUrl}/server/load.php`;
+      const headers = {
+        'Cookie': `mac=${mac}; timezone=America/Toronto`,
+        'User-Agent': 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
+        'Authorization': `Bearer ${token}`,
+      };
+
+      // Fetch Live TV genres and VOD categories
+      const [liveResponse, vodResponse] = await Promise.all([
+        axios.get(url, {
+          params: { type: 'itv', action: 'get_genres', JsHttpRequest: '1-xml' },
+          headers,
+          timeout: 10000,
+        }),
+        axios.get(url, {
+          params: { type: 'vod', action: 'get_categories', JsHttpRequest: '1-xml' },
+          headers,
+          timeout: 10000,
+        }),
+      ]);
+
+      const liveGenres = (liveResponse.data.js || []).filter((g: any) => g.id !== '*' && g.id !== 'dvb');
+      const vodCategories = (vodResponse.data.js || []).filter((c: any) => c.id !== '*');
+
+      console.log(`✅ Fetched ${liveGenres.length} live genres, ${vodCategories.length} VOD categories`);
+
+      // Detect VOD category types by sampling
+      const allCategories = [];
+
+      // Add live TV genres
+      for (const genre of liveGenres) {
+        allCategories.push({
+          id: genre.id,
+          name: genre.title,
+          type: 'CHANNEL',
+          contentType: 'LIVE',
+          censored: genre.censored || 0,
+          sortOrder: parseInt(genre.number || '0', 10)
+        });
+      }
+
+      // Sample and add VOD categories
+      for (const category of vodCategories) {
+        try {
+          // Sample first page to detect type
+          const sampleResponse = await axios.get(url, {
+            params: {
+              type: 'vod',
+              action: 'get_ordered_list',
+              category: category.id,
+              sortby: '',
+              p: 1,
+              JsHttpRequest: '1-xml'
+            },
+            headers,
+            timeout: 10000,
+          });
+
+          const items = sampleResponse.data.js?.data || [];
+          const hasSeries = items.slice(0, 3).some((item: any) => {
+            const isSeries = item.is_series;
+            return isSeries === '1' || isSeries === 1;
+          });
+
+          const type = hasSeries ? 'SERIES' : 'MOVIE';
+
+          allCategories.push({
+            id: category.id,
+            name: category.title,
+            type: type,
+            contentType: 'VOD',
+            censored: category.censored || 0,
+            sortOrder: 0
+          });
+
+          // Small delay to avoid overwhelming server
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (err) {
+          console.error(`Failed to detect type for category ${category.id}, defaulting to MOVIE`);
+          allCategories.push({
+            id: category.id,
+            name: category.title,
+            type: 'MOVIE',
+            contentType: 'VOD',
+            censored: category.censored || 0,
+            sortOrder: 0
+          });
+        }
+      }
+
+      console.log(`🎉 Total categories: ${allCategories.length}`);
+      res.json({ categories: allCategories });
+    } catch (error: any) {
+      console.error('❌ Fetch categories error:', error.message);
+      res.status(500).json({ 
+        error: 'Failed to fetch categories', 
+        details: error.message 
+      });
     }
   });
   

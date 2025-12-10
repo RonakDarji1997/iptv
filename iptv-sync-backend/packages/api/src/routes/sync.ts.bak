@@ -1,60 +1,78 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
+import axios from 'axios';
+import * as crypto from 'crypto';
 import { authMiddleware } from '../middleware/auth';
 
-const router = Router();
-
 export const createSyncRouter = (pool: Pool) => {
+  const router = Router();
   
   // POST /api/sync/providers - Sync provider data
   router.post('/providers', authMiddleware, async (req: Request, res: Response) => {
     try {
-      const { userId } = (req as any).user;
+      const userId = (req as any).userId; // From auth middleware
       const { 
-        providerId, 
-        providerName, 
-        providerType, 
-        url, 
-        username, 
-        password, 
-        macAddress,
-        epgUrl,
-        isActive 
+        provider_id,
+        name,
+        type,
+        server_url,
+        username,
+        password,
+        mac_address,
+        serial_number,
+        token,
+        configuration,
+        is_active,
+        is_configured,
+        include_tv,
+        include_vod,
+        adult_password
       } = req.body;
       
-      if (!providerId || !providerName || !providerType) {
+      if (!provider_id || !name || !type) {
         return res.status(400).json({ 
-          error: 'Provider ID, name, and type are required' 
+          error: 'provider_id, name, and type are required' 
         });
       }
 
       const client = await pool.connect();
       
       try {
-        // Insert or update provider
+        // Insert or update provider using provider_id as id
         const result = await client.query(
           `INSERT INTO providers (
-            id, user_id, name, type, url, username, password, 
-            mac_address, epg_url, is_active
+            id, user_id, name, type, url,
+            stalker_mac, stalker_sn, stalker_token,
+            is_active, first_full_sync_completed, updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-          ON CONFLICT (id, user_id) 
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+          ON CONFLICT (id) 
           DO UPDATE SET 
             name = EXCLUDED.name,
             type = EXCLUDED.type,
             url = EXCLUDED.url,
-            username = EXCLUDED.username,
-            password = EXCLUDED.password,
-            mac_address = EXCLUDED.mac_address,
-            epg_url = EXCLUDED.epg_url,
+            stalker_mac = EXCLUDED.stalker_mac,
+            stalker_sn = EXCLUDED.stalker_sn,
+            stalker_token = EXCLUDED.stalker_token,
             is_active = EXCLUDED.is_active,
+            first_full_sync_completed = EXCLUDED.first_full_sync_completed,
             updated_at = NOW()
           RETURNING *`,
-          [providerId, userId, providerName, providerType, url, 
-           username, password, macAddress, epgUrl, isActive !== false]
+          [
+            provider_id,              // $1 - id
+            userId,                   // $2 - user_id
+            name,                     // $3 - name
+            type,                     // $4 - type
+            server_url,               // $5 - url
+            mac_address || null,      // $6 - stalker_mac
+            serial_number || null,    // $7 - stalker_sn
+            token || null,            // $8 - stalker_token
+            is_active !== false,      // $9 - is_active
+            is_configured !== false   // $10 - first_full_sync_completed
+          ]
         );
         
-        console.log(`✅ Provider synced: ${providerName} (${providerType})`);
+        console.log(`✅ Provider synced: ${name} (${type}) - ID: ${provider_id}`);
         
         res.json({ 
           success: true, 
@@ -67,19 +85,19 @@ export const createSyncRouter = (pool: Pool) => {
       
     } catch (error) {
       console.error('❌ Provider sync error:', error);
-      res.status(500).json({ error: 'Provider sync failed' });
+      res.status(500).json({ error: 'Provider sync failed', details: (error as Error).message });
     }
   });
   
   // POST /api/sync/categories - Sync categories for a provider
   router.post('/categories', authMiddleware, async (req: Request, res: Response) => {
     try {
-      const { userId } = (req as any).user;
-      const { providerId, categories } = req.body;
+      const userId = (req as any).userId; // From auth middleware
+      const { provider_id, categories } = req.body;
       
-      if (!providerId || !Array.isArray(categories)) {
+      if (!provider_id || !Array.isArray(categories)) {
         return res.status(400).json({ 
-          error: 'Provider ID and categories array required' 
+          error: 'provider_id and categories array required' 
         });
       }
 
@@ -88,10 +106,10 @@ export const createSyncRouter = (pool: Pool) => {
       try {
         await client.query('BEGIN');
         
-        // Verify provider belongs to user
+        // Get provider UUID from provider_id
         const providerCheck = await client.query(
-          'SELECT id FROM providers WHERE id = $1 AND user_id = $2',
-          [providerId, userId]
+          'SELECT id FROM providers WHERE provider_id = $1 AND user_id = $2',
+          [provider_id, userId]
         );
         
         if (providerCheck.rows.length === 0) {
@@ -99,30 +117,35 @@ export const createSyncRouter = (pool: Pool) => {
           return res.status(403).json({ error: 'Provider not found' });
         }
         
+        const providerUuid = providerCheck.rows[0].id;
         let syncedCount = 0;
         
         // Sync each category
         for (const cat of categories) {
           await client.query(
             `INSERT INTO categories (
-              id, provider_id, name, type, parent_id, sort_order
+              category_id, user_id, provider_id, name, type, content_type, 
+              censored, is_enabled, sort_order
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (id, provider_id) 
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (user_id, provider_id, category_id) 
             DO UPDATE SET 
               name = EXCLUDED.name,
               type = EXCLUDED.type,
-              parent_id = EXCLUDED.parent_id,
+              content_type = EXCLUDED.content_type,
+              censored = EXCLUDED.censored,
+              is_enabled = EXCLUDED.is_enabled,
               sort_order = EXCLUDED.sort_order,
               updated_at = NOW()`,
-            [cat.id, providerId, cat.name, cat.type, cat.parentId, cat.sortOrder]
+            [cat.id, userId, providerUuid, cat.name, cat.type, cat.contentType,
+             cat.censored || 0, cat.isEnabled !== false, cat.sortOrder || 0]
           );
           syncedCount++;
         }
         
         await client.query('COMMIT');
         
-        console.log(`✅ Synced ${syncedCount} categories for provider ${providerId}`);
+        console.log(`✅ Synced ${syncedCount} categories for provider ${provider_id}`);
         
         res.json({ 
           success: true, 
@@ -138,19 +161,19 @@ export const createSyncRouter = (pool: Pool) => {
       
     } catch (error) {
       console.error('❌ Category sync error:', error);
-      res.status(500).json({ error: 'Category sync failed' });
+      res.status(500).json({ error: 'Category sync failed', details: (error as Error).message });
     }
   });
   
   // POST /api/sync/channels - Sync channels for categories
   router.post('/channels', authMiddleware, async (req: Request, res: Response) => {
     try {
-      const { userId } = (req as any).user;
-      const { providerId, channels } = req.body;
+      const userId = (req as any).userId; // From auth middleware
+      const { provider_id, channels } = req.body;
       
-      if (!providerId || !Array.isArray(channels)) {
+      if (!provider_id || !Array.isArray(channels)) {
         return res.status(400).json({ 
-          error: 'Provider ID and channels array required' 
+          error: 'provider_id and channels array required' 
         });
       }
 
@@ -159,10 +182,10 @@ export const createSyncRouter = (pool: Pool) => {
       try {
         await client.query('BEGIN');
         
-        // Verify provider belongs to user
+        // Get provider UUID from provider_id
         const providerCheck = await client.query(
-          'SELECT id FROM providers WHERE id = $1 AND user_id = $2',
-          [providerId, userId]
+          'SELECT id FROM providers WHERE provider_id = $1 AND user_id = $2',
+          [provider_id, userId]
         );
         
         if (providerCheck.rows.length === 0) {
@@ -174,30 +197,44 @@ export const createSyncRouter = (pool: Pool) => {
         
         // Sync each channel
         for (const ch of channels) {
+          // Get category UUID from category_id
+          const categoryCheck = await client.query(
+            'SELECT id FROM categories WHERE category_id = $1 AND user_id = $2',
+            [ch.categoryId, userId]
+          );
+          
+          if (categoryCheck.rows.length === 0) {
+            console.warn(`⚠️ Category ${ch.categoryId} not found for channel ${ch.name}`);
+            continue;
+          }
+          
+          const categoryUuid = categoryCheck.rows[0].id;
+          
           await client.query(
             `INSERT INTO channels (
-              id, category_id, name, stream_url, logo_url, 
-              epg_channel_id, is_favorite, sort_order
+              channel_id, user_id, category_id, name, url, cmd, logo, 
+              number, is_active, external_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (id, category_id) 
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (user_id, category_id, channel_id) 
             DO UPDATE SET 
               name = EXCLUDED.name,
-              stream_url = EXCLUDED.stream_url,
-              logo_url = EXCLUDED.logo_url,
-              epg_channel_id = EXCLUDED.epg_channel_id,
-              is_favorite = EXCLUDED.is_favorite,
-              sort_order = EXCLUDED.sort_order,
+              url = EXCLUDED.url,
+              cmd = EXCLUDED.cmd,
+              logo = EXCLUDED.logo,
+              number = EXCLUDED.number,
+              is_active = EXCLUDED.is_active,
               updated_at = NOW()`,
-            [ch.id, ch.categoryId, ch.name, ch.streamUrl, ch.logoUrl, 
-             ch.epgChannelId, ch.isFavorite || false, ch.sortOrder]
+            [ch.id, userId, categoryUuid, ch.name, ch.url || ch.streamUrl, 
+             ch.cmd, ch.logo || ch.logoUrl, ch.number, 
+             ch.isActive !== false, ch.externalId]
           );
           syncedCount++;
         }
         
         await client.query('COMMIT');
         
-        console.log(`✅ Synced ${syncedCount} channels for provider ${providerId}`);
+        console.log(`✅ Synced ${syncedCount} channels for provider ${provider_id}`);
         
         res.json({ 
           success: true, 
@@ -213,14 +250,14 @@ export const createSyncRouter = (pool: Pool) => {
       
     } catch (error) {
       console.error('❌ Channel sync error:', error);
-      res.status(500).json({ error: 'Channel sync failed' });
+      res.status(500).json({ error: 'Channel sync failed', details: (error as Error).message });
     }
   });
   
   // POST /api/sync/settings - Sync user settings
   router.post('/settings', authMiddleware, async (req: Request, res: Response) => {
     try {
-      const { userId } = (req as any).user;
+      const userId = (req as any).userId; // From auth middleware
       const { settings } = req.body;
       
       if (!settings || typeof settings !== 'object') {
@@ -232,16 +269,14 @@ export const createSyncRouter = (pool: Pool) => {
       const client = await pool.connect();
       
       try {
-        // Store each setting
-        for (const [key, value] of Object.entries(settings)) {
-          await client.query(
-            `INSERT INTO settings (user_id, key, value)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (user_id, key) 
-             DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-            [userId, key, JSON.stringify(value)]
-          );
-        }
+        // Store settings as JSONB
+        await client.query(
+          `INSERT INTO settings (user_id, settings_data)
+           VALUES ($1, $2)
+           ON CONFLICT (user_id) 
+           DO UPDATE SET settings_data = EXCLUDED.settings_data, updated_at = NOW()`,
+          [userId, JSON.stringify(settings)]
+        );
         
         console.log(`✅ Synced ${Object.keys(settings).length} settings`);
         
@@ -260,38 +295,54 @@ export const createSyncRouter = (pool: Pool) => {
   // POST /api/sync/progress - Sync watch progress
   router.post('/progress', authMiddleware, async (req: Request, res: Response) => {
     try {
-      const { userId } = (req as any).user;
+      const userId = (req as any).userId; // From auth middleware
       const { 
         contentId, 
         contentType, 
         providerId,
+        contentName,
         position, 
         duration,
         completed 
       } = req.body;
       
-      if (!contentId || !contentType || !providerId) {
+      if (!contentId || !contentType) {
         return res.status(400).json({ 
-          error: 'Content ID, type, and provider ID required' 
+          error: 'Content ID and type required' 
         });
       }
 
       const client = await pool.connect();
       
       try {
+        // Get provider UUID if provided
+        let providerUuid = null;
+        if (providerId) {
+          const providerCheck = await client.query(
+            'SELECT id FROM providers WHERE provider_id = $1 AND user_id = $2',
+            [providerId, userId]
+          );
+          if (providerCheck.rows.length > 0) {
+            providerUuid = providerCheck.rows[0].id;
+          }
+        }
+        
         await client.query(
           `INSERT INTO watch_progress (
-            user_id, content_id, content_type, provider_id,
-            position, duration, completed
+            user_id, content_id, content_type, content_name, provider_id,
+            current_position, duration
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7)
-          ON CONFLICT (user_id, content_id, provider_id) 
+          ON CONFLICT (user_id, content_id, content_type) 
           DO UPDATE SET 
-            position = EXCLUDED.position,
+            current_position = EXCLUDED.current_position,
             duration = EXCLUDED.duration,
-            completed = EXCLUDED.completed,
-            updated_at = NOW()`,
-          [userId, contentId, contentType, providerId, position, duration, completed || false]
+            content_name = EXCLUDED.content_name,
+            provider_id = EXCLUDED.provider_id,
+            updated_at = NOW(),
+            last_watched_at = NOW()`,
+          [userId, contentId, contentType, contentName, providerUuid, 
+           position || 0, duration || 0]
         );
         
         console.log(`✅ Synced progress for ${contentType}: ${contentId}`);
@@ -311,7 +362,7 @@ export const createSyncRouter = (pool: Pool) => {
   // GET /api/sync/pull - Pull all data for user
   router.get('/pull', authMiddleware, async (req: Request, res: Response) => {
     try {
-      const { userId } = (req as any).user;
+      const userId = (req as any).userId; // From auth middleware
 
       const client = await pool.connect();
       
@@ -326,7 +377,7 @@ export const createSyncRouter = (pool: Pool) => {
         const categories = await client.query(
           `SELECT c.* FROM categories c
            JOIN providers p ON c.provider_id = p.id
-           WHERE p.user_id = $1
+           WHERE c.user_id = $1
            ORDER BY c.sort_order`,
           [userId]
         );
@@ -335,28 +386,24 @@ export const createSyncRouter = (pool: Pool) => {
         const channels = await client.query(
           `SELECT ch.* FROM channels ch
            JOIN categories c ON ch.category_id = c.id
-           JOIN providers p ON c.provider_id = p.id
-           WHERE p.user_id = $1
+           WHERE ch.user_id = $1
            ORDER BY ch.name`,
           [userId]
         );
         
         // Get settings
         const settings = await client.query(
-          'SELECT key, value FROM settings WHERE user_id = $1',
+          'SELECT settings_data FROM settings WHERE user_id = $1',
           [userId]
         );
         
         // Get watch progress
         const progress = await client.query(
-          'SELECT * FROM watch_progress WHERE user_id = $1 ORDER BY updated_at DESC',
+          'SELECT * FROM watch_progress WHERE user_id = $1 ORDER BY last_watched_at DESC LIMIT 100',
           [userId]
         );
         
-        const settingsObj: any = {};
-        settings.rows.forEach(row => {
-          settingsObj[row.key] = JSON.parse(row.value);
-        });
+        const settingsObj: any = settings.rows.length > 0 ? settings.rows[0].settings_data : {};
         
         console.log(`✅ Pulled data for user: ${providers.rows.length} providers, ${categories.rows.length} categories, ${channels.rows.length} channels`);
         
@@ -378,6 +425,417 @@ export const createSyncRouter = (pool: Pool) => {
     } catch (error) {
       console.error('❌ Pull sync error:', error);
       res.status(500).json({ error: 'Pull sync failed' });
+    }
+  });
+
+  // POST /api/sync/full-sync/:providerId - Complete sync for a Stalker provider
+  router.post('/full-sync/:providerId', authMiddleware, async (req: Request, res: Response) => {
+    const userId = (req as any).userId;
+    const { providerId } = req.params;
+    
+    console.log(`\n🔄 Starting full sync for provider: ${providerId}`);
+    
+    const client = await pool.connect();
+    
+    try {
+      // Get provider details
+      const providerResult = await client.query(
+        'SELECT * FROM providers WHERE id = $1 AND user_id = $2',
+        [providerId, userId]
+      );
+      
+      if (providerResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Provider not found' });
+      }
+      
+      const provider = providerResult.rows[0];
+      
+      if (provider.type !== 'stalker') {
+        return res.status(400).json({ error: 'Only Stalker providers supported' });
+      }
+      
+      const { server_url, mac_address, token } = provider;
+      
+      if (!server_url || !mac_address || !token) {
+        return res.status(400).json({ error: 'Provider missing required credentials' });
+      }
+      
+      console.log(`📋 Provider: ${provider.name} - ${server_url}`);
+      
+      // Build correct Stalker portal URL
+      let baseUrl = server_url;
+      if (!baseUrl.includes('/stalker_portal') && !baseUrl.includes('/server/load.php')) {
+        baseUrl = `${baseUrl}/stalker_portal`;
+      }
+      const url = `${baseUrl}/server/load.php`;
+      
+      console.log(`🔗 Using URL: ${url}`);
+      
+      const headers = {
+        'Cookie': `mac=${mac_address}; timezone=America/Toronto`,
+        'User-Agent': 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
+        'Authorization': `Bearer ${token}`,
+      };
+      
+      // Step 1: Fetch Live TV genres
+      console.log('\n📺 Step 1: Fetching Live TV genres...');
+      const liveResponse = await axios.get(url, {
+        params: { type: 'itv', action: 'get_genres', JsHttpRequest: '1-xml' },
+        headers,
+        timeout: 15000,
+      });
+      
+      const liveGenres = (liveResponse.data.js || []).filter((g: any) => g.id !== '*' && g.id !== 'dvb');
+      console.log(`✅ Fetched ${liveGenres.length} Live TV genres`);
+      
+      // Step 2: Fetch VOD categories
+      console.log('\n🎬 Step 2: Fetching VOD categories...');
+      const vodResponse = await axios.get(url, {
+        params: { type: 'vod', action: 'get_categories', JsHttpRequest: '1-xml' },
+        headers,
+        timeout: 15000,
+      });
+      
+      const vodCategories = (vodResponse.data.js || []).filter((c: any) => c.id !== '*');
+      console.log(`✅ Fetched ${vodCategories.length} VOD categories`);
+      
+      // Step 3: Process and save categories
+      console.log('\n💾 Step 3: Processing categories...');
+      await client.query('BEGIN');
+      
+      const allCategories = [];
+      let savedCategoryCount = 0;
+      
+      // Save Live TV genres
+      for (const genre of liveGenres) {
+        await client.query(
+          `INSERT INTO categories (
+            category_id, user_id, provider_id, name, type, content_type, 
+            censored, is_enabled, sort_order, created_at, updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+          ON CONFLICT (user_id, provider_id, category_id) 
+          DO UPDATE SET 
+            name = EXCLUDED.name,
+            type = EXCLUDED.type,
+            content_type = EXCLUDED.content_type,
+            censored = EXCLUDED.censored,
+            sort_order = EXCLUDED.sort_order,
+            updated_at = NOW()`,
+          [genre.id, userId, providerId, genre.title, 'LIVE', 'LIVE',
+           genre.censored || 0, true, parseInt(genre.number || '0', 10)]
+        );
+        
+        allCategories.push({
+          id: genre.id,
+          name: genre.title,
+          type: 'LIVE',
+          contentType: 'LIVE'
+        });
+        savedCategoryCount++;
+      }
+      
+      // Sample and save VOD categories with movie/series detection
+      for (const category of vodCategories) {
+        try {
+          // Sample first page to detect type
+          const sampleResponse = await axios.get(url, {
+            params: {
+              type: 'vod',
+              action: 'get_ordered_list',
+              category: category.id,
+              sortby: '',
+              p: 1,
+              JsHttpRequest: '1-xml'
+            },
+            headers,
+            timeout: 10000,
+          });
+
+          const items = sampleResponse.data.js?.data || [];
+          const hasSeries = items.slice(0, 3).some((item: any) => {
+            const isSeries = item.is_series;
+            return isSeries === '1' || isSeries === 1;
+          });
+
+          const type = hasSeries ? 'SERIES' : 'MOVIE';
+          
+          await client.query(
+            `INSERT INTO categories (
+              category_id, user_id, provider_id, name, type, content_type, 
+              censored, is_enabled, sort_order, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+            ON CONFLICT (user_id, provider_id, category_id) 
+            DO UPDATE SET 
+              name = EXCLUDED.name,
+              type = EXCLUDED.type,
+              content_type = EXCLUDED.content_type,
+              censored = EXCLUDED.censored,
+              updated_at = NOW()`,
+            [category.id, userId, providerId, category.title, type, 'VOD',
+             category.censored || 0, true, 0]
+          );
+          
+          allCategories.push({
+            id: category.id,
+            name: category.title,
+            type: type,
+            contentType: 'VOD'
+          });
+          savedCategoryCount++;
+          
+          console.log(`  ✓ ${category.title} → ${type}`);
+          
+          // Small delay to avoid overwhelming server
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (err) {
+          console.error(`  ✗ Failed to detect type for ${category.title}, defaulting to MOVIE`);
+          
+          await client.query(
+            `INSERT INTO categories (
+              category_id, user_id, provider_id, name, type, content_type, 
+              censored, is_enabled, sort_order, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+            ON CONFLICT (user_id, provider_id, category_id) 
+            DO UPDATE SET 
+              name = EXCLUDED.name,
+              type = EXCLUDED.type,
+              content_type = EXCLUDED.content_type,
+              updated_at = NOW()`,
+            [category.id, userId, providerId, category.title, 'MOVIE', 'VOD',
+             category.censored || 0, true, 0]
+          );
+          
+          allCategories.push({
+            id: category.id,
+            name: category.title,
+            type: 'MOVIE',
+            contentType: 'VOD'
+          });
+          savedCategoryCount++;
+        }
+      }
+      
+      await client.query('COMMIT');
+      console.log(`✅ Saved ${savedCategoryCount} categories to database`);
+      
+      // Update provider sync status
+      await client.query(
+        'UPDATE providers SET synced_at = NOW(), updated_at = NOW() WHERE id = $1',
+        [providerId]
+      );
+      
+      console.log('\n🎉 Category sync completed successfully!');
+      console.log(`   Total categories: ${savedCategoryCount}`);
+      console.log(`   - Live TV: ${allCategories.filter(c => c.contentType === 'LIVE').length}`);
+      console.log(`   - Movies: ${allCategories.filter(c => c.type === 'MOVIE').length}`);
+      console.log(`   - Series: ${allCategories.filter(c => c.type === 'SERIES').length}`);
+      
+      res.json({
+        success: true,
+        stats: {
+          categories: savedCategoryCount,
+          live: allCategories.filter(c => c.contentType === 'LIVE').length,
+          movies: allCategories.filter(c => c.type === 'MOVIE').length,
+          series: allCategories.filter(c => c.type === 'SERIES').length
+        }
+      });
+      
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      console.error('❌ Full sync error:', error.message);
+      res.status(500).json({ 
+        error: 'Full sync failed', 
+        details: error.message 
+      });
+    } finally {
+      client.release();
+    }
+  });
+  
+  return router;
+};
+          console.log(`  Fetching channels for: ${category.name}...`);
+          
+          let page = 1;
+          let hasMore = true;
+          let categoryChannels = 0;
+          
+          while (hasMore) {
+            const channelsResponse = await axios.get(url, {
+              params: {
+                type: 'itv',
+                action: 'get_ordered_list',
+                genre: category.id,
+                sortby: '',
+                p: page,
+                JsHttpRequest: '1-xml'
+              },
+              headers,
+              timeout: 15000,
+            });
+            
+            const channels = channelsResponse.data.js?.data || [];
+            
+            if (channels.length === 0) {
+              hasMore = false;
+              break;
+            }
+            
+            await client.query('BEGIN');
+            
+            for (const channel of channels) {
+              await client.query(
+                `INSERT INTO channels (
+                  channel_id, user_id, category_id, name, number, cmd, logo,
+                  is_active, external_id, created_at, updated_at
+                )
+                SELECT $1, $2, c.id, $3, $4, $5, $6, $7, $8, NOW(), NOW()
+                FROM categories c
+                WHERE c.category_id = $9 AND c.user_id = $2 AND c.provider_id = $10
+                ON CONFLICT (user_id, category_id, channel_id) 
+                DO UPDATE SET 
+                  name = EXCLUDED.name,
+                  number = EXCLUDED.number,
+                  cmd = EXCLUDED.cmd,
+                  logo = EXCLUDED.logo,
+                  is_active = EXCLUDED.is_active,
+                  updated_at = NOW()`,
+                [channel.id, userId, channel.name, channel.num || 0, channel.cmd,
+                 channel.logo || '', true, channel.id, category.id, providerId]
+              );
+              categoryChannels++;
+              totalChannels++;
+            }
+            
+            await client.query('COMMIT');
+            
+            // Check if there are more pages
+            const totalItems = channelsResponse.data.js?.total_items || 0;
+            const maxPage = channelsResponse.data.js?.max_page_items || 14;
+            hasMore = (page * maxPage) < totalItems;
+            page++;
+            
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          
+          console.log(`    ✓ ${categoryChannels} channels`);
+        } catch (err: any) {
+          console.error(`    ✗ Failed: ${err.message}`);
+        }
+      }
+      
+      console.log(`✅ Saved ${totalChannels} live TV channels`);
+      
+      // Step 5: Fetch VOD content (movies/series)
+      console.log('\n🎬 Step 5: Fetching VOD content...');
+      let totalVod = 0;
+      
+      for (const category of allCategories.filter(c => c.contentType === 'VOD')) {
+        try {
+          console.log(`  Fetching content for: ${category.name} (${category.type})...`);
+          
+          let page = 1;
+          let hasMore = true;
+          let categoryItems = 0;
+          
+          while (hasMore && page <= 5) { // Limit to 5 pages per category to avoid timeout
+            const vodResponse = await axios.get(url, {
+              params: {
+                type: 'vod',
+                action: 'get_ordered_list',
+                category: category.id,
+                sortby: '',
+                p: page,
+                JsHttpRequest: '1-xml'
+              },
+              headers,
+              timeout: 15000,
+            });
+            
+            const items = vodResponse.data.js?.data || [];
+            
+            if (items.length === 0) {
+              hasMore = false;
+              break;
+            }
+            
+            await client.query('BEGIN');
+            
+            for (const item of items) {
+              await client.query(
+                `INSERT INTO channels (
+                  channel_id, user_id, category_id, name, cmd, logo,
+                  is_active, external_id, created_at, updated_at
+                )
+                SELECT $1, $2, c.id, $3, $4, $5, $6, $7, NOW(), NOW()
+                FROM categories c
+                WHERE c.category_id = $8 AND c.user_id = $2 AND c.provider_id = $9
+                ON CONFLICT (user_id, category_id, channel_id) 
+                DO UPDATE SET 
+                  name = EXCLUDED.name,
+                  cmd = EXCLUDED.cmd,
+                  logo = EXCLUDED.logo,
+                  is_active = EXCLUDED.is_active,
+                  updated_at = NOW()`,
+                [item.id, userId, item.name, item.cmd, item.screenshot_uri || item.logo || '',
+                 true, item.id, category.id, providerId]
+              );
+              categoryItems++;
+              totalVod++;
+            }
+            
+            await client.query('COMMIT');
+            
+            // Check if there are more pages
+            const totalItems = vodResponse.data.js?.total_items || 0;
+            const maxPage = vodResponse.data.js?.max_page_items || 14;
+            hasMore = (page * maxPage) < totalItems;
+            page++;
+            
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          
+          console.log(`    ✓ ${categoryItems} items`);
+        } catch (err: any) {
+          console.error(`    ✗ Failed: ${err.message}`);
+        }
+      }
+      
+      console.log(`✅ Saved ${totalVod} VOD items`);
+      
+      // Update provider sync status
+      await client.query(
+        'UPDATE providers SET synced_at = NOW(), updated_at = NOW() WHERE id = $1',
+        [providerId]
+      );
+      
+      console.log('\n🎉 Full sync completed successfully!');
+      console.log(`   Categories: ${savedCategoryCount}`);
+      console.log(`   Live TV Channels: ${totalChannels}`);
+      console.log(`   VOD Items: ${totalVod}`);
+      
+      res.json({
+        success: true,
+        stats: {
+          categories: savedCategoryCount,
+          liveChannels: totalChannels,
+          vodItems: totalVod,
+          total: totalChannels + totalVod
+        }
+      });
+      
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      console.error('❌ Full sync error:', error.message);
+      res.status(500).json({ 
+        error: 'Full sync failed', 
+        details: error.message 
+      });
+    } finally {
+      client.release();
     }
   });
   

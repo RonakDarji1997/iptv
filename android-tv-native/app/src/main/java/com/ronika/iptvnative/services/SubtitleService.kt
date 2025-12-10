@@ -165,9 +165,16 @@ class SubtitleService {
                 }
                 
                 override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                    // Ignore "Socket closed" errors - these happen during normal cleanup
+                    val errorMessage = t?.message ?: "Connection failed"
+                    if (errorMessage.contains("Socket closed", ignoreCase = true)) {
+                        Log.d(TAG, "SSE connection closed normally")
+                        return
+                    }
+                    
                     Log.e(TAG, "SSE connection failed", t)
                     scope.launch {
-                        _subtitleFlow.emit(SubtitleEvent.Error(t?.message ?: "Connection failed"))
+                        _subtitleFlow.emit(SubtitleEvent.Error(errorMessage))
                     }
                 }
             })
