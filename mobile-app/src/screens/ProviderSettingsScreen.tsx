@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { Provider } from '../types';
 import { ProviderService } from '../services/ProviderService';
+import { emitSelectedProvidersChange } from '../services/ProviderSelectionEvents';
 import { COLORS, SPACING } from '../constants';
 
 export const ProviderSettingsScreen: React.FC = () => {
@@ -76,6 +77,8 @@ export const ProviderSettingsScreen: React.FC = () => {
     try {
       setSaving(true);
       await ProviderService.saveSelectedProviderIds(Array.from(selectedProviders));
+      // Notify listeners in the app to hard-refresh category screens
+      try { emitSelectedProvidersChange(Array.from(selectedProviders)); } catch (e) { console.error('Error emitting provider selection change:', e); }
       Alert.alert('Success', 'Provider settings saved successfully', [
         { text: 'OK', onPress: () => navigation.goBack() }
       ]);
@@ -90,7 +93,7 @@ export const ProviderSettingsScreen: React.FC = () => {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#0a84ff" />
+        <ActivityIndicator size="large" color={COLORS.primary} />
         <Text style={styles.loadingText}>Loading providers...</Text>
       </View>
     );
@@ -105,57 +108,33 @@ export const ProviderSettingsScreen: React.FC = () => {
         <Text style={styles.title}>Provider Settings</Text>
       </View>
 
-      <View style={styles.actionsBar}>
-        <TouchableOpacity onPress={selectAll} style={styles.actionButton}>
-          <Ionicons name="checkbox-outline" size={20} color="#0a84ff" />
-          <Text style={styles.actionText}>Select All</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={deselectAll} style={styles.actionButton}>
-          <Ionicons name="square-outline" size={20} color="#0a84ff" />
-          <Text style={styles.actionText}>Deselect All</Text>
-        </TouchableOpacity>
-      </View>
+          {/*
+            Temporarily disabled multi-provider selection actions.
+            Keeping the UI here commented so we can re-enable it later.
+
+          <View style={styles.actionsBar}>
+            <TouchableOpacity onPress={selectAll} style={styles.actionButton}>
+              <Ionicons name="checkbox-outline" size={20} color={COLORS.primary} />
+              <Text style={styles.actionText}>Select All</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={deselectAll} style={styles.actionButton}>
+              <Ionicons name="square-outline" size={20} color={COLORS.primary} />
+              <Text style={styles.actionText}>Deselect All</Text>
+            </TouchableOpacity>
+          </View>
+          */}
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <Text style={styles.sectionTitle}>
           Select which providers to show in the app
         </Text>
 
-        {providers.map((provider) => {
-          const isSelected = selectedProviders.has(provider.id);
-          return (
-            <TouchableOpacity
-              key={provider.id}
-              style={[
-                styles.providerItem,
-                isSelected && styles.providerItemSelected,
-              ]}
-              onPress={() => toggleProvider(provider.id)}
-            >
-              <View style={styles.providerInfo}>
-                <Text style={styles.providerName}>{provider.name}</Text>
-                {provider.type && (
-                  <Text style={styles.providerType}>{provider.type.toUpperCase()}</Text>
-                )}
-                {provider.serverUrl && provider.serverUrl !== 'pending' && (
-                  <Text style={styles.providerUrl} numberOfLines={1}>
-                    {provider.serverUrl}
-                  </Text>
-                )}
-              </View>
-              <View
-                style={[
-                  styles.checkbox,
-                  isSelected && styles.checkboxSelected,
-                ]}
-              >
-                {isSelected && (
-                  <Ionicons name="checkmark" size={18} color="#fff" />
-                )}
-              </View>
-            </TouchableOpacity>
-          );
-        })}
+        {/* Multi-provider list temporarily hidden while we operate in
+            single-provider mode. Keep code here commented for future
+            re-enablement. */}
+        <View style={{ padding: SPACING.lg }}>
+          <Text style={{ color: '#8e8e93' }}>Provider selection is temporarily hidden — the app is running in single-provider mode.</Text>
+        </View>
       </ScrollView>
 
       <View style={styles.footer}>
@@ -228,7 +207,7 @@ const styles = StyleSheet.create({
     padding: 8,
   },
   actionText: {
-    color: '#0a84ff',
+    color: COLORS.primary,
     fontSize: 16,
     marginLeft: 8,
     fontWeight: '500',
@@ -255,8 +234,8 @@ const styles = StyleSheet.create({
     borderColor: 'transparent',
   },
   providerItemSelected: {
-    borderColor: '#0a84ff',
-    backgroundColor: 'rgba(10, 132, 255, 0.1)',
+    borderColor: COLORS.primary,
+    backgroundColor: 'rgba(229, 9, 20, 0.08)',
   },
   providerInfo: {
     flex: 1,
@@ -270,7 +249,7 @@ const styles = StyleSheet.create({
   },
   providerType: {
     fontSize: 12,
-    color: '#0a84ff',
+    color: COLORS.primary,
     fontWeight: '600',
     marginBottom: 4,
   },
@@ -288,8 +267,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   checkboxSelected: {
-    backgroundColor: '#0a84ff',
-    borderColor: '#0a84ff',
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary,
   },
   footer: {
     padding: SPACING.lg,
@@ -304,7 +283,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   saveButton: {
-    backgroundColor: '#0a84ff',
+    backgroundColor: COLORS.primary,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',

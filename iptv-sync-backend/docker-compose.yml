@@ -20,6 +20,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      default:
+        aliases:
+          - iptv-sync-postgres
+      iptv_iptv-network:
+        aliases:
+          - iptv-sync-postgres
 
   redis:
     image: redis:7-alpine
@@ -35,6 +42,13 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    networks:
+      default:
+        aliases:
+          - iptv-sync-redis
+      iptv_iptv-network:
+        aliases:
+          - iptv-sync-redis
 
   api:
     build:
@@ -93,6 +107,13 @@ services:
       - pgadmin_data:/var/lib/pgadmin
     depends_on:
       - postgres
+    networks:
+      default:
+        aliases:
+          - iptv-sync-pgadmin
+      iptv_iptv-network:
+        aliases:
+          - iptv-sync-pgadmin
 
 volumes:
   postgres_data:

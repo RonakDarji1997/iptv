@@ -20,7 +20,7 @@ import com.ronika.iptvnative.database.entities.*
         UserEntity::class,
         PlayerSettingsEntity::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -126,6 +126,29 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Migration from version 11 to 12: Add last-played columns to player_settings
+        private val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Check existing columns in player_settings
+                val cursor = database.query("PRAGMA table_info(player_settings)")
+                var hasLastLive = false
+                var hasLastProvider = false
+                while (cursor.moveToNext()) {
+                    val columnName = cursor.getString(cursor.getColumnIndex("name"))
+                    if (columnName == "lastLiveChannelId") hasLastLive = true
+                    if (columnName == "lastProviderId") hasLastProvider = true
+                }
+                cursor.close()
+
+                if (!hasLastLive) {
+                    database.execSQL("ALTER TABLE `player_settings` ADD COLUMN `lastLiveChannelId` TEXT")
+                }
+                if (!hasLastProvider) {
+                    database.execSQL("ALTER TABLE `player_settings` ADD COLUMN `lastProviderId` TEXT")
+                }
+            }
+        }
+
         // Migration from version 8 to 9: Add userId column to providers table
         // Links providers to users for cloud sync without deleting existing data
         private val MIGRATION_8_9 = object : Migration(8, 9) {
@@ -185,8 +208,8 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "iptv_database"
                 )
-                    .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
-                    .fallbackToDestructiveMigration()
+                        .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+                        .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance
                 instance

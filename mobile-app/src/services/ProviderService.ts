@@ -81,6 +81,15 @@ export class ProviderService {
   }
 
   /**
+   * Get a single provider by id
+   */
+  static async getProviderById(id: string): Promise<Provider | null> {
+    const allProviders = await this.getAllProviders();
+    const found = allProviders.find(p => p.id === id);
+    return found || null;
+  }
+
+  /**
    * Check if multiple providers are available
    */
   static async hasMultipleProviders(): Promise<boolean> {

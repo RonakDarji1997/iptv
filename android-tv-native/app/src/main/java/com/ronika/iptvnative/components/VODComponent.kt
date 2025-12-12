@@ -91,6 +91,9 @@ class VODComponent @JvmOverloads constructor(
     private var onSeriesSelectedCallback: ((VODItem) -> Unit)? = null
     private var isDetailScreenVisible = false
     private var isFullscreenMode = false
+    // Callbacks to notify parent activity when detail screen is shown/hidden
+    private var onDetailShownListener: ((VODItem) -> Unit)? = null
+    private var onDetailHiddenListener: (() -> Unit)? = null
     
     // Data
     private val allItems = mutableListOf<VODItem>()
@@ -829,12 +832,19 @@ class VODComponent @JvmOverloads constructor(
         }
         
         // Animate transition
-        vodGridContainer.animate()
+                vodGridContainer.animate()
             .alpha(0f)
             .setDuration(300)
             .withEndAction {
                 vodGridContainer.visibility = GONE
                 vodDetailContainer.visibility = VISIBLE
+                        // Notify parent that detail screen is now visible so it can update navigation
+                        try {
+                            onDetailShownListener?.invoke(item)
+                            Log.d(TAG, "Detail shown callback invoked for: ${item.name}")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error invoking onDetailShownListener", e)
+                        }
                 vodDetailContainer.alpha = 0f
                 vodDetailContainer.requestFocus()  // Request focus on container for back button handling
                 vodDetailContainer.animate()
@@ -875,11 +885,26 @@ class VODComponent @JvmOverloads constructor(
                         thumbnailsRecycler.post {
                             val layoutManager = thumbnailsRecycler.layoutManager as? GridLayoutManager
                             layoutManager?.findViewByPosition(selectedPosition)?.requestFocus()
+                            // Notify parent that detail screen was hidden so it can update navigation stack
+                            try {
+                                onDetailHiddenListener?.invoke()
+                                Log.d(TAG, "Detail hidden callback invoked")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error invoking onDetailHiddenListener", e)
+                            }
                         }
                     }
                     .start()
             }
             .start()
+    }
+
+    fun setOnDetailShownListener(callback: (VODItem) -> Unit) {
+        onDetailShownListener = callback
+    }
+
+    fun setOnDetailHiddenListener(callback: () -> Unit) {
+        onDetailHiddenListener = callback
     }
     
     private fun setupDetailScreenListeners() {

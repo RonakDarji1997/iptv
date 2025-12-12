@@ -131,7 +131,7 @@ export const createSyncRouter = (pool: Pool) => {
               censored, is_enabled, sort_order
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ON CONFLICT (user_id, provider_id, category_id) 
+            ON CONFLICT (provider_id, category_id) 
             DO UPDATE SET 
               external_id = EXCLUDED.external_id,
               name = EXCLUDED.name,
@@ -518,7 +518,7 @@ export const createSyncRouter = (pool: Pool) => {
             censored, is_enabled, sort_order, created_at, updated_at
           )
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-          ON CONFLICT (user_id, provider_id, category_id) 
+          ON CONFLICT (provider_id, category_id) 
           DO UPDATE SET 
             name = EXCLUDED.name,
             type = EXCLUDED.type,
@@ -570,7 +570,7 @@ export const createSyncRouter = (pool: Pool) => {
               censored, is_enabled, sort_order, created_at, updated_at
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-            ON CONFLICT (user_id, provider_id, category_id) 
+            ON CONFLICT (provider_id, category_id) 
             DO UPDATE SET 
               name = EXCLUDED.name,
               type = EXCLUDED.type,
@@ -602,7 +602,7 @@ export const createSyncRouter = (pool: Pool) => {
               censored, is_enabled, sort_order, created_at, updated_at
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-            ON CONFLICT (user_id, provider_id, category_id) 
+            ON CONFLICT (provider_id, category_id) 
             DO UPDATE SET 
               name = EXCLUDED.name,
               type = EXCLUDED.type,

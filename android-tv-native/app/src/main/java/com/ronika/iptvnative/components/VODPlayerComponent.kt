@@ -52,9 +52,14 @@ class VODPlayerComponent @JvmOverloads constructor(
     private lateinit var aspectRatioButton: ImageButton
     private lateinit var subtitleText: TextView
     private lateinit var bitrateInfo: TextView
+    private var timeBar: androidx.media3.ui.DefaultTimeBar? = null
+    private var exoPositionView: TextView? = null
+    private var exoDurationView: TextView? = null
+    private var progressBarContainer: View? = null
     
     // ExoPlayer
     private var player: ExoPlayer? = null
+    private var attemptedTranscodeForCurrentStream: Boolean = false
     
     // Subtitle service
     private val subtitleService = SubtitleService()
@@ -146,8 +151,8 @@ class VODPlayerComponent @JvmOverloads constructor(
         aspectRatioButton = playerView.findViewById(R.id.aspect_ratio_button)
         bitrateInfo = playerView.findViewById(R.id.bitrate_info)
         
-        // Style the seek bar
-        val timeBar = playerView.findViewById<androidx.media3.ui.DefaultTimeBar>(R.id.exo_progress)
+        // Style the seek bar and keep references so we can explicitly show/hide them in sync
+        timeBar = playerView.findViewById<androidx.media3.ui.DefaultTimeBar>(R.id.exo_progress)
         timeBar?.apply {
             // Set colors
             setPlayedColor(android.graphics.Color.parseColor("#FF3366")) // Pink played color
@@ -155,6 +160,10 @@ class VODPlayerComponent @JvmOverloads constructor(
             setBufferedColor(android.graphics.Color.parseColor("#66FFFFFF")) // Buffered color
             setScrubberColor(android.graphics.Color.WHITE) // White thumb
         }
+        // Keep references to the position/duration texts and the progress container
+        progressBarContainer = playerView.findViewById(R.id.progress_bar_container)
+        exoPositionView = playerView.findViewById(R.id.exo_position)
+        exoDurationView = playerView.findViewById(R.id.exo_duration)
         
         setupControlListeners()
         setupFocusNavigation()
@@ -166,6 +175,73 @@ class VODPlayerComponent @JvmOverloads constructor(
         // Set PlayerView to handle key events
         playerView.isFocusable = true
         playerView.isFocusableInTouchMode = true
+
+        // Keep overlays (title, buttons, bitrate, subtitles) in sync with controller visibility
+        try {
+            playerView.setControllerVisibilityListener(object : PlayerView.ControllerVisibilityListener {
+                override fun onVisibilityChanged(visibility: Int) {
+                    val isVisible = visibility == View.VISIBLE
+                    if (isVisible) {
+                        // Show all overlays at the same time as progress bar
+                        contentTitle.visibility = View.VISIBLE
+                        restartButton.visibility = View.VISIBLE
+                        subtitleButton.visibility = View.VISIBLE
+                        // Preserve nextButton visibility as set for series vs movies
+                        if (nextButton.visibility == View.VISIBLE) nextButton.visibility = View.VISIBLE
+                        aspectRatioButton.visibility = View.VISIBLE
+                        // Ensure progress/timebar are visible as well and match timing
+                        progressBarContainer?.visibility = View.VISIBLE
+                        timeBar?.visibility = View.VISIBLE
+                        exoPositionView?.visibility = View.VISIBLE
+                        exoDurationView?.visibility = View.VISIBLE
+                        // Bitrate info is controlled by preference; show only if configured
+                        if (AppPreferences.shouldShowBitrate(context)) {
+                            bitrateInfo.visibility = View.VISIBLE
+                        }
+                        // Ensure subtitle text is also visible only when applicable
+                        if (!subtitleText.text.isNullOrEmpty()) {
+                            subtitleText.visibility = View.VISIBLE
+                        }
+                        // Also ensure the controller root is visible and cancel any pending hide animation
+                        try {
+                            val controllerRoot = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_controller)
+                            controllerRoot?.animate()?.cancel()
+                            controllerRoot?.visibility = View.VISIBLE
+                            controllerRoot?.alpha = 1f
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not force-show controller root: ${e.message}")
+                        }
+                    } else {
+                        // Hide everything immediately to match the progress bar hide timing
+                        contentTitle.visibility = View.GONE
+                        restartButton.visibility = View.GONE
+                        subtitleButton.visibility = View.GONE
+                        nextButton.visibility = View.GONE
+                        aspectRatioButton.visibility = View.GONE
+                        bitrateInfo.visibility = View.GONE
+                        subtitleText.visibility = View.GONE
+                        // Hide progress elements together with other overlays
+                        progressBarContainer?.visibility = View.GONE
+                        timeBar?.visibility = View.GONE
+                        exoPositionView?.visibility = View.GONE
+                        exoDurationView?.visibility = View.GONE
+
+                        // Force-hide the controller root immediately to avoid staggered fades
+                        try {
+                            val controllerRoot = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_controller)
+                            controllerRoot?.animate()?.cancel()
+                            controllerRoot?.alpha = 0f
+                            controllerRoot?.visibility = View.GONE
+                            Log.d(TAG, "Forced controller root hidden to sync overlays")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not force-hide controller root: ${e.message}")
+                        }
+                    }
+                }
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not register controller visibility listener: ${e.message}")
+        }
     }
     
     private fun setupFocusNavigation() {
@@ -261,16 +337,86 @@ class VODPlayerComponent @JvmOverloads constructor(
                     val errorMessage = error.message ?: ""
                     
                     // Check if error is due to video exceeding device capabilities
-                    if (errorMessage.contains("NO_EXCEEDS_CAPABILITIES") || 
+                    if (errorMessage.contains("NO_EXCEEDS_CAPABILITIES") ||
                         errorMessage.contains("DecoderInitializationException") ||
                         error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED) {
-                        
+
                         Log.w(TAG, "Video quality exceeds device capabilities - device cannot decode this format")
-                        errorText.text = "This video quality is not supported by your device.\nPlease try a different video."
-                        errorText.visibility = VISIBLE
-                        
-                        // Stop playback attempt
-                        player?.stop()
+
+                        // Try to request backend transcode ONCE per stream when decoder init fails
+                        if (!attemptedTranscodeForCurrentStream) {
+                            attemptedTranscodeForCurrentStream = true
+                            Log.d(TAG, "Attempting transcode fallback for current stream")
+                            // Launch coroutine to check backend and build transcode URL
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    val prefs = context.getSharedPreferences("iptv_prefs", Context.MODE_PRIVATE)
+                                    val backend = prefs.getString("transcode_backend_url", "http://192.168.2.69:4000") ?: "http://192.168.2.69:4000"
+                                    // Check health
+                                    val healthUrl = backend.replace("/+$".toRegex(), "") + "/health"
+                                    var backendOk = false
+                                    try {
+                                        val u = java.net.URL(healthUrl)
+                                        val conn = u.openConnection() as java.net.HttpURLConnection
+                                        conn.requestMethod = "GET"
+                                        conn.connectTimeout = 2000
+                                        conn.readTimeout = 2000
+                                        backendOk = try { conn.responseCode == 200 } catch (e: Exception) { false }
+                                        conn.disconnect()
+                                    } catch (e: Exception) {
+                                        backendOk = false
+                                    }
+
+                                    if (!backendOk) {
+                                        Log.w(TAG, "Transcode backend not available: $backend")
+                                        // Show original error message on main thread (centralized)
+                                        launch(Dispatchers.Main) {
+                                            showUnsupportedMessage()
+                                        }
+                                        return@launch
+                                    }
+
+                                    // Build target based on device capability
+                                    val displayMetrics = context.resources.displayMetrics
+                                    val w = displayMetrics.widthPixels
+                                    val h = displayMetrics.heightPixels
+                                    val deviceTarget = if (Math.max(w, h) >= 3840 && Math.min(w, h) >= 2160) "2160" else "1080"
+
+                                    // Default to downscale for decoder init failures
+                                    val mode = "downscale"
+                                    val encoded = try { java.net.URLEncoder.encode(currentStreamUrl, "UTF-8") } catch (e: Exception) { currentStreamUrl }
+                                    val finalUrl = backend.replace("/+$".toRegex(), "") + "/transcode?url=$encoded&target=$deviceTarget&mode=$mode"
+
+                                    Log.d(TAG, "Transcode URL: $finalUrl")
+
+                                    // Try to play the transcoded stream on main thread
+                                    launch(Dispatchers.Main) {
+                                        try {
+                                            android.widget.Toast.makeText(context, "Attempting to transcode for device compatibility...", android.widget.Toast.LENGTH_SHORT).show()
+                                            player?.stop()
+                                            player?.clearMediaItems()
+                                            val mi = MediaItem.fromUri(finalUrl)
+                                            player?.setMediaItem(mi)
+                                            player?.prepare()
+                                            player?.play()
+                                            Log.d(TAG, "Started playback with transcoded URL")
+                                            errorText.visibility = GONE
+                                        } catch (e: Exception) {
+                                            Log.e(TAG, "Failed to play transcoded stream: ${e.message}", e)
+                                            showUnsupportedMessage()
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Transcode fallback failed: ${e.message}", e)
+                                    launch(Dispatchers.Main) {
+                                        showUnsupportedMessage()
+                                    }
+                                }
+                            }
+                        } else {
+                            // Centralized handling: try transcode if not already attempted
+                            attemptTranscodeIfNotAttempted("downscale")
+                        }
                     } else {
                         Log.w(TAG, "Player error - ExoPlayer will attempt to recover: $errorMessage")
                         
@@ -492,6 +638,85 @@ class VODPlayerComponent @JvmOverloads constructor(
         return "tv_$sanitized"
     }
 
+    private fun showUnsupportedMessage() {
+        handler.post {
+            errorText.text = "This video quality is not supported by your device.\nPlease try a different video."
+            errorText.visibility = VISIBLE
+            player?.stop()
+        }
+    }
+
+    private fun attemptTranscodeIfNotAttempted(mode: String = "downscale") {
+        if (attemptedTranscodeForCurrentStream) {
+            showUnsupportedMessage()
+            return
+        }
+        attemptedTranscodeForCurrentStream = true
+
+        scope.launch(Dispatchers.IO) {
+            try {
+                val prefs = context.getSharedPreferences("iptv_prefs", Context.MODE_PRIVATE)
+                val backend = prefs.getString("transcode_backend_url", "http://192.168.2.69:4000") ?: "http://192.168.2.69:4000"
+                // Check health
+                val healthUrl = backend.replace("/+$".toRegex(), "") + "/health"
+                var backendOk = false
+                try {
+                    val u = java.net.URL(healthUrl)
+                    val conn = u.openConnection() as java.net.HttpURLConnection
+                    conn.requestMethod = "GET"
+                    conn.connectTimeout = 2000
+                    conn.readTimeout = 2000
+                    backendOk = try { conn.responseCode == 200 } catch (e: Exception) { false }
+                    conn.disconnect()
+                } catch (e: Exception) {
+                    backendOk = false
+                }
+
+                if (!backendOk) {
+                    Log.w(TAG, "Transcode backend not available: $backend")
+                    launch(Dispatchers.Main) {
+                        showUnsupportedMessage()
+                    }
+                    return@launch
+                }
+
+                // Build target based on device capability
+                val displayMetrics = context.resources.displayMetrics
+                val w = displayMetrics.widthPixels
+                val h = displayMetrics.heightPixels
+                val deviceTarget = if (Math.max(w, h) >= 3840 && Math.min(w, h) >= 2160) "2160" else "1080"
+
+                val encoded = try { java.net.URLEncoder.encode(currentStreamUrl, "UTF-8") } catch (e: Exception) { currentStreamUrl }
+                val finalUrl = backend.replace("/+$".toRegex(), "") + "/transcode?url=$encoded&target=$deviceTarget&mode=$mode"
+
+                Log.d(TAG, "Transcode URL: $finalUrl")
+
+                // Try to play the transcoded stream on main thread
+                launch(Dispatchers.Main) {
+                    try {
+                        android.widget.Toast.makeText(context, "Attempting to transcode for device compatibility...", android.widget.Toast.LENGTH_SHORT).show()
+                        player?.stop()
+                        player?.clearMediaItems()
+                        val mi = MediaItem.fromUri(finalUrl)
+                        player?.setMediaItem(mi)
+                        player?.prepare()
+                        player?.play()
+                        Log.d(TAG, "Started playback with transcoded URL")
+                        errorText.visibility = GONE
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to play transcoded stream: ${e.message}", e)
+                        showUnsupportedMessage()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Transcode fallback failed: ${e.message}", e)
+                launch(Dispatchers.Main) {
+                    showUnsupportedMessage()
+                }
+            }
+        }
+    }
+
     private fun toggleSubtitles() {
         hasSubtitles = !hasSubtitles
         Log.d(TAG, "🎬 CC button toggled: ${!hasSubtitles} → $hasSubtitles")
@@ -533,6 +758,7 @@ class VODPlayerComponent @JvmOverloads constructor(
     fun playMovie(streamUrl: String, title: String, startPosition: Long = 0L) {
         Log.d(TAG, "Playing movie: $title, starting at position: $startPosition ms")
         currentStreamUrl = streamUrl
+        attemptedTranscodeForCurrentStream = false
         currentMovieTitle = title
         
         // Reset aspect ratio to default (16:9)
@@ -587,6 +813,7 @@ class VODPlayerComponent @JvmOverloads constructor(
     fun playSeries(streamUrl: String, title: String, hasNext: Boolean = false, startPosition: Long = 0L) {
         Log.d(TAG, "Playing series: $title, starting at position: $startPosition ms")
         currentStreamUrl = streamUrl
+        attemptedTranscodeForCurrentStream = false
         currentMovieTitle = title
         
         // Reset aspect ratio to default (16:9)
@@ -603,7 +830,17 @@ class VODPlayerComponent @JvmOverloads constructor(
             subtitleStreamId = null
         }
         
-        contentTitle.text = title
+        // Prefer to show "Series Title — Episode X" when series title and episode number are available
+        val displayTitle = if (!currentSeriesTitle.isNullOrBlank() && currentEpisodeNumber != null) {
+            try {
+                "${currentSeriesTitle} — Episode ${currentEpisodeNumber}"
+            } catch (e: Exception) {
+                title
+            }
+        } else {
+            title
+        }
+        contentTitle.text = displayTitle
         nextButton.visibility = if (hasNext) VISIBLE else GONE
         
         // Update focus navigation for series: restart -> next -> subtitle -> aspectRatio
@@ -820,7 +1057,8 @@ class VODPlayerComponent @JvmOverloads constructor(
                         val actualEpisodeId = if (currentContentType == "SERIES" && currentSeasonId != null) {
                             "${currentSeasonId}_${currentEpisodeId}"  // Composite key: season_episode
                         } else {
-                            currentEpisodeId
+                            // For movies, store empty string so DB unique index that includes episode_id treats movie rows properly
+                            currentEpisodeId ?: ""
                         }
                         progressRepository.saveProgress(
                             contentId = currentContentId!!,
@@ -831,7 +1069,7 @@ class VODPlayerComponent @JvmOverloads constructor(
                             currentPosition = position,
                             duration = duration,
                             cmd = currentCmd ?: "",
-                            episodeId = actualEpisodeId,  // Use composite key for series
+                            episodeId = actualEpisodeId,  // Use composite key for series (empty string for movies)
                             episodeNumber = currentEpisodeNumber,
                             seasonNumber = currentSeasonNumber
                         )

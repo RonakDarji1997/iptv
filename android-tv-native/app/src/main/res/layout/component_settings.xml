@@ -332,7 +332,8 @@
                         android:tint="#666666" />
                 </LinearLayout>
 
-                <!-- Add Another Playlist -->
+                <!-- Add Another Playlist (hidden) - commented out to enforce single provider for now -->
+                <!--
                 <LinearLayout
                     android:id="@+id/btn_add_playlist"
                     android:layout_width="match_parent"
@@ -379,6 +380,7 @@
                         android:src="@drawable/ic_chevron_right"
                         android:tint="#666666" />
                 </LinearLayout>
+                -->
 
             </LinearLayout>
         </ScrollView>

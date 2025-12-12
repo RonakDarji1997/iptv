@@ -6,7 +6,8 @@ import androidx.room.*
 @Entity(
     tableName = "watch_progress",
     indices = [
-        Index(value = ["content_id", "content_type", "provider_id"], unique = true),
+        // Unique constraint now includes episode_id so each episode can have its own row
+        Index(value = ["content_id", "content_type", "provider_id", "episode_id"], unique = true),
         Index(value = ["provider_id"]),
         Index(value = ["content_id", "episode_id", "provider_id"])
     ]
@@ -31,7 +32,7 @@ data class WatchProgress(
     val posterUrl: String?,
     
     @ColumnInfo(name = "episode_id")
-    val episodeId: String? = null,   // For series only
+    val episodeId: String = "",   // For series only; empty string for movies
     
     @ColumnInfo(name = "episode_number")
     val episodeNumber: Int? = null,  // For series only
@@ -101,7 +102,7 @@ interface WatchProgressDao {
     suspend fun deleteOldProgress(timestamp: Long)
 }
 
-@Database(entities = [WatchProgress::class], version = 4, exportSchema = false)
+@Database(entities = [WatchProgress::class], version = 5, exportSchema = false)
 abstract class WatchProgressDatabase : RoomDatabase() {
     abstract fun watchProgressDao(): WatchProgressDao
     
@@ -135,14 +136,15 @@ abstract class WatchProgressDatabase : RoomDatabase() {
         private val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
             override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
                 // Step 1: Remove duplicate entries for movies FIRST (keep most recent by id)
+                // Remove duplicate movie entries (episode_id NULL/empty). Use TRIM and handle string 'NULL'.
                 database.execSQL(
                     """DELETE FROM watch_progress 
                     WHERE id NOT IN (
                         SELECT MAX(id) 
                         FROM watch_progress 
-                        WHERE episode_id IS NULL OR episode_id = ''
+                        WHERE (episode_id IS NULL OR TRIM(episode_id) = '' OR episode_id = 'NULL')
                         GROUP BY content_id, content_type, provider_id
-                    ) AND (episode_id IS NULL OR episode_id = '')"""
+                    ) AND (episode_id IS NULL OR TRIM(episode_id) = '' OR episode_id = 'NULL')"""
                 )
                 
                 // Step 2: Drop old unique index that includes episode_id (causes issues with NULL values)
@@ -159,6 +161,25 @@ abstract class WatchProgressDatabase : RoomDatabase() {
                 database.execSQL(
                     """CREATE INDEX IF NOT EXISTS `index_watch_progress_content_id_episode_id_provider_id` 
                     ON `watch_progress` (`content_id`, `episode_id`, `provider_id`)"""
+                )
+            }
+        }
+
+        // Migration from version 4 to 5: Make episode_id non-null default '' and create unique index including episode_id
+        private val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+            override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+                // Normalize episode_id values to empty string where NULL/trimmed empty/'NULL'
+                database.execSQL(
+                    """UPDATE watch_progress SET episode_id = '' WHERE episode_id IS NULL OR TRIM(episode_id) = '' OR episode_id = 'NULL'"""
+                )
+
+                // Drop previous unique index that does not include episode_id
+                database.execSQL("DROP INDEX IF EXISTS `index_watch_progress_content_id_content_type_provider_id`")
+
+                // Create new unique index that includes episode_id so episodes can have separate rows
+                database.execSQL(
+                    """CREATE UNIQUE INDEX IF NOT EXISTS `index_watch_progress_content_id_content_type_provider_id_episode_id`
+                    ON `watch_progress` (`content_id`, `content_type`, `provider_id`, `episode_id`)"""
                 )
             }
         }

@@ -11,6 +11,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { Provider } from '../types';
 import { ProviderService } from '../services/ProviderService';
+import { emitSelectedProvidersChange } from '../services/ProviderSelectionEvents';
+import { COLORS } from '../constants';
 
 interface ProviderDropdownProps {
   selectedProviderId?: string;
@@ -33,9 +35,12 @@ export const ProviderDropdown: React.FC<ProviderDropdownProps> = ({
 
   const loadProviders = async () => {
     try {
-      const selectedProviders = await ProviderService.getSelectedProviders();
-      console.log('📱 [ProviderDropdown] Loaded providers:', selectedProviders.map(p => ({ id: p.id, name: p.name, isActive: p.isActive })));
-      setProviders(selectedProviders);
+      // Show all active providers in the dropdown (not only the currently
+      // selected providers). Using selectedProviders here caused the
+      // dropdown to disappear when only one provider was selected.
+      const activeProviders = await ProviderService.getActiveProviders();
+      console.log('📱 [ProviderDropdown] Loaded active providers:', activeProviders.map(p => ({ id: p.id, name: p.name, isActive: p.isActive })));
+      setProviders(activeProviders);
     } catch (error) {
       console.error('Error loading providers:', error);
     } finally {
@@ -46,102 +51,60 @@ export const ProviderDropdown: React.FC<ProviderDropdownProps> = ({
   const selectedProvider = providers.find(p => p.id === selectedProviderId);
   console.log('🎯 [ProviderDropdown] Currently selected provider:', selectedProviderId, selectedProvider?.name);
 
-  // Don't show dropdown if only one provider
-  if (providers.length <= 1) {
-    return null;
-  }
+  // TEMPORARY: Force single-provider mode.
+  // The full dropdown UI is commented out for now so the app behaves
+  // as a single-provider experience. Do not remove — uncomment when
+  // multi-provider selection should be re-enabled.
 
-  const handleSelect = (providerId?: string) => {
+  // if (providers.length <= 1) {
+  //   return null;
+  // }
+
+  // Derive current provider label
+  const providerLabel = selectedProvider ? selectedProvider.name : (providers[0]?.name || 'Provider');
+
+  // Show a non-interactive label instead of the full dropdown while
+  // single-provider mode is active.
+  return (
+    <View style={[styles.container, style]}>
+      <View style={styles.selectedContainer}>
+        <Ionicons name="tv-outline" size={18} color={COLORS.text} />
+        <Text style={styles.selectedText} numberOfLines={1}>{providerLabel}</Text>
+      </View>
+    </View>
+  );
+
+  const handleSelect = async (providerId?: string) => {
     const providerName = providers.find(p => p.id === providerId)?.name || 'All Providers';
     console.log('🔄 [ProviderDropdown] Provider changed to:', providerId, providerName);
+    try {
+      // Persist the user's choice as the selected provider(s).
+      if (providerId) {
+        await ProviderService.saveSelectedProviderIds([providerId]);
+        emitSelectedProvidersChange([providerId]);
+      } else {
+        // 'All Providers' selected - save all active provider ids
+        const active = await ProviderService.getActiveProviders();
+        const ids = active.map(p => p.id);
+        await ProviderService.saveSelectedProviderIds(ids);
+        emitSelectedProvidersChange(ids);
+      }
+    } catch (err) {
+      console.error('Error saving provider selection:', err);
+    }
+
     onProviderSelect(providerId);
     setShowModal(false);
   };
 
-  return (
-    <>
-      <TouchableOpacity
-        style={[styles.container, style]}
-        onPress={() => setShowModal(true)}
-        activeOpacity={0.7}
-      >
-        <View style={styles.selectedContainer}>
-          <Ionicons name="tv-outline" size={18} color="#fff" />
-          <Text style={styles.selectedText} numberOfLines={1}>
-            {selectedProvider ? selectedProvider.name : 'All Providers'}
-          </Text>
-        </View>
-        <Ionicons name="chevron-down" size={20} color="#fff" />
-      </TouchableOpacity>
-
-      <Modal
-        visible={showModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowModal(false)}
-      >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowModal(false)}
-        >
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Provider</Text>
-              <TouchableOpacity
-                onPress={() => setShowModal(false)}
-                style={styles.closeButton}
-              >
-                <Ionicons name="close" size={24} color="#fff" />
-              </TouchableOpacity>
-            </View>
-
-            <FlatList
-              data={[{ id: undefined, name: 'All Providers' }, ...providers]}
-              keyExtractor={(item) => item.id || 'all'}
-              renderItem={({ item }) => {
-                const isSelected = item.id === selectedProviderId || (!item.id && !selectedProviderId);
-                return (
-                  <TouchableOpacity
-                    style={[
-                      styles.providerItem,
-                      isSelected && styles.providerItemSelected,
-                    ]}
-                    onPress={() => handleSelect(item.id)}
-                  >
-                    <View style={styles.providerInfo}>
-                      <Ionicons 
-                        name={item.id ? "tv" : "apps"} 
-                        size={20} 
-                        color={isSelected ? "#0a84ff" : "#8e8e93"} 
-                      />
-                      <Text style={[
-                        styles.providerName,
-                        isSelected && styles.providerNameSelected,
-                      ]}>
-                        {item.name}
-                      </Text>
-                    </View>
-                    {isSelected && (
-                      <Ionicons name="checkmark" size={24} color="#0a84ff" />
-                    )}
-                  </TouchableOpacity>
-                );
-              }}
-              ItemSeparatorComponent={() => <View style={styles.separator} />}
-            />
-          </View>
-        </TouchableOpacity>
-      </Modal>
-    </>
-  );
+  // Original dropdown UI commented out above.
 };
 
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    backgroundColor: COLORS.cardBackground,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
@@ -166,7 +129,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modalContent: {
-    backgroundColor: '#1c1c1e',
+    backgroundColor: COLORS.backgroundLight,
     borderRadius: 12,
     width: '80%',
     maxWidth: 400,
@@ -196,7 +159,7 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   providerItemSelected: {
-    backgroundColor: 'rgba(10, 132, 255, 0.15)',
+    backgroundColor: 'rgba(229, 9, 20, 0.12)',
   },
   providerInfo: {
     flex: 1,
@@ -205,16 +168,16 @@ const styles = StyleSheet.create({
   },
   providerName: {
     fontSize: 16,
-    color: '#fff',
+    color: COLORS.text,
     marginLeft: 12,
   },
   providerNameSelected: {
-    color: '#0a84ff',
+    color: COLORS.primary,
     fontWeight: '500',
   },
   separator: {
     height: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     marginLeft: 48,
   },
 });

@@ -59,4 +59,21 @@ object AppPreferences {
         val settings = dao.getPlayerSettings() ?: PlayerSettingsEntity()
         dao.insertSettings(settings.copy(seekTimeSeconds = seconds))
     }
+
+    /**
+     * Get last-played live channel info: Pair(providerId, channelId)
+     */
+    fun getLastPlayedChannel(context: Context): Pair<String?, String?> {
+        val settings = getPlayerSettings(context)
+        return Pair(settings.lastProviderId, settings.lastLiveChannelId)
+    }
+
+    /**
+     * Persist last-played live channel (providerId and channelId). Use suspend for DB write.
+     */
+    suspend fun setLastPlayedChannel(context: Context, providerId: String?, channelId: String?) {
+        val dao = getDatabase(context).playerSettingsDao()
+        val settings = dao.getPlayerSettings() ?: PlayerSettingsEntity()
+        dao.insertSettings(settings.copy(lastProviderId = providerId, lastLiveChannelId = channelId))
+    }
 }

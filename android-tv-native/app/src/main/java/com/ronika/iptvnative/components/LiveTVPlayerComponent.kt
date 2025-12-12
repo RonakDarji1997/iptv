@@ -28,6 +28,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import coil.ImageLoader
+import coil.request.ImageRequest
 
 /**
  * LiveTVPlayerComponent - Handles preview and fullscreen playback for Live TV channels
@@ -46,6 +48,19 @@ class LiveTVPlayerComponent @JvmOverloads constructor(
     private lateinit var channelNameOverlay: TextView
     private lateinit var errorText: TextView
     private var bitrateInfo: TextView? = null
+    // Bottom overlay views
+    private var bottomInfoOverlay: FrameLayout? = null
+    private var channelLogoSmall: ImageView? = null
+    private var bottomChannelTitle: TextView? = null
+    private var bottomProgramTime: TextView? = null
+    private var currentProgramProgress: ProgressBar? = null
+    private var bottomProgramTitle: TextView? = null
+    private var bottomProgramDesc: TextView? = null
+    private var bottomNextProgram: TextView? = null
+    private var bottomBadges: View? = null
+    private var badgeResolution: TextView? = null
+    private var badgeFps: TextView? = null
+    private var badgeAudio: TextView? = null
     
     // ExoPlayer
     private var player: ExoPlayer? = null
@@ -131,6 +146,18 @@ class LiveTVPlayerComponent @JvmOverloads constructor(
         channelNameOverlay = findViewById(R.id.channel_name_overlay)
         errorText = findViewById(R.id.error_text)
         bitrateInfo = findViewById(R.id.bitrate_info)
+        bottomInfoOverlay = findViewById(R.id.bottom_info_overlay)
+        channelLogoSmall = findViewById(R.id.channel_logo_small)
+        bottomChannelTitle = findViewById(R.id.bottom_channel_title)
+        bottomProgramTime = findViewById(R.id.bottom_program_time)
+        currentProgramProgress = findViewById(R.id.current_program_progress)
+        bottomProgramTitle = findViewById(R.id.bottom_program_title)
+        bottomProgramDesc = findViewById(R.id.bottom_program_desc)
+        bottomNextProgram = findViewById(R.id.bottom_next_program)
+        bottomBadges = findViewById(R.id.bottom_badges)
+        badgeResolution = findViewById(R.id.badge_resolution)
+        badgeFps = findViewById(R.id.badge_fps)
+        badgeAudio = findViewById(R.id.badge_audio)
         
         // Keep screen on during playback to prevent screensaver
         playerView.keepScreenOn = true
@@ -231,6 +258,42 @@ class LiveTVPlayerComponent @JvmOverloads constructor(
 
     fun setChannels(channelList: List<LiveTVChannelsComponent.ChannelItem>) {
         channels = channelList
+    }
+
+    /**
+     * Resume last-played live channel if available in settings and current provider.
+     * By default resumes into preview mode (no automatic fullscreen).
+     */
+    fun resumeLastPlayedIfAvailable(autoFullscreen: Boolean = false) {
+        scope.launch {
+            try {
+                val (savedProviderId, savedChannelId) = AppPreferences.getLastPlayedChannel(context)
+                if (savedChannelId.isNullOrEmpty()) return@launch
+
+                // Only resume if provider matches current provider
+                if (savedProviderId != null && currentProvider?.id != null && savedProviderId != currentProvider?.id) {
+                    Log.d(TAG, "Saved provider does not match current provider - skipping resume")
+                    return@launch
+                }
+
+                // Find channel index
+                val idx = channels.indexOfFirst { it.id == savedChannelId }
+                if (idx >= 0) {
+                    // Start playback in preview or fullscreen per caller preference
+                    if (autoFullscreen) {
+                        currentChannelIndex = idx
+                        goFullscreen()
+                        loadAndPlayStream(channels[idx])
+                    } else {
+                        playInPreview(idx)
+                    }
+                } else {
+                    Log.d(TAG, "Saved channel id not found in current channel list: $savedChannelId")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "resumeLastPlayedIfAvailable error: ${e.message}")
+            }
+        }
     }
 
     fun setCallbacks(
@@ -366,6 +429,14 @@ class LiveTVPlayerComponent @JvmOverloads constructor(
                     Log.d(TAG, "M3U provider detected - playing direct URL: $cmd")
                     withContext(Dispatchers.Main) {
                         playStream(cmd)
+                        // Persist last-played channel (safe write, won't overwrite other settings)
+                        try {
+                            scope.launch {
+                                AppPreferences.setLastPlayedChannel(context, currentProvider?.id, channel.id)
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to persist last-played channel: ${e.message}")
+                        }
                     }
                     return@launch
                 }
@@ -393,7 +464,22 @@ class LiveTVPlayerComponent @JvmOverloads constructor(
                 
                 // Play stream
                 withContext(Dispatchers.Main) {
+                    // Update bottom overlay with EPG/metadata
+                    try {
+                        updateBottomOverlay(channel)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to update bottom overlay: ${e.message}")
+                    }
                     playStream(streamUrl)
+
+                    // Persist last-played channel (safe write, won't overwrite other settings)
+                    try {
+                        scope.launch {
+                            AppPreferences.setLastPlayedChannel(context, currentProvider?.id, channel.id)
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to persist last-played channel: ${e.message}")
+                    }
                 }
                 
             } catch (e: Exception) {
@@ -569,6 +655,191 @@ class LiveTVPlayerComponent @JvmOverloads constructor(
                     bitrateView.visibility = GONE
                 }
             }
+        }
+    }
+
+    /**
+     * Update bottom overlay with channel logo, EPG and badges
+     */
+    private fun updateBottomOverlay(channel: LiveTVChannelsComponent.ChannelItem) {
+        // Only show overlay in fullscreen mode
+        if (!isFullscreen) return
+
+        bottomInfoOverlay?.visibility = VISIBLE
+
+        // Load logo if present (safe nullable handling)
+        if (!channel.logo.isNullOrEmpty()) {
+            channelLogoSmall?.let { imgView ->
+                try {
+                    val request = ImageRequest.Builder(context)
+                        .data(channel.logo)
+                        .target(imgView)
+                        .placeholder(R.drawable.ic_tv_placeholder)
+                        .error(R.drawable.ic_tv_placeholder)
+                        .build()
+                    ImageLoader(context).enqueue(request)
+                } catch (e: Exception) {
+                    imgView.setImageResource(R.drawable.ic_tv_placeholder)
+                }
+            } ?: run {
+                // imageView missing, skip
+            }
+        } else {
+            channelLogoSmall?.setImageResource(R.drawable.ic_tv_placeholder)
+        }
+
+        bottomChannelTitle?.text = channel.name
+
+        // EPG - find current slot using timestamps if available
+        try {
+            val nowSec = System.currentTimeMillis() / 1000L
+            val slot = channel.epgSlotsWithTimestamp.firstOrNull { s ->
+                nowSec >= s.startTimestamp && nowSec <= s.endTimestamp
+            }
+
+            if (slot != null) {
+                bottomProgramTitle?.text = slot.programName
+                bottomProgramDesc?.text = "" // Short description not available here
+                bottomProgramTime?.text = "${slot.startTime} — ${slot.endTime} • ${slot.durationMinutes} min"
+
+                // Progress
+                val duration = (slot.endTimestamp - slot.startTimestamp).toDouble()
+                val elapsed = (nowSec - slot.startTimestamp).toDouble()
+                val pct = if (duration > 0) ((elapsed / duration) * 100.0).toInt() else 0
+                currentProgramProgress?.progress = pct.coerceIn(0, 100)
+            } else {
+                // Fallback to first epg slot
+                val next = channel.epgSlotsWithTimestamp.firstOrNull()
+                if (next != null) {
+                    bottomProgramTitle?.text = next.programName
+                    bottomProgramDesc?.text = ""
+                    bottomProgramTime?.text = "${next.startTime} — ${next.endTime} • ${next.durationMinutes} min"
+                    currentProgramProgress?.progress = 0
+                } else {
+                    bottomProgramTitle?.text = "No information"
+                    bottomProgramDesc?.text = ""
+                    bottomProgramTime?.text = ""
+                    currentProgramProgress?.progress = 0
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "EPG parse error: ${e.message}")
+            bottomProgramTitle?.text = "No information"
+            bottomProgramDesc?.text = ""
+            bottomProgramTime?.text = ""
+            currentProgramProgress?.progress = 0
+        }
+
+        // Next program
+        try {
+            val nowSec = System.currentTimeMillis() / 1000L
+            val next = channel.epgSlotsWithTimestamp
+                .filter { it.startTimestamp > nowSec }
+                .minByOrNull { it.startTimestamp }
+
+            if (next != null) {
+                bottomNextProgram?.text = "Next: ${next.startTime} — ${next.endTime}  ${next.programName}"
+                bottomNextProgram?.visibility = VISIBLE
+            } else {
+                bottomNextProgram?.visibility = GONE
+            }
+        } catch (e: Exception) {
+            bottomNextProgram?.visibility = GONE
+        }
+
+        // Apply badges from current selected track(s)
+        applyFormatBadges()
+
+        // Auto-hide overlay after a short time in preview, keep visible in fullscreen for a bit
+        bottomInfoOverlay?.removeCallbacks(hideBottomRunnable)
+        val hideDelay = 3_000L
+        bottomInfoOverlay?.postDelayed(hideBottomRunnable, hideDelay)
+    }
+
+    private val hideBottomRunnable = Runnable {
+        bottomInfoOverlay?.visibility = GONE
+    }
+
+    private fun applyFormatBadges() {
+        try {
+            player?.let { exoPlayer ->
+                val currentTracks = exoPlayer.currentTracks
+                val videoGroup = currentTracks.groups.firstOrNull { group ->
+                    group.type == androidx.media3.common.C.TRACK_TYPE_VIDEO && group.isSelected
+                }
+
+                var resolutionText: String? = null
+                var fpsVal: Float? = null
+                var audioChannels: Int? = null
+
+                videoGroup?.let { group ->
+                    for (i in 0 until group.length) {
+                        if (group.isTrackSelected(i)) {
+                            val format = group.getTrackFormat(i)
+                            val height = format.height
+                            val fps = format.frameRate
+                            resolutionText = when {
+                                height >= 2160 -> "4K"
+                                height >= 1440 -> "1440p"
+                                height >= 1080 -> "1080p"
+                                height >= 720 -> "720p"
+                                height >= 480 -> "480p"
+                                else -> "SD"
+                            }
+                            fpsVal = fps
+                            break
+                        }
+                    }
+                }
+
+                // Audio channels from audio track if available
+                val audioGroup = currentTracks.groups.firstOrNull { g ->
+                    g.type == androidx.media3.common.C.TRACK_TYPE_AUDIO && g.isSelected
+                }
+                audioGroup?.let { g ->
+                    for (i in 0 until g.length) {
+                        if (g.isTrackSelected(i)) {
+                            val af = g.getTrackFormat(i)
+                            audioChannels = af.channelCount
+                            break
+                        }
+                    }
+                }
+
+                // Determine badge booleans before entering UI closure
+                val showResolution = !resolutionText.isNullOrEmpty()
+                val fpsLocal = fpsVal
+                val audioLocal = audioChannels
+                val showFps = fpsLocal != null && fpsLocal >= 50f
+                val showAudio = audioLocal != null && audioLocal >= 2
+
+                // Update badges on UI thread
+                bottomInfoOverlay?.post {
+                    if (showResolution) {
+                        badgeResolution?.text = resolutionText
+                        badgeResolution?.visibility = VISIBLE
+                    } else {
+                        badgeResolution?.visibility = GONE
+                    }
+
+                    if (showFps) {
+                        badgeFps?.visibility = VISIBLE
+                    } else {
+                        badgeFps?.visibility = GONE
+                    }
+
+                    if (showAudio) {
+                        badgeAudio?.visibility = VISIBLE
+                    } else {
+                        badgeAudio?.visibility = GONE
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "applyFormatBadges error: ${e.message}")
+            badgeResolution?.visibility = GONE
+            badgeFps?.visibility = GONE
+            badgeAudio?.visibility = GONE
         }
     }
 

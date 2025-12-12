@@ -1,6 +1,7 @@
 export interface Category {
   id: string;
   name: string;
+  categoryId?: string; // backend-provided category identifier (may differ from DB id)
   title?: string;
   alias?: string;
   censored: boolean;

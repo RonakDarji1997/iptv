@@ -43,7 +43,7 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
       <FlatList
         data={categories}
         renderItem={renderItem}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => `${item.providerId || 'all'}_${item.id}`}
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.list}

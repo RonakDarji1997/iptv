@@ -71,7 +71,7 @@ class SettingsComponent @JvmOverloads constructor(
     private lateinit var btnSyncCategories: LinearLayout
     private lateinit var btnCleanDatabase: LinearLayout
     private lateinit var btnUpdatePlaylist: LinearLayout
-    private lateinit var btnAddPlaylist: LinearLayout
+    // private lateinit var btnAddPlaylist: LinearLayout // Hidden: single-provider mode (commented out)
     private lateinit var activePlaylistsContainer: LinearLayout
     private lateinit var lastUpdatedText: TextView
     private lateinit var syncStatusText: TextView
@@ -138,7 +138,7 @@ class SettingsComponent @JvmOverloads constructor(
         btnSyncCategories = findViewById(R.id.btn_sync_categories)
         btnCleanDatabase = findViewById(R.id.btn_clean_database)
         btnUpdatePlaylist = findViewById(R.id.btn_update_playlist)
-        btnAddPlaylist = findViewById(R.id.btn_add_playlist)
+        // btnAddPlaylist = findViewById(R.id.btn_add_playlist) // hidden: single-provider mode
         activePlaylistsContainer = findViewById(R.id.active_playlists_container)
         lastUpdatedText = findViewById(R.id.last_updated_text)
         syncStatusText = findViewById(R.id.sync_status_text)
@@ -236,7 +236,7 @@ class SettingsComponent @JvmOverloads constructor(
         btnManageCategories.onFocusChangeListener = contentFocusListener
         btnSyncCategories.onFocusChangeListener = contentFocusListener
         btnUpdatePlaylist.onFocusChangeListener = contentFocusListener
-        btnAddPlaylist.onFocusChangeListener = contentFocusListener
+        // btnAddPlaylist.onFocusChangeListener = contentFocusListener // hidden: single-provider mode
         btnToggleBitrate.onFocusChangeListener = contentFocusListener
         seekTimeSlider.onFocusChangeListener = contentFocusListener
         btnChangePin.onFocusChangeListener = contentFocusListener
@@ -274,6 +274,7 @@ class SettingsComponent @JvmOverloads constructor(
             onUpdatePlaylistCallback?.invoke()
         }
         
+        /*
         btnAddPlaylist.setOnClickListener {
             // Launch portal setup for new playlist (step 1)
             val intent = Intent(context, PortalSetupActivity::class.java).apply {
@@ -281,6 +282,7 @@ class SettingsComponent @JvmOverloads constructor(
             }
             context.startActivity(intent)
         }
+        */
         
         // Player Settings buttons
         btnToggleBitrate.setOnClickListener {
@@ -892,9 +894,8 @@ class SettingsComponent @JvmOverloads constructor(
                     
                     // If on menu About (bottom item), consume to prevent escape
                     if (focusedView == menuAbout || 
-                        // Last items in each section - btnAddPlaylist is now at bottom
-                        focusedView == btnResetPin ||
-                        focusedView == btnAddPlaylist) {
+                        // Last items in each section
+                        focusedView == btnResetPin) {
                         return true  // Consume event, don't let focus escape
                     }
                 }
@@ -935,45 +936,78 @@ class SettingsComponent @JvmOverloads constructor(
     }
     
     private fun syncCategoriesFromServer(providerId: String) {
-        syncStatusText.text = "Syncing from server..."
+        // NOTE: For single-provider / push-only mode we PUSH local changes to the server
+        syncStatusText.text = "Pushing local changes to server..."
         syncStatusText.setTextColor(0xFFFFA500.toInt()) // Orange
-        
+
         coroutineScope.launch {
             try {
                 val syncService = IPTVSyncService(context)
-                
-                // ONLY download from server - do NOT upload to avoid duplicates
-                syncStatusText.text = "Downloading data from server..."
-                syncService.syncFromCloud()
-                
-                // Also sync providers (to get new ones if added from other device)
-                syncStatusText.text = "Syncing providers..."
-                syncService.syncProvidersFromBackend()
-                
+
+                // Fetch provider entity and local categories
+                val providerEntity = withContext(Dispatchers.IO) {
+                    database.providerDao().getProviderById(providerId)
+                }
+
+                if (providerEntity == null) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "No provider found to sync", Toast.LENGTH_SHORT).show()
+                        syncStatusText.text = "No provider to sync"
+                        syncStatusText.setTextColor(0xFF888888.toInt())
+                    }
+                    return@launch
+                }
+
+                // 1) Push provider metadata to backend
                 withContext(Dispatchers.Main) {
-                    syncStatusText.text = "Sync completed successfully!"
-                    syncStatusText.setTextColor(0xFF4CAF50.toInt()) // Green
-                    Toast.makeText(context, "Data synced from server!", Toast.LENGTH_SHORT).show()
-                        
-                        // Reset status text after 3 seconds
+                    syncStatusText.text = "Pushing provider configuration..."
+                }
+                val providerOk = withContext(Dispatchers.IO) {
+                    syncService.syncProvider(providerEntity)
+                }
+
+                // 2) Push local categories for this provider
+                withContext(Dispatchers.Main) {
+                    syncStatusText.text = "Pushing categories..."
+                }
+                val categories = withContext(Dispatchers.IO) {
+                    database.categoryDao().getCategoriesByProviderId(providerId)
+                }
+
+                val categoriesOk = withContext(Dispatchers.IO) {
+                    syncService.syncCategories(providerId, categories)
+                }
+
+                withContext(Dispatchers.Main) {
+                    if (providerOk && categoriesOk) {
+                        syncStatusText.text = "Push completed successfully!"
+                        syncStatusText.setTextColor(0xFF4CAF50.toInt()) // Green
+                        Toast.makeText(context, "Local changes pushed to server!", Toast.LENGTH_SHORT).show()
+                    } else {
+                        syncStatusText.text = "Push completed with warnings"
+                        syncStatusText.setTextColor(0xFFFFA500.toInt())
+                        Toast.makeText(context, "Push finished (some items may have failed)", Toast.LENGTH_LONG).show()
+                    }
+
+                    // Reset status text after 3 seconds
                     postDelayed({
-                        syncStatusText.text = "Sync from server (pull only)"
+                        syncStatusText.text = "Push local changes to server"
                         syncStatusText.setTextColor(0xFF888888.toInt())
                     }, 3000)
-                    
+
                     // Refresh provider list and UI
                     loadData()
                     onProviderStatusChangedCallback?.invoke()
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error syncing", e)
+                Log.e(TAG, "Error pushing sync", e)
                 withContext(Dispatchers.Main) {
-                    syncStatusText.text = "Sync error: ${e.message}"
+                    syncStatusText.text = "Push error: ${e.message}"
                     syncStatusText.setTextColor(0xFFF44336.toInt())
                     Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
-                    
+
                     postDelayed({
-                        syncStatusText.text = "Sync from server (pull only)"
+                        syncStatusText.text = "Push local changes to server"
                         syncStatusText.setTextColor(0xFF888888.toInt())
                     }, 3000)
                 }

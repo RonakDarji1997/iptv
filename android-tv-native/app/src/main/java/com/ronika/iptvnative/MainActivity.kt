@@ -26,6 +26,10 @@ import com.ronika.iptvnative.data.CategoryRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 
 /**
  * MainActivity - Complete navigation flow coordinator
@@ -99,6 +103,48 @@ class MainActivity : ComponentActivity() {
         }
         return stalkerClient
     }
+
+    // Transcode backend helpers
+    private fun getTranscodeBackendUrl(): String {
+        val prefs = getSharedPreferences("iptv_prefs", MODE_PRIVATE)
+        return prefs.getString("transcode_backend_url", "http://192.168.2.69:4000") ?: "http://192.168.2.69:4000"
+    }
+
+    private suspend fun checkTranscodeBackendHealth(backendUrl: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val u = URL("${backendUrl.replace("/+$".toRegex(),"")}/health")
+            val conn = u.openConnection() as HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 2000
+            conn.readTimeout = 2000
+            val code = try { conn.responseCode } catch (e: IOException) { -1 }
+            conn.disconnect()
+            return@withContext code == 200
+        } catch (e: Exception) {
+            return@withContext false
+        }
+    }
+
+    private fun getDeviceTargetResolution(): String {
+        // Return '2160' if device reports at least 3840x2160, otherwise '1080'
+        return try {
+            val metrics = resources.displayMetrics
+            val w = metrics.widthPixels
+            val h = metrics.heightPixels
+            val max = Math.max(w, h)
+            val min = Math.min(w, h)
+            if (max >= 3840 && min >= 2160) "2160" else "1080"
+        } catch (e: Exception) {
+            "1080"
+        }
+    }
+
+    private fun buildTranscodeEndpoint(originalUrl: String, mode: String = "downscale", target: String? = null): String {
+        val backend = getTranscodeBackendUrl().replace("/+$".toRegex(), "")
+        val encoded = try { URLEncoder.encode(originalUrl, "UTF-8") } catch (e: Exception) { originalUrl }
+        val t = target ?: getDeviceTargetResolution()
+        return "$backend/transcode?url=$encoded&target=$t&mode=$mode"
+    }
     private var currentSeriesItem: VODComponent.VODItem? = null
     
     // Navigation stack for proper back button handling
@@ -115,6 +161,12 @@ class MainActivity : ComponentActivity() {
     private val navigationStack = mutableListOf<NavigationState>()
     
     private fun pushNavigation(state: NavigationState) {
+        // Prevent pushing the same state twice in a row
+        val current = getCurrentNavigation()
+        if (current == state) {
+            Log.w(TAG, "Ignoring duplicate pushNavigation for $state, stack: $navigationStack")
+            return
+        }
         navigationStack.add(state)
         Log.d(TAG, "Navigation pushed: $state, stack: $navigationStack")
     }
@@ -198,6 +250,21 @@ class MainActivity : ComponentActivity() {
         initMainSideNav()
         initCategorySidebar()
         initLiveTVChannels()
+        // Try to auto-open last-played channel (go to LiveTV and play)
+        lifecycleScope.launch {
+            try {
+                // Request opening last-played channel in fullscreen
+                mainHandler.post {
+                    try {
+                        liveTVChannels.openLastPlayedIfAvailable(autoFullscreen = true)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "openLastPlayedIfAvailable failed: ${e.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Auto-open last-played channel error: ${e.message}")
+            }
+        }
         initVODComponent()
         initVODPlayer()
         initSeriesDetail()
@@ -209,7 +276,7 @@ class MainActivity : ComponentActivity() {
         // syncVODCategories() // DISABLED - causes category count changes due to API variability
         
         // Sync with cloud on app load (bidirectional)
-        performInitialSync()
+        // performInitialSync()
         
         // Check if user wants to enable cloud sync (for existing users)
         checkAndPromptCloudSync()
@@ -762,6 +829,14 @@ class MainActivity : ComponentActivity() {
         vodComponent = VODComponent(this)
         val container = findViewById<FrameLayout>(R.id.vodContainer)
         container.addView(vodComponent)
+
+        // Update navigation stack when VOD detail is shown/hidden inside the component
+        vodComponent.setOnDetailShownListener { _ ->
+            pushNavigation(NavigationState.VOD_DETAIL)
+        }
+        vodComponent.setOnDetailHiddenListener {
+            popNavigation()
+        }
         
         // Set back callback to return to source (category or search)
         vodComponent.setOnBackPressedListener { categoryName ->
@@ -1115,13 +1190,12 @@ class MainActivity : ComponentActivity() {
                         val progress = repository.getEpisodeProgress(seriesId, compositeKey, vodComponent.getCurrentProviderId() ?: "")
                         val startPosition = progress?.currentPosition ?: 0L
                         
-                        // Play series - this will set currentMovieTitle to the episode format
-                        vodPlayer.playSeries(response.url, title, hasNext = true, startPosition = startPosition)
-                        
-                        // IMPORTANT: Set series title AFTER playSeries to override the episode title for progress tracking
+                        // IMPORTANT: Set series title BEFORE playSeries so player can show "Series — Episode X"
                         currentSeriesItem?.let { seriesItem ->
                             vodPlayer.setSeriesTitle(seriesItem.name)
                         }
+                        // Play series - this will set currentMovieTitle to the episode format when needed
+                        vodPlayer.playSeries(response.url, title, hasNext = true, startPosition = startPosition)
                         
                         Log.d(TAG, "🎬 Episode playback started successfully, stack: $navigationStack")
                     } else {
@@ -1219,8 +1293,41 @@ class MainActivity : ComponentActivity() {
                     // Play M3U movie directly with URL from cmd
                     val streamUrl = cmd ?: ""
                     if (streamUrl.isNotEmpty()) {
-                        vodPlayer.playMovie(streamUrl, title, 0L)
-                        Log.d(TAG, "🎬 M3U movie playback started")
+                        try {
+                            val lower = streamUrl.lowercase()
+                            val needsDownscale = Regex("(2160|4k|uhd)", RegexOption.IGNORE_CASE).containsMatchIn(lower)
+                            val needsUpscale = Regex("\\b(480|360|240|576)\\b").containsMatchIn(lower)
+                            val deviceTarget = getDeviceTargetResolution()
+                            val deviceSupports4k = deviceTarget == "2160"
+
+                            if (needsDownscale || needsUpscale) {
+                                // If the stream is 4K but the device supports 4K, no downscale necessary
+                                if (needsDownscale && deviceSupports4k) {
+                                    vodPlayer.playMovie(streamUrl, title, 0L)
+                                    Log.d(TAG, "🎬 Device supports 4K and stream is 4K — playing original")
+                                } else {
+                                    val mode = if (needsUpscale) "upscale" else "downscale"
+                                    val backend = getTranscodeBackendUrl()
+                                    val backendAvailable = checkTranscodeBackendHealth(backend)
+                                    if (!backendAvailable) {
+                                        withContext(Dispatchers.Main) {
+                                            android.widget.Toast.makeText(this@MainActivity, "Transcode service unavailable", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                        return@launch
+                                    }
+                                    // Request target based on device capability (1080 or 2160)
+                                    val finalUrl = buildTranscodeEndpoint(streamUrl, mode, deviceTarget)
+                                    vodPlayer.playMovie(finalUrl, title, 0L)
+                                    Log.d(TAG, "🎬 M3U movie playback started via transcode backend: $finalUrl")
+                                }
+                            } else {
+                                vodPlayer.playMovie(streamUrl, title, 0L)
+                                Log.d(TAG, "🎬 M3U movie playback started")
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Transcode decision failed, playing original: ${e.message}")
+                            vodPlayer.playMovie(streamUrl, title, 0L)
+                        }
                     } else {
                         Log.e(TAG, "🎬 M3U movie has no URL")
                         android.widget.Toast.makeText(this@MainActivity, "Invalid stream URL", android.widget.Toast.LENGTH_SHORT).show()
@@ -1292,9 +1399,42 @@ class MainActivity : ComponentActivity() {
                         val progress = repository.getProgress(movieId, "MOVIE", vodComponent.getCurrentProviderId() ?: "")
                         val startPosition = progress?.currentPosition ?: 0L
                         
-                        vodPlayer.playMovie(streamUrl, title, startPosition)
-                        
-                        Log.d(TAG, "🎬 Movie playback started successfully, stack: $navigationStack")
+                        try {
+                            val lower = streamUrl.lowercase()
+                            val needsDownscale = Regex("(2160|4k|uhd)", RegexOption.IGNORE_CASE).containsMatchIn(lower)
+                            val needsUpscale = Regex("\\b(480|360|240|576)\\b").containsMatchIn(lower)
+
+                            if (needsDownscale || needsUpscale) {
+                                val deviceTarget = getDeviceTargetResolution()
+                                val deviceSupports4k = deviceTarget == "2160"
+
+                                if (needsDownscale && deviceSupports4k) {
+                                    // device supports 4k and source is 4k -> play original
+                                    vodPlayer.playMovie(streamUrl, title, startPosition)
+                                    Log.d(TAG, "🎬 Device supports 4K and stream is 4K — playing original, stack: $navigationStack")
+                                } else {
+                                    val mode = if (needsUpscale) "upscale" else "downscale"
+                                    val backend = getTranscodeBackendUrl()
+                                    val backendAvailable = checkTranscodeBackendHealth(backend)
+                                    if (!backendAvailable) {
+                                        withContext(Dispatchers.Main) {
+                                            android.widget.Toast.makeText(this@MainActivity, "Transcode service unavailable", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                        return@launch
+                                    }
+                                    val finalUrl = buildTranscodeEndpoint(streamUrl, mode, deviceTarget)
+                                    vodPlayer.playMovie(finalUrl, title, startPosition)
+                                    Log.d(TAG, "🎬 Movie playback started via transcode backend: $finalUrl, stack: $navigationStack")
+                                }
+                            } else {
+                                vodPlayer.playMovie(streamUrl, title, startPosition)
+                                Log.d(TAG, "🎬 Movie playback started successfully, stack: $navigationStack")
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Transcode decision failed, playing original: ${e.message}")
+                            vodPlayer.playMovie(streamUrl, title, startPosition)
+                            Log.d(TAG, "🎬 Movie playback started successfully, stack: $navigationStack")
+                        }
                     } else {
                         Log.w(TAG, "🎬 No file ID in file info response")
                         android.widget.Toast.makeText(this@MainActivity, "Failed to get file info", android.widget.Toast.LENGTH_SHORT).show()
@@ -1328,6 +1468,17 @@ class MainActivity : ComponentActivity() {
         val vodPlayerContainer = findViewById<FrameLayout>(R.id.vodPlayerContainer)
         vodPlayerContainer.visibility = android.view.View.GONE
         Log.d(TAG, "Player container hidden")
+
+        // Ensure no leftover PLAYER states remain on the navigation stack (clean duplicates)
+        try {
+            val before = navigationStack.toList()
+            val removed = navigationStack.removeAll { it == NavigationState.PLAYER }
+            if (removed) {
+                Log.d(TAG, "Removed PLAYER states from navigation stack. before: $before, after: $navigationStack")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error cleaning PLAYER states from navigation stack", e)
+        }
         
         if (isPlayingFromSeries) {
             // Return to series detail and focus the episode that was playing
@@ -1868,7 +2019,8 @@ class MainActivity : ComponentActivity() {
                     
                     val categoryRepository = CategoryRepository(this@MainActivity)
                     // Full resync ALL providers: deletes all categories, re-fetches from API, checks is_series for each
-                    val result = categoryRepository.fullResyncAllProviders()
+                    // Run full resync for the active provider only
+                    val result = categoryRepository.fullResync()
                     
                     withContext(Dispatchers.Main) {
                         if (result.isSuccess) {

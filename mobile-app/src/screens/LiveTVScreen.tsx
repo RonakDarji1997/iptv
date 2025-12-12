@@ -13,15 +13,16 @@ import {
   StatusBar
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { COLORS, SPACING } from '../constants';
+import { COLORS, SPACING, API_CONFIG } from '../constants';
 import { LoadingIndicator, ErrorState, EmptyState, LiveTVPlayer } from '../components';
-import { ProviderDropdown } from '../components/ProviderDropdown';
+// import { ProviderDropdown } from '../components/ProviderDropdown'; // Temporarily disabled
 import { CategoryRepository } from '../repositories';
 import { Category } from '../types';
 import { StalkerPortalClient, StalkerChannel } from '../services/StalkerPortalClient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { ProviderService } from '../services/ProviderService';
+import { onSelectedProvidersChange } from '../services/ProviderSelectionEvents';
 
 const { width } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -80,25 +81,39 @@ export default function LiveTVScreen() {
   // Reload categories when provider selection changes
   useEffect(() => {
     if (stalkerClient) {
-      loadCategories(stalkerClient, selectedProviderId);
-      // Clear loaded category channels when provider changes
-      setCategoryChannels({});
-      setLoadedCategoryIds(new Set());
+      (async () => {
+        if (selectedProviderId) {
+          await loadCategories(stalkerClient, [selectedProviderId]);
+        } else {
+          const selectedIds = await ProviderService.getSelectedProviderIds();
+          await loadCategories(stalkerClient, selectedIds);
+        }
+        // Clear loaded category channels when provider changes
+        setCategoryChannels({});
+        setLoadedCategoryIds(new Set());
+      })();
     }
   }, [selectedProviderId]);
 
   useEffect(() => {
     const init = async () => {
-      // Load the first active provider as default
-      const activeProviders = await ProviderService.getActiveProviders();
-      console.log('🏢 [LiveTV] Active providers:', activeProviders.map(p => ({ id: p.id, name: p.name })));
-      if (activeProviders.length > 0 && !selectedProviderId) {
-        console.log('🎯 [LiveTV] Setting default provider:', activeProviders[0].id, activeProviders[0].name);
-        setSelectedProviderId(activeProviders[0].id);
+      // Load the first selected provider as default (respect user's provider settings)
+      const selectedProviders = await ProviderService.getSelectedProviders();
+      console.log('🏢 [LiveTV] Selected providers:', selectedProviders.map(p => ({ id: p.id, name: p.name })));
+      if (selectedProviders.length > 0 && !selectedProviderId) {
+        console.log('🎯 [LiveTV] Setting default provider from selection:', selectedProviders[0].id, selectedProviders[0].name);
+        setSelectedProviderId(selectedProviders[0].id);
       }
       
       const client = await initStalkerClient();
-      await loadCategories(client, selectedProviderId);
+      if (client) {
+        if (selectedProviderId) {
+          await loadCategories(client, [selectedProviderId]);
+        } else {
+          const selectedIds = await ProviderService.getSelectedProviderIds();
+          await loadCategories(client, selectedIds);
+        }
+      }
     };
     init();
     
@@ -125,31 +140,67 @@ export default function LiveTVScreen() {
     };
   }, [navigation]);
 
+  // Subscribe to provider selection changes to force a categories refresh
+  useEffect(() => {
+    const unsubscribe = onSelectedProvidersChange(async (ids: string[]) => {
+      console.log('🔁 [LiveTV] Provider selection changed (event):', ids);
+      try {
+        // Use the emitted ids directly to avoid race conditions with
+        // AsyncStorage write/read. Emit provides the authoritative
+        // selection payload from the UI.
+        const first = ids && ids.length > 0 ? ids[0] : undefined;
+        if (first && first !== selectedProviderId) {
+          setSelectedProviderId(first);
+        }
+        await loadCategories(stalkerClient, ids);
+        setCategoryChannels({});
+        setLoadedCategoryIds(new Set());
+      } catch (err) {
+        console.error('🔁 [LiveTV] Error handling provider change event:', err);
+      }
+    });
+    return () => unsubscribe();
+  }, [stalkerClient, selectedProviderId]);
+
   const initStalkerClient = async () => {
     try {
-      const providerData = await AsyncStorage.getItem('stalker_provider_config');
-      if (!providerData) {
-        console.error('❌ No provider config found in AsyncStorage');
-        return null;
+      let provider: any = null;
+      if (selectedProviderId) {
+        provider = await ProviderService.getProviderById(selectedProviderId);
       }
-      
-      const provider = JSON.parse(providerData);
+
+      if (!provider) {
+        const providerData = await AsyncStorage.getItem('stalker_provider_config');
+        if (!providerData) {
+          console.error('❌ No provider config found');
+          return null;
+        }
+        provider = JSON.parse(providerData);
+      }
       console.log('📱 Initializing Stalker client with provider:', provider.name);
-      
+
+      // Use backend URL from constants (remove /api suffix for StalkerPortalClient)
+      const backendBaseUrl = API_CONFIG.BACKEND_URL.endsWith('/api')
+        ? API_CONFIG.BACKEND_URL.slice(0, -4)
+        : API_CONFIG.BACKEND_URL;
+
+      const portal = provider.portalUrl || provider.serverUrl || provider.portalUrl;
       const client = new StalkerPortalClient(
-        provider.portalUrl,
+        portal,
         provider.macAddress,
-        '058357N656529'
+        provider.serialNumber || '058357N656529',
+        backendBaseUrl
       );
-      
-      if (provider.bearerToken) {
-        client.setToken(provider.bearerToken);
+
+      const token = provider.token || provider.bearerToken;
+      if (token) {
+        client.setToken(token);
         console.log('✅ Stalker client initialized with token');
       } else {
         console.warn('⚠️ No bearer token found for provider');
       }
-      
-      setPortalUrl(provider.portalUrl);
+
+      setPortalUrl(portal);
       setStalkerClient(client);
       return client;
     } catch (error) {
@@ -158,11 +209,27 @@ export default function LiveTVScreen() {
     }
   };
 
-  const loadCategories = async (client?: StalkerPortalClient | null, providerId?: string) => {
+  useEffect(() => {
+    const reinit = async () => {
+      const client = await initStalkerClient();
+      if (client) {
+        if (selectedProviderId) {
+          await loadCategories(client, [selectedProviderId]);
+        } else {
+          const selectedIds = await ProviderService.getSelectedProviderIds();
+          await loadCategories(client, selectedIds);
+        }
+      }
+    };
+    reinit();
+  }, [selectedProviderId]);
+
+  const loadCategories = async (client?: StalkerPortalClient | null, providerIds?: string | string[]) => {
     try {
-      console.log(`📺 [LiveTV] Loading categories for provider: ${providerId || 'ALL'}`);
+      const providerLabel = Array.isArray(providerIds) ? providerIds.join(',') : (providerIds || 'ALL');
+      console.log(`📺 [LiveTV] Loading categories for provider(s): ${providerLabel}`);
       setCategoriesLoading(true);
-      const cats = await CategoryRepository.getLiveCategories(providerId);
+      const cats = await CategoryRepository.getLiveCategories(providerIds as any);
       console.log(`✅ [LiveTV] Loaded ${cats.length} categories`);
       if (cats.length > 0) {
         console.log('📋 [LiveTV] First 3 categories:', cats.slice(0, 3).map(c => ({ name: c.name, id: c.id })));
@@ -178,13 +245,16 @@ export default function LiveTVScreen() {
 
   const loadCategoryChannels = async (category: Category, client?: StalkerPortalClient | null) => {
     const activeClient = client || stalkerClient;
-    if (!activeClient || loadedCategoryIds.has(category.id)) return;
+    if (!activeClient) return;
+    // Use backend category id if available for remote calls; fall back to DB id
+    const remoteCategoryId = (category as any).categoryId || category.id;
+    if (loadedCategoryIds.has(category.id)) return;
     
     try {
       console.log(`📡 Loading channels preview for category: ${category.name}`);
       setLoadedCategoryIds(prev => new Set(prev).add(category.id));
       
-      const response = await activeClient.getChannelsByCategory(category.id, 1);
+      const response = await activeClient.getChannelsByCategory(remoteCategoryId, 1);
       const channelsList = response.channels || [];
       const limitedChannels = channelsList.slice(0, MAX_THUMBNAILS);
       
@@ -193,10 +263,10 @@ export default function LiveTVScreen() {
         [category.id]: limitedChannels
       }));
       
-      // Map each channel to its category for later lookup
+      // Map each channel to its backend category id for later lookup
       const newMappings: Record<string, string> = {};
       limitedChannels.forEach(ch => {
-        newMappings[ch.id] = category.id;
+        newMappings[ch.id] = remoteCategoryId;
       });
       setChannelCategoryMap(prev => ({ ...prev, ...newMappings }));
       
@@ -232,9 +302,10 @@ export default function LiveTVScreen() {
 
     try {
       setChannelsLoading(true);
-      console.log(`📡 Fetching channels for category ${category.name} (${category.id}), page ${pageNum}`);
+      const remoteCategoryId = (category as any).categoryId || category.id;
+      console.log(`📡 Fetching channels for category ${category.name} (${remoteCategoryId}), page ${pageNum}`);
 
-      const response = await stalkerClient.getChannelsByCategory(category.id, pageNum);
+      const response = await stalkerClient.getChannelsByCategory(remoteCategoryId, pageNum);
       
       console.log(`✅ Received ${response.channels?.length || 0} channels from backend`);
 
@@ -278,10 +349,10 @@ export default function LiveTVScreen() {
         let allChannels = channels; // Default: use loaded channels (View All mode)
         let categoryId: string | undefined;
         
-        if (!selectedCategory) {
+          if (!selectedCategory) {
           // Playing from preview - need to load all channels from category
           categoryId = channelCategoryMap[channel.id];
-          
+
           if (categoryId) {
             console.log(`📺 Loading all channels for category ${categoryId} for navigation`);
             try {
@@ -488,17 +559,22 @@ export default function LiveTVScreen() {
   return (
     <>
       <View style={styles.container}>
-        <View style={styles.header}>
+        <View style={styles.headerOverlay}>
+          {/* Provider dropdown temporarily hidden across screens.
+              To re-enable, uncomment the import above and the
+              <ProviderDropdown /> component below. */}
+          {/*
           <ProviderDropdown
             selectedProviderId={selectedProviderId}
             onProviderSelect={setSelectedProviderId}
             style={styles.providerDropdown}
           />
+          */}
         </View>
         <FlatList
           data={categories}
           renderItem={renderCategoryRow}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item) => `${item.providerId || 'all'}_${item.id}`}
           contentContainerStyle={styles.categoriesContainer}
           onViewableItemsChanged={handleViewableItemsChanged}
           viewabilityConfig={viewabilityConfig}
@@ -536,7 +612,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background,
   },
-  header: {
+  headerOverlay: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: SPACING.md,

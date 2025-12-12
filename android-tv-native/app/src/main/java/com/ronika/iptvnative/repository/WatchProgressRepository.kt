@@ -28,7 +28,7 @@ class WatchProgressRepository(context: Context) {
         seasonNumber: Int? = null
     ) {
         withContext(Dispatchers.IO) {
-            // Only save if watched more than 5% and less than 95%
+            // Only save if watched more than 1% and less than 95%
             val percentage: Int = if (duration > 0) {
                 ((currentPosition * 100) / duration).toInt()
             } else {
@@ -36,7 +36,7 @@ class WatchProgressRepository(context: Context) {
             }
             
             when {
-                percentage in 5..95 -> {
+                percentage in 1..95 -> {
                     Log.d(TAG, "Saving progress: $title ($contentType, provider=$providerId) - $percentage% watched")
                     // Check if entry exists
                     val existing = if (episodeId != null) {
@@ -65,7 +65,7 @@ class WatchProgressRepository(context: Context) {
                             providerId = providerId,
                             title = title,
                             posterUrl = posterUrl,
-                            episodeId = episodeId,
+                                episodeId = episodeId ?: "",
                             episodeNumber = episodeNumber,
                             seasonNumber = seasonNumber,
                             currentPosition = currentPosition,

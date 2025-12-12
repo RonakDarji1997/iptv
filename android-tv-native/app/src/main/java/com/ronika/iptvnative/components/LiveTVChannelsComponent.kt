@@ -114,6 +114,62 @@ class LiveTVChannelsComponent @JvmOverloads constructor(
         // Initialize API client with provider credentials
         reinitializeClient()
     }
+
+    /**
+     * Attempt to open the last-played live channel if stored in settings.
+     * If the channel exists in local DB, this will navigate to the channel's category
+     * and trigger a resume when channels are loaded. If not found, nothing is done.
+     */
+    fun openLastPlayedIfAvailable(autoFullscreen: Boolean = false) {
+        scope.launch {
+            try {
+                val (savedProviderId, savedChannelId) = com.ronika.iptvnative.utils.AppPreferences.getLastPlayedChannel(context)
+                if (savedChannelId.isNullOrBlank()) return@launch
+
+                // If provider differs, try to initialize with that provider
+                if (!savedProviderId.isNullOrBlank() && savedProviderId != currentProviderId) {
+                    try {
+                        initializeWithProvider(savedProviderId)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not initialize provider $savedProviderId: ${e.message}")
+                    }
+                }
+
+                // Try to find channel in local DB to get its category
+                val dbChannel = withContext(Dispatchers.IO) {
+                    database.channelDao().getChannelById(savedChannelId)
+                }
+
+                if (dbChannel != null) {
+                    val catId = dbChannel.categoryId
+                    if (catId.isNullOrBlank()) {
+                        Log.d(TAG, "Saved channel has no categoryId: ${dbChannel.id}")
+                        return@launch
+                    }
+                    val category = withContext(Dispatchers.IO) {
+                        categoryDao.getCategoryById(catId)
+                    }
+
+                    if (category != null) {
+                        // Set pending flag so when channels are set, resume will open fullscreen if requested
+                        pendingAutoFullscreen = autoFullscreen
+                        pendingAutoFullscreenChannelId = savedChannelId
+
+                        // Show the category which will load channels and trigger resume
+                        withContext(Dispatchers.Main) {
+                            showCategory(category.name, savedProviderId)
+                        }
+                    } else {
+                        Log.d(TAG, "Category for saved channel not found: ${dbChannel.categoryId}")
+                    }
+                } else {
+                    Log.d(TAG, "Saved channel not found in DB: $savedChannelId")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "openLastPlayedIfAvailable error: ${e.message}")
+            }
+        }
+    }
     
     /**
      * Initialize or reinitialize the Stalker client with credentials from active provider
@@ -127,6 +183,9 @@ class LiveTVChannelsComponent @JvmOverloads constructor(
     
     // Current provider ID - set when showing a category
     private var currentProviderId: String? = null
+    // When true, the next resume call should request fullscreen playback
+    private var pendingAutoFullscreen: Boolean = false
+    private var pendingAutoFullscreenChannelId: String? = null
     
     /**
      * Initialize with a specific provider ID
@@ -390,6 +449,17 @@ class LiveTVChannelsComponent @JvmOverloads constructor(
                             liveTVPlayer.setChannels(allChannels.toList())
                             liveTVPlayerFullscreen.setChannels(allChannels.toList())
                             Log.d(TAG, "Players configured with channels")
+
+                            // Attempt to resume last-played channel (respect pending fullscreen flag)
+                            try {
+                                liveTVPlayer.resumeLastPlayedIfAvailable(autoFullscreen = pendingAutoFullscreen)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed to resume last-played channel: ${e.message}")
+                            }
+
+                            // Clear pending flags after attempting resume
+                            pendingAutoFullscreen = false
+                            pendingAutoFullscreenChannelId = null
                             
                             // Focus first channel
                             channelsRecycler.post {

@@ -13,13 +13,14 @@ import {
 } from 'react-native';
 import { COLORS, SPACING, API_CONFIG } from '../constants';
 import { LoadingIndicator, ErrorState, EmptyState } from '../components';
-import { ProviderDropdown } from '../components/ProviderDropdown';
+// import { ProviderDropdown } from '../components/ProviderDropdown'; // Temporarily disabled
 import { CategoryRepository } from '../repositories';
 import { Category } from '../types';
 import { StalkerPortalClient, StalkerVodItem } from '../services/StalkerPortalClient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { ProviderService } from '../services/ProviderService';
+import { onSelectedProvidersChange } from '../services/ProviderSelectionEvents';
 
 const { width } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -58,25 +59,33 @@ export default function MoviesScreen({ navigation }: any) {
   // Reload categories when provider selection changes
   useEffect(() => {
     if (stalkerClient) {
-      loadCategories(stalkerClient, selectedProviderId);
-      setCategoryMovies({});
-      setLoadedCategoryIds(new Set());
+      (async () => {
+        if (selectedProviderId) {
+          await loadCategories(stalkerClient, [selectedProviderId]);
+        } else {
+          const selectedIds = await ProviderService.getSelectedProviderIds();
+          await loadCategories(stalkerClient, selectedIds);
+        }
+        setCategoryMovies({});
+        setLoadedCategoryIds(new Set());
+      })();
     }
   }, [selectedProviderId]);
 
   useEffect(() => {
     const init = async () => {
-      // Load the first active provider as default
-      const activeProviders = await ProviderService.getActiveProviders();
-      console.log('🎬 [Movies] Active providers:', activeProviders.map(p => ({ id: p.id, name: p.name })));
-      if (activeProviders.length > 0 && !selectedProviderId) {
-        console.log('🎯 [Movies] Setting default provider:', activeProviders[0].id, activeProviders[0].name);
-        setSelectedProviderId(activeProviders[0].id);
+      // Load the first selected provider as default (respect user's provider settings)
+      const selectedProviders = await ProviderService.getSelectedProviders();
+      console.log('🎬 [Movies] Selected providers:', selectedProviders.map(p => ({ id: p.id, name: p.name })));
+      if (selectedProviders.length > 0 && !selectedProviderId) {
+        console.log('🎯 [Movies] Setting default provider from selection:', selectedProviders[0].id, selectedProviders[0].name);
+        setSelectedProviderId(selectedProviders[0].id);
       }
       
       const client = await initStalkerClient();
       if (client) {
-        await loadCategories(client, selectedProviderId);
+        const selectedIds = await ProviderService.getSelectedProviderIds();
+        await loadCategories(client, selectedIds);
       }
     };
     init();
@@ -104,33 +113,64 @@ export default function MoviesScreen({ navigation }: any) {
     };
   }, [navigation]);
 
+  // Subscribe to provider selection changes (e.g., user saved settings)
+  useEffect(() => {
+    const unsubscribe = onSelectedProvidersChange(async (ids: string[]) => {
+      console.log('🔁 [Movies] Provider selection changed (event):', ids);
+      try {
+        const selectedIds = await ProviderService.getSelectedProviderIds();
+        const first = selectedIds && selectedIds.length > 0 ? selectedIds[0] : undefined;
+        if (first && first !== selectedProviderId) {
+          setSelectedProviderId(first);
+        }
+        // Force refresh categories for the current selected set
+        await loadCategories(stalkerClient, selectedIds);
+        setCategoryMovies({});
+        setLoadedCategoryIds(new Set());
+      } catch (err) {
+        console.error('🔁 [Movies] Error handling provider change event:', err);
+      }
+    });
+    return () => unsubscribe();
+  }, [stalkerClient, selectedProviderId]);
+
   const initStalkerClient = async () => {
     try {
-      const providerData = await AsyncStorage.getItem('stalker_provider_config');
-      if (!providerData) {
-        console.error('❌ No provider config found');
-        return null;
+      // Prefer provider matching selectedProviderId when available
+      let provider: any = null;
+      if (selectedProviderId) {
+        provider = await ProviderService.getProviderById(selectedProviderId);
       }
-      
-      const provider = JSON.parse(providerData);
+
+      // Fallback to legacy single provider config
+      if (!provider) {
+        const providerData = await AsyncStorage.getItem('stalker_provider_config');
+        if (!providerData) {
+          console.error('❌ No provider config found');
+          return null;
+        }
+        provider = JSON.parse(providerData);
+      }
       // Use backend URL from constants (remove /api suffix for StalkerPortalClient)
       const backendBaseUrl = API_CONFIG.BACKEND_URL.endsWith('/api') 
         ? API_CONFIG.BACKEND_URL.slice(0, -4) 
         : API_CONFIG.BACKEND_URL;
       console.log('🔧 Using backend URL:', backendBaseUrl);
       
+      const portal = provider.portalUrl || provider.serverUrl || provider.portalUrl;
       const client = new StalkerPortalClient(
-        provider.portalUrl,
+        portal,
         provider.macAddress,
-        '058357N656529',
+        provider.serialNumber || '058357N656529',
         backendBaseUrl
       );
-      
-      if (provider.bearerToken) {
-        client.setToken(provider.bearerToken);
+
+      const token = provider.token || provider.bearerToken;
+      if (token) {
+        client.setToken(token);
       }
       
-      setPortalUrl(provider.portalUrl);
+      setPortalUrl(portal);
       setStalkerClient(client);
       return client;
     } catch (error) {
@@ -139,10 +179,26 @@ export default function MoviesScreen({ navigation }: any) {
     }
   };
 
-  const loadCategories = async (client?: StalkerPortalClient | null, providerId?: string) => {
+  // Re-init stalker client whenever selected provider changes
+  useEffect(() => {
+    const reinit = async () => {
+      const client = await initStalkerClient();
+      if (client) {
+        if (selectedProviderId) {
+          await loadCategories(client, [selectedProviderId]);
+        } else {
+          const selectedIds = await ProviderService.getSelectedProviderIds();
+          await loadCategories(client, selectedIds);
+        }
+      }
+    };
+    reinit();
+  }, [selectedProviderId]);
+
+  const loadCategories = async (client?: StalkerPortalClient | null, providerIds?: string[] | string) => {
     try {
       setCategoriesLoading(true);
-      const cats = await CategoryRepository.getMovieCategories(providerId);
+      const cats = await CategoryRepository.getMovieCategories(providerIds as any);
       setCategories(cats);
       setCategoriesLoading(false); // Show categories immediately without loading movies
     } catch (err) {
@@ -153,13 +209,15 @@ export default function MoviesScreen({ navigation }: any) {
 
   const loadCategoryMovies = async (category: Category, client?: StalkerPortalClient | null) => {
     const activeClient = client || stalkerClient;
-    if (!activeClient || loadedCategoryIds.has(category.id)) return;
+    if (!activeClient) return;
+    const remoteCategoryId = (category as any).categoryId || category.id;
+    if (loadedCategoryIds.has(category.id)) return;
     
     try {
       console.log(`📡 Loading movies for category: ${category.name}`);
       setLoadedCategoryIds(prev => new Set(prev).add(category.id));
       
-      const response = await activeClient.getVodItemsByCategory(category.id, 1);
+      const response = await activeClient.getVodItemsByCategory(remoteCategoryId, 1);
       const limitedMovies = (response.items || []).slice(0, MAX_THUMBNAILS);
       
       setCategoryMovies(prev => ({
@@ -189,8 +247,9 @@ export default function MoviesScreen({ navigation }: any) {
       }
       
       try {
-        const response = await stalkerClient.getVodItemsByCategory(category.id, 1);
-        const movies = (response.items || []).slice(0, MAX_THUMBNAILS);
+      const remoteCategoryId = (category as any).categoryId || category.id;
+      const response = await stalkerClient.getVodItemsByCategory(remoteCategoryId, 1);
+      const movies = (response.items || []).slice(0, MAX_THUMBNAILS);
         
         // Update immediately as each category loads
         setCategoryMovies(prev => ({
@@ -215,8 +274,9 @@ export default function MoviesScreen({ navigation }: any) {
       
       // Load first 3 pages in parallel for fast initial load
       const pages = [1, 2, 3];
+      const remoteCategoryId = (category as any).categoryId || category.id;
       const responses = await Promise.all(
-        pages.map(p => stalkerClient.getVodItemsByCategory(category.id, p))
+        pages.map(p => stalkerClient.getVodItemsByCategory(remoteCategoryId, p))
       );
       
       const allMovies = responses.flatMap(r => r.items || []);
@@ -235,7 +295,8 @@ export default function MoviesScreen({ navigation }: any) {
     
     try {
       setLoading(true);
-      const response = await stalkerClient.getVodItemsByCategory(selectedCategory.id, page);
+      const remoteSelected = (selectedCategory as any).categoryId || selectedCategory.id;
+      const response = await stalkerClient.getVodItemsByCategory(remoteSelected, page);
       
       if (response.items && response.items.length > 0) {
         setMovies(prev => [...prev, ...response.items]);
@@ -448,16 +509,19 @@ export default function MoviesScreen({ navigation }: any) {
       <View style={styles.container}>
         <StatusBar hidden={false} />
         <View style={styles.header}>
+          {/* Provider dropdown temporarily hidden across screens. */}
+          {/*
           <ProviderDropdown
             selectedProviderId={selectedProviderId}
             onProviderSelect={setSelectedProviderId}
             style={styles.providerDropdown}
           />
+          */}
         </View>
         <FlatList
           data={categories}
           renderItem={renderCategoryRow}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item) => `${item.providerId || 'all'}_${item.id}`}
           contentContainerStyle={styles.categoryList}
           onViewableItemsChanged={handleViewableItemsChanged}
           viewabilityConfig={viewabilityConfig}

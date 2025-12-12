@@ -1,0 +1,15 @@
+{
+  "name": "tv-transcode-be",
+  "version": "0.1.0",
+  "description": "Transcode backend for downscale/upscale for Android TV VOD player",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "author": "iptv-team",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "morgan": "^1.10.0"
+  }
+}

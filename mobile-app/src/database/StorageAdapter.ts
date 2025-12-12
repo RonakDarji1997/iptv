@@ -353,6 +353,36 @@ class WebCacheAdapter implements IStorageAdapter {
         await this.insertOrReplaceChannel(params);
       } else if (sqlLower.includes('delete from')) {
         await this.handleDelete(sqlLower);
+      } else if (sqlLower.startsWith('update categories')) {
+        // Handle updates like: UPDATE categories SET provider_id = ? WHERE provider_id = ?
+        if (params && params.length >= 2) {
+          const newId = params[0];
+          const oldId = params[1];
+          const categories = await this.getCollection(this.CATEGORIES_KEY);
+          let changed = false;
+          for (const c of categories) {
+            if (c.provider_id === oldId) {
+              c.provider_id = newId;
+              changed = true;
+            }
+          }
+          if (changed) await this.saveCollection(this.CATEGORIES_KEY, categories);
+        }
+      } else if (sqlLower.startsWith('update watch_progress')) {
+        // Handle updates like: UPDATE watch_progress SET provider_id = ? WHERE provider_id = ?
+        if (params && params.length >= 2) {
+          const newId = params[0];
+          const oldId = params[1];
+          const progress = await this.getCollection(this.PROGRESS_KEY);
+          let changed = false;
+          for (const p of progress) {
+            if (p.provider_id === oldId) {
+              p.provider_id = newId;
+              changed = true;
+            }
+          }
+          if (changed) await this.saveCollection(this.PROGRESS_KEY, progress);
+        }
       }
       // Add other operations as needed
     };
@@ -540,6 +570,11 @@ class WebCacheAdapter implements IStorageAdapter {
 
   private async queryProviders<T>(sql: string, params?: any[]): Promise<T[]> {
     const providers = await this.getCollection(this.PROVIDERS_KEY);
+    // If params specify provider ids (from WHERE id IN (?)), filter accordingly
+    if (params && params.length > 0) {
+      const ids = params as string[];
+      return providers.filter((p: any) => ids.includes(p.id)) as T[];
+    }
     return providers as T[];
   }
 

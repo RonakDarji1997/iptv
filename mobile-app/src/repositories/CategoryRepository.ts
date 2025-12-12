@@ -2,40 +2,58 @@ import { Database } from '../database/Database';
 import { backendClient } from '../services/backend';
 import { Category } from '../types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ProviderService } from '../services/ProviderService';
 
 const LAST_SYNC_KEY = 'last_category_sync';
 const SYNC_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
+const NORMALIZATION_FLAG = 'provider_ids_normalized_v1';
 
 export class CategoryRepository {
   /**
    * Get live TV categories from local database
    * Database is the source of truth
    */
-  static async getLiveCategories(providerId?: string): Promise<Category[]> {
+  static async getLiveCategories(providerIds?: string[] | string): Promise<Category[]> {
     try {
-      console.log(`🔍 [getLiveCategories] Filtering by providerId: ${providerId || 'ALL'}`);
+      // Ensure DB rows use canonical provider UUIDs before querying.
+      await CategoryRepository.ensureProviderNormalization();
+      // If caller didn't supply providerIds, fall back to the user's selected providers
+      let filter = Array.isArray(providerIds) ? providerIds : (providerIds ? [providerIds] : undefined);
+      if (!filter) {
+        const selected = await ProviderService.getSelectedProviderIds();
+        filter = selected && selected.length > 0 ? selected : undefined;
+        console.log(`🔁 [getLiveCategories] No providerIds supplied, falling back to selected providers: ${filter ? filter.join(',') : 'ALL'}`);
+      } else {
+        console.log(`🔍 [getLiveCategories] Filtering by providerIds: ${filter ? filter.join(',') : 'ALL'}`);
+      }
       const db = await Database.getDatabase();
       let query = `
         SELECT * FROM categories 
         WHERE type = 'LIVE' AND is_enabled = 1
       `;
       const params: any[] = [];
-      
-      if (providerId) {
-        query += ` AND provider_id = ?`;
-        params.push(providerId);
+
+      // Use strict provider UUID filtering only. Categories and other rows
+      // should have been normalized to provider UUIDs by now.
+      if (filter && filter.length > 0) {
+        const placeholders = filter.map(() => '?').join(',');
+        query += ` AND provider_id IN (${placeholders})`;
+        params.push(...filter);
       }
       
       query += ` ORDER BY censored ASC, sort_order ASC, name ASC`;
       
       const result = await db.getAllRows<any>(query, params);
-      console.log(`✅ [getLiveCategories] Found ${result.length} categories for provider: ${providerId || 'ALL'}`);
+      console.log(`✅ [getLiveCategories] Found ${result.length} categories for providers: ${filter ? filter.join(',') : 'ALL'}`);
       if (result.length > 0) {
         console.log(`📋 First 3 categories:`, result.slice(0, 3).map(r => ({ name: r.name, provider_id: r.provider_id })));
+        const distinct = Array.from(new Set(result.map(r => r.provider_id)));
+        console.log(`🔎 [getLiveCategories] Distinct provider_ids in result (${distinct.length}):`, distinct.slice(0, 10));
       }
 
       return result.map(row => ({
-        id: row.category_id,
+        id: row.id,
+        categoryId: row.category_id,
         name: row.name,
         type: row.type,
         contentType: row.content_type,
@@ -53,31 +71,43 @@ export class CategoryRepository {
   /**
    * Get movie categories from local database
    */
-  static async getMovieCategories(providerId?: string): Promise<Category[]> {
+  static async getMovieCategories(providerIds?: string[] | string): Promise<Category[]> {
     try {
-      console.log(`🔍 [getMovieCategories] Filtering by providerId: ${providerId || 'ALL'}`);
+      await CategoryRepository.ensureProviderNormalization();
+      let filter = Array.isArray(providerIds) ? providerIds : (providerIds ? [providerIds] : undefined);
+      if (!filter) {
+        const selected = await ProviderService.getSelectedProviderIds();
+        filter = selected && selected.length > 0 ? selected : undefined;
+        console.log(`🔁 [getMovieCategories] No providerIds supplied, falling back to selected providers: ${filter ? filter.join(',') : 'ALL'}`);
+      } else {
+        console.log(`🔍 [getMovieCategories] Filtering by providerIds: ${filter ? filter.join(',') : 'ALL'}`);
+      }
       const db = await Database.getDatabase();
       let query = `
         SELECT * FROM categories 
         WHERE content_type = 'movie' AND is_enabled = 1
       `;
       const params: any[] = [];
-      
-      if (providerId) {
-        query += ` AND provider_id = ?`;
-        params.push(providerId);
+
+      if (filter && filter.length > 0) {
+        const placeholders = filter.map(() => '?').join(',');
+        query += ` AND provider_id IN (${placeholders})`;
+        params.push(...filter);
       }
       
       query += ` ORDER BY censored ASC, sort_order ASC, name ASC`;
       
       const result = await db.getAllRows<any>(query, params);
-      console.log(`✅ [getMovieCategories] Found ${result.length} categories for provider: ${providerId || 'ALL'}`);
+      console.log(`✅ [getMovieCategories] Found ${result.length} categories for providers: ${filter ? filter.join(',') : 'ALL'}`);
       if (result.length > 0) {
         console.log(`📋 First 3 categories:`, result.slice(0, 3).map(r => ({ name: r.name, provider_id: r.provider_id })));
+        const distinct = Array.from(new Set(result.map(r => r.provider_id)));
+        console.log(`🔎 [getMovieCategories] Distinct provider_ids in result (${distinct.length}):`, distinct.slice(0, 10));
       }
 
       return result.map(row => ({
-        id: row.category_id,
+        id: row.id,
+        categoryId: row.category_id,
         name: row.name,
         type: row.type,
         contentType: row.content_type,
@@ -95,31 +125,43 @@ export class CategoryRepository {
   /**
    * Get series categories from local database
    */
-  static async getSeriesCategories(providerId?: string): Promise<Category[]> {
+  static async getSeriesCategories(providerIds?: string[] | string): Promise<Category[]> {
     try {
-      console.log(`🔍 [getSeriesCategories] Filtering by providerId: ${providerId || 'ALL'}`);
+      await CategoryRepository.ensureProviderNormalization();
+      let filter = Array.isArray(providerIds) ? providerIds : (providerIds ? [providerIds] : undefined);
+      if (!filter) {
+        const selected = await ProviderService.getSelectedProviderIds();
+        filter = selected && selected.length > 0 ? selected : undefined;
+        console.log(`🔁 [getSeriesCategories] No providerIds supplied, falling back to selected providers: ${filter ? filter.join(',') : 'ALL'}`);
+      } else {
+        console.log(`🔍 [getSeriesCategories] Filtering by providerIds: ${filter ? filter.join(',') : 'ALL'}`);
+      }
       const db = await Database.getDatabase();
       let query = `
         SELECT * FROM categories 
         WHERE content_type = 'series' AND is_enabled = 1
       `;
       const params: any[] = [];
-      
-      if (providerId) {
-        query += ` AND provider_id = ?`;
-        params.push(providerId);
+
+      if (filter && filter.length > 0) {
+        const placeholders = filter.map(() => '?').join(',');
+        query += ` AND provider_id IN (${placeholders})`;
+        params.push(...filter);
       }
       
       query += ` ORDER BY censored ASC, sort_order ASC, name ASC`;
       
       const result = await db.getAllRows<any>(query, params);
-      console.log(`✅ [getSeriesCategories] Found ${result.length} categories for provider: ${providerId || 'ALL'}`);
+      console.log(`✅ [getSeriesCategories] Found ${result.length} categories for providers: ${filter ? filter.join(',') : 'ALL'}`);
       if (result.length > 0) {
         console.log(`📋 First 3 categories:`, result.slice(0, 3).map(r => ({ name: r.name, provider_id: r.provider_id })));
+        const distinct = Array.from(new Set(result.map(r => r.provider_id)));
+        console.log(`🔎 [getSeriesCategories] Distinct provider_ids in result (${distinct.length}):`, distinct.slice(0, 10));
       }
 
       return result.map(row => ({
-        id: row.category_id,
+        id: row.id,
+        categoryId: row.category_id,
         name: row.name,
         type: row.type,
         contentType: row.content_type,
@@ -204,8 +246,20 @@ export class CategoryRepository {
           );
         }
 
-        // Insert categories
+        // Build a mapping from any provider identifier the backend may use
+        // to the canonical provider UUID (`provider.id`). Backend sometimes
+        // sends `provider.provider_id` (legacy string) in category/channel
+        // records; normalize those to the provider `id` so DB relationships
+        // remain consistent.
+        const providerMap: Record<string, string> = {};
+        for (const p of providers) {
+          if (p.id) providerMap[p.id] = p.id;
+          if (p.provider_id) providerMap[p.provider_id] = p.id;
+        }
+
+        // Insert categories (normalize provider_id -> provider UUID)
         for (const category of categories) {
+          const normalizedProviderId = providerMap[category.provider_id] || category.provider_id;
           await db.runQuery(
             `INSERT OR REPLACE INTO categories (
               id, user_id, provider_id, category_id, name, type, content_type,
@@ -214,7 +268,7 @@ export class CategoryRepository {
             [
               category.id,
               category.user_id,
-              category.provider_id,
+              normalizedProviderId,
               category.category_id,
               category.name,
               category.type,
@@ -228,8 +282,9 @@ export class CategoryRepository {
           );
         }
 
-        // Insert channels
+        // Insert channels (normalize any provider references if present on channel)
         for (const channel of channels) {
+          // channel.category_id in backend is likely the category.category_id or category.id
           await db.runQuery(
             `INSERT OR REPLACE INTO channels (
               id, user_id, category_id, channel_id, name, url, cmd, logo,
@@ -253,8 +308,9 @@ export class CategoryRepository {
           );
         }
 
-        // Insert watch progress
+        // Insert watch progress (normalize provider_id)
         for (const prog of progress) {
+          const normalizedProgProvider = providerMap[prog.provider_id] || prog.provider_id;
           await db.runQuery(
             `INSERT OR REPLACE INTO watch_progress (
               id, user_id, content_id, content_type, content_name, provider_id,
@@ -266,7 +322,7 @@ export class CategoryRepository {
               prog.content_id,
               prog.content_type,
               prog.content_name,
-              prog.provider_id,
+              normalizedProgProvider,
               prog.current_position,
               prog.duration,
               prog.last_watched_at,
@@ -277,6 +333,17 @@ export class CategoryRepository {
         }
 
         await db.commit();
+
+        // After committing, normalize any existing rows that may still
+        // reference legacy provider identifiers (provider.provider_id)
+        // and replace them with the canonical provider UUID (providers.id).
+        // This fixes cases where older rows were inserted before we added
+        // normalization logic.
+        try {
+          await CategoryRepository.normalizeExistingProviderIds();
+        } catch (err) {
+          console.warn('Normalization of existing provider_ids failed:', err);
+        }
 
         // Update last sync time
         await AsyncStorage.setItem(LAST_SYNC_KEY, Date.now().toString());
@@ -298,5 +365,60 @@ export class CategoryRepository {
    */
   static async forceSync(): Promise<boolean> {
     return this.syncFromBackend(true);
+  }
+
+  /**
+   * Normalize existing DB rows that reference legacy provider identifiers.
+   * Some older records may have `provider_id` set to the backend's legacy
+   * `provider.provider_id` string. If a provider row exists that maps that
+   * legacy string to the canonical UUID, update the referencing rows.
+   */
+  static async normalizeExistingProviderIds(): Promise<void> {
+    try {
+      const db = await Database.getDatabase();
+      // Read all providers and build mapping of legacy -> canonical id
+      const providersRows: any[] = await db.getAllRows<any>(`SELECT id, provider_id FROM providers`);
+      const mapping: Array<{ legacy: string; id: string }> = [];
+      for (const p of providersRows) {
+        if (p.provider_id && p.id) {
+          mapping.push({ legacy: p.provider_id, id: p.id });
+        }
+      }
+
+      // For each mapping, update categories and watch_progress rows that reference the legacy id
+      for (const m of mapping) {
+        try {
+          await db.runQuery(`UPDATE categories SET provider_id = ? WHERE provider_id = ?`, [m.id, m.legacy]);
+          await db.runQuery(`UPDATE watch_progress SET provider_id = ? WHERE provider_id = ?`, [m.id, m.legacy]);
+        } catch (err) {
+          console.warn('Normalization update failed for', m, err);
+        }
+      }
+
+      // Log distinct provider ids remaining in categories for diagnostic purposes
+      const allCats: any[] = await db.getAllRows<any>(`SELECT * FROM categories`);
+      const distinct = Array.from(new Set(allCats.map(r => r.provider_id).filter(Boolean)));
+      console.log(`🔧 [normalizeExistingProviderIds] Distinct provider_ids after normalization (${distinct.length}):`, distinct.slice(0, 20));
+    } catch (error) {
+      console.error('Failed to normalize existing provider_ids:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Ensure provider normalization has run once. Uses a flag in AsyncStorage
+   * to avoid repeating work on every query. If normalization has not run,
+   * run it and set the flag.
+   */
+  static async ensureProviderNormalization(): Promise<void> {
+    try {
+      const done = await AsyncStorage.getItem(NORMALIZATION_FLAG);
+      if (done === '1') return;
+      await CategoryRepository.normalizeExistingProviderIds();
+      await AsyncStorage.setItem(NORMALIZATION_FLAG, '1');
+      console.log('🔧 [ensureProviderNormalization] Normalization completed and flag set');
+    } catch (err) {
+      console.warn('🔧 [ensureProviderNormalization] Normalization failed:', err);
+    }
   }
 }

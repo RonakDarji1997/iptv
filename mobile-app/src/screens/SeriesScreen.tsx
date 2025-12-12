@@ -13,13 +13,14 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { COLORS, SPACING, API_CONFIG } from '../constants';
 import { LoadingIndicator, EmptyState } from '../components';
-import { ProviderDropdown } from '../components/ProviderDropdown';
+// import { ProviderDropdown } from '../components/ProviderDropdown'; // Temporarily disabled
 import { CategoryRepository } from '../repositories';
 import { Category } from '../types';
 import { StalkerPortalClient, StalkerVodItem } from '../services/StalkerPortalClient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { ProviderService } from '../services/ProviderService';
+import { onSelectedProvidersChange } from '../services/ProviderSelectionEvents';
 
 const { width } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -56,7 +57,14 @@ export default function SeriesScreen({ navigation }: any) {
 
   useEffect(() => {
     if (stalkerClient) {
-      loadCategories(stalkerClient, selectedProviderId);
+      (async () => {
+        if (selectedProviderId) {
+          await loadCategories(stalkerClient, [selectedProviderId]);
+        } else {
+          const selectedIds = await ProviderService.getSelectedProviderIds();
+          await loadCategories(stalkerClient, selectedIds);
+        }
+      })();
       setCategorySeries({});
       setLoadedCategoryIds(new Set());
     }
@@ -64,17 +72,18 @@ export default function SeriesScreen({ navigation }: any) {
 
   useEffect(() => {
     const init = async () => {
-      // Load the first active provider as default
-      const activeProviders = await ProviderService.getActiveProviders();
-      console.log('🎬 [Series] Active providers:', activeProviders.map(p => ({ id: p.id, name: p.name })));
-      if (activeProviders.length > 0 && !selectedProviderId) {
-        console.log('🎯 [Series] Setting default provider:', activeProviders[0].id, activeProviders[0].name);
-        setSelectedProviderId(activeProviders[0].id);
+      // Load the first selected provider as default (respect user's provider settings)
+      const selectedProviders = await ProviderService.getSelectedProviders();
+      console.log('🎬 [Series] Selected providers:', selectedProviders.map(p => ({ id: p.id, name: p.name })));
+      if (selectedProviders.length > 0 && !selectedProviderId) {
+        console.log('🎯 [Series] Setting default provider from selection:', selectedProviders[0].id, selectedProviders[0].name);
+        setSelectedProviderId(selectedProviders[0].id);
       }
       
       const client = await initStalkerClient();
       if (client) {
-        await loadCategories(client, selectedProviderId);
+        const selectedIds = await ProviderService.getSelectedProviderIds();
+        await loadCategories(client, selectedIds);
       }
     };
     init();
@@ -87,33 +96,61 @@ export default function SeriesScreen({ navigation }: any) {
     return () => clearTimeout(syncTimer);
   }, []);
 
+  // Subscribe to provider selection changes to force a categories refresh
+  useEffect(() => {
+    const unsubscribe = onSelectedProvidersChange(async (ids: string[]) => {
+      console.log('🔁 [Series] Provider selection changed (event):', ids);
+      try {
+        const selectedIds = await ProviderService.getSelectedProviderIds();
+        const first = selectedIds && selectedIds.length > 0 ? selectedIds[0] : undefined;
+        if (first && first !== selectedProviderId) {
+          setSelectedProviderId(first);
+        }
+        await loadCategories(stalkerClient, selectedIds);
+        setCategorySeries({});
+        setLoadedCategoryIds(new Set());
+      } catch (err) {
+        console.error('🔁 [Series] Error handling provider change event:', err);
+      }
+    });
+    return () => unsubscribe();
+  }, [stalkerClient, selectedProviderId]);
+
   const initStalkerClient = async () => {
     try {
-      const providerData = await AsyncStorage.getItem('stalker_provider_config');
-      if (!providerData) {
-        console.error('❌ No provider config found');
-        return null;
+      let provider: any = null;
+      if (selectedProviderId) {
+        provider = await ProviderService.getProviderById(selectedProviderId);
       }
-      
-      const provider = JSON.parse(providerData);
+
+      if (!provider) {
+        const providerData = await AsyncStorage.getItem('stalker_provider_config');
+        if (!providerData) {
+          console.error('❌ No provider config found');
+          return null;
+        }
+        provider = JSON.parse(providerData);
+      }
       // Use backend URL from constants (remove /api suffix for StalkerPortalClient)
       const backendBaseUrl = API_CONFIG.BACKEND_URL.endsWith('/api') 
         ? API_CONFIG.BACKEND_URL.slice(0, -4) 
         : API_CONFIG.BACKEND_URL;
       console.log('🔧 SeriesScreen using backend URL:', backendBaseUrl);
       
+      const portal = provider.portalUrl || provider.serverUrl || provider.portalUrl;
       const client = new StalkerPortalClient(
-        provider.portalUrl,
+        portal,
         provider.macAddress,
-        '058357N656529',
+        provider.serialNumber || '058357N656529',
         backendBaseUrl
       );
-      
-      if (provider.bearerToken) {
-        client.setToken(provider.bearerToken);
+
+      const token = provider.token || provider.bearerToken;
+      if (token) {
+        client.setToken(token);
       }
       
-      setPortalUrl(provider.portalUrl);
+      setPortalUrl(portal);
       setStalkerClient(client);
       return client;
     } catch (error) {
@@ -122,10 +159,25 @@ export default function SeriesScreen({ navigation }: any) {
     }
   };
 
-  const loadCategories = async (client?: StalkerPortalClient | null, providerId?: string) => {
+  useEffect(() => {
+    const reinit = async () => {
+      const client = await initStalkerClient();
+      if (client) {
+        if (selectedProviderId) {
+          await loadCategories(client, [selectedProviderId]);
+        } else {
+          const selectedIds = await ProviderService.getSelectedProviderIds();
+          await loadCategories(client, selectedIds);
+        }
+      }
+    };
+    reinit();
+  }, [selectedProviderId]);
+
+  const loadCategories = async (client?: StalkerPortalClient | null, providerIds?: string[] | string) => {
     try {
       setCategoriesLoading(true);
-      const cats = await CategoryRepository.getSeriesCategories(providerId);
+      const cats = await CategoryRepository.getSeriesCategories(providerIds as any);
       setCategories(cats);
       setCategoriesLoading(false); // Show categories immediately
     } catch (err) {
@@ -136,13 +188,15 @@ export default function SeriesScreen({ navigation }: any) {
 
   const loadCategorySeries = async (category: Category, client?: StalkerPortalClient | null) => {
     const activeClient = client || stalkerClient;
-    if (!activeClient || loadedCategoryIds.has(category.id)) return;
+    if (!activeClient) return;
+    const remoteCategoryId = (category as any).categoryId || category.id;
+    if (loadedCategoryIds.has(category.id)) return;
     
     try {
       console.log(`📡 Loading series for category: ${category.name}`);
       setLoadedCategoryIds(prev => new Set(prev).add(category.id));
       
-      const response = await activeClient.getVodItemsByCategory(category.id, 1);
+      const response = await activeClient.getVodItemsByCategory(remoteCategoryId, 1);
       const limitedSeries = (response.items || []).slice(0, MAX_THUMBNAILS);
       
       setCategorySeries(prev => ({
@@ -166,11 +220,12 @@ export default function SeriesScreen({ navigation }: any) {
     // Load all in parallel
     const results = await Promise.allSettled(
       unloadedCategories.map(async (category) => {
-        const response = await stalkerClient.getVodItemsByCategory(category.id, 1);
-        return {
-          categoryId: category.id,
-          series: (response.items || []).slice(0, MAX_THUMBNAILS)
-        };
+        const remoteCategoryId = (category as any).categoryId || category.id;
+        const response = await stalkerClient.getVodItemsByCategory(remoteCategoryId, 1);
+          return {
+            categoryId: category.id,
+            series: (response.items || []).slice(0, MAX_THUMBNAILS)
+          };
       })
     );
     
@@ -200,8 +255,9 @@ export default function SeriesScreen({ navigation }: any) {
       
       // Load first 3 pages in parallel for fast initial load
       const pages = [1, 2, 3];
+      const remoteCategoryId = (category as any).categoryId || category.id;
       const responses = await Promise.all(
-        pages.map(p => stalkerClient.getVodItemsByCategory(category.id, p))
+        pages.map(p => stalkerClient.getVodItemsByCategory(remoteCategoryId, p))
       );
       
       const allSeries = responses.flatMap(r => r.items || []);
@@ -220,7 +276,8 @@ export default function SeriesScreen({ navigation }: any) {
     
     try {
       setLoading(true);
-      const response = await stalkerClient.getVodItemsByCategory(selectedCategory.id, page);
+      const remoteCategoryId = (selectedCategory as any).categoryId || selectedCategory.id;
+      const response = await stalkerClient.getVodItemsByCategory(remoteCategoryId, page);
       
       if (response.items && response.items.length > 0) {
         setSeries(prev => [...prev, ...response.items]);
@@ -434,16 +491,19 @@ export default function SeriesScreen({ navigation }: any) {
     <View style={styles.container}>
       <StatusBar hidden={false} />
       <View style={styles.header}>
+        {/* Provider dropdown temporarily hidden across screens. */}
+        {/*
         <ProviderDropdown
           selectedProviderId={selectedProviderId}
           onProviderSelect={setSelectedProviderId}
           style={styles.providerDropdown}
         />
+        */}
       </View>
       <FlatList
         data={categories}
         renderItem={renderCategoryRow}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => `${item.providerId || 'all'}_${item.id}`}
         contentContainerStyle={styles.categoryList}
         onViewableItemsChanged={handleViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
