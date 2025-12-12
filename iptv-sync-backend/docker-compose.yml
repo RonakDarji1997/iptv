@@ -61,7 +61,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DB_HOST: postgres
+      DB_HOST: iptv-postgres
       DB_PORT: 5432
       DB_NAME: iptv_sync
       DB_USER: postgres
