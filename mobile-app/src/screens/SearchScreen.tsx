@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, TextInput, FlatList, StyleSheet, Text, TouchableOpacity, Image, Dimensions } from 'react-native';
+import { View, TextInput, FlatList, StyleSheet, Text, TouchableOpacity, Image, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES } from '../constants';
 import { LoadingIndicator, EmptyState } from '../components';
@@ -7,11 +7,13 @@ import { StalkerPortalClient, StalkerVodItem } from '../services/StalkerPortalCl
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { debounce } from '../utils';
 
-const { width } = Dimensions.get('window');
-const CARD_WIDTH = (width - SPACING.lg * 4) / 3;
 const FALLBACK_IMAGE = 'https://via.placeholder.com/300x450/1a1a1a/ffffff?text=No+Image';
 
 export default function SearchScreen({ navigation }: any) {
+  const { width } = useWindowDimensions();
+  const isTablet = width >= 768;
+  const CARD_COLUMNS = isTablet ? 4 : 3;
+  const CARD_WIDTH = (width - SPACING.lg * 4) / CARD_COLUMNS;
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<StalkerVodItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -104,13 +106,13 @@ export default function SearchScreen({ navigation }: any) {
 
     return (
       <TouchableOpacity
-        style={styles.card}
+        style={[styles.card, { width: CARD_WIDTH }]}
         onPress={() => handleResultPress(item)}
         activeOpacity={0.7}
       >
         <Image
           source={{ uri: imageUrl }}
-          style={styles.cardImage}
+          style={[styles.cardImage, { height: CARD_WIDTH * 1.5 }]}
           resizeMode="cover"
         />
         <View style={styles.typeBadge}>
@@ -157,6 +159,9 @@ export default function SearchScreen({ navigation }: any) {
           renderItem={renderItem}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.resultsGrid}
+          numColumns={CARD_COLUMNS}
+          columnWrapperStyle={styles.resultsColumnWrapper}
+          key={`search-grid-${CARD_COLUMNS}`}
           showsVerticalScrollIndicator={false}
         />
       )}
@@ -192,17 +197,17 @@ const styles = StyleSheet.create({
   },
   resultsGrid: {
     padding: SPACING.lg,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+  },
+  resultsColumnWrapper: {
+    justifyContent: 'space-between',
   },
   card: {
-    width: CARD_WIDTH,
+    margin: SPACING.sm,
     margin: SPACING.sm,
     minWidth: 100,
   },
   cardImage: {
     width: '100%',
-    height: CARD_WIDTH * 1.5,
     borderRadius: 8,
     backgroundColor: COLORS.backgroundLight,
   },

@@ -80,6 +80,25 @@
             android:maxLines="1"
             android:ellipsize="marquee" />
 
+            <!-- Logout (menu item) -->
+            <TextView
+                android:id="@+id/menu_logout"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Logout"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="14dp"
+                android:layout_marginHorizontal="8dp"
+                android:layout_marginBottom="6dp"
+                android:background="@drawable/category_item_bg"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:maxLines="1"
+                android:ellipsize="marquee" />
+
         <!-- About -->
         <TextView
             android:id="@+id/menu_about"
@@ -852,6 +871,8 @@
                     android:textColor="#FFFFFF"
                     android:textSize="13sp" />
             </LinearLayout>
+
+            <!-- Logout menu moved to left side menu -->
 
         </LinearLayout>
 

@@ -125,9 +125,9 @@ class CloudAuthActivity : AppCompatActivity() {
                 if (authenticated) {
                     tvStatus.text = "✅ Authentication successful!"
                     
-                    // Save cloud sync preference
+                    // Save cloud sync preference and mark as configured so Launcher routes correctly
                     val prefs = getSharedPreferences("iptv_sync_prefs", MODE_PRIVATE)
-                    prefs.edit().putBoolean("cloud_sync_enabled", true).apply()
+                    prefs.edit().putBoolean("cloud_sync_enabled", true).putBoolean("cloud_sync_configured", true).apply()
                     
                     // Save user to database
                     tvStatus.text = "💾 Saving user data..."
@@ -170,12 +170,17 @@ class CloudAuthActivity : AppCompatActivity() {
                         // After login, go directly to category selection (step 2)
                         // Skip handshake/profile calls - use existing provider data
                         val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(this@CloudAuthActivity)
-                        val providers = database.providerDao().getAllProvidersList()
+                        val providers = withContext(Dispatchers.IO) { database.providerDao().getAllProvidersList() }
                         
                         // Route to PortalSetupActivity to continue setup from step 2 (category selection)
                         // Skip handshake/profile - provider already has token and credentials from cloud
                         val intent = android.content.Intent(this@CloudAuthActivity, PortalSetupActivity::class.java)
                         intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
+                        // Tell PortalSetupActivity we're coming from cloud sync, and pass a provider id if available
+                        intent.putExtra("from_cloud_sync", true)
+                        providers.firstOrNull()?.let { intent.putExtra("provider_id", it.id) }
+                        // Log successful preparation of intent extras for debugging
+                        Log.d(TAG, "Starting PortalSetupActivity with extras from_cloud_sync=${intent.getBooleanExtra("from_cloud_sync", false)}, provider_id=${intent.getStringExtra("provider_id")}")
                         startActivity(intent)
                         finish()
                     }

@@ -311,12 +311,27 @@ class PortalSetupActivity : ComponentActivity() {
                     }
                 }
             } else {
-                // No pending setup - start fresh from Step 1
+                // No pending provider - however, if we have configured providers with categories, go
+                // straight to category selection (resume step 2) rather than showing type selection
+                val configuredProviders = withContext(Dispatchers.IO) { providerDao.getConfiguredProviders() }
+                val providerWithCategories = configuredProviders.firstOrNull { p ->
+                    runBlocking { categoryDao.getCategoriesByProviderId(p.id).isNotEmpty() }
+                }
+                if (providerWithCategories != null) {
+                    currentProviderId = providerWithCategories.id
+                    Log.d(TAG, "Found configured provider with categories: ${providerWithCategories.name}, resuming category selection")
+                    showCategorySelectionForm(providerWithCategories)
+                    return@launch
+                }
+                // No providers with categories - start fresh from Step 1
                 showSelectTypeForm()
             }
         }
         
-        Log.d(TAG, "Portal setup activity initialized")
+        // Debug logging: print any extras so we can verify invocation from CloudAuth
+        val fromCloudSyncExtra = intent.getBooleanExtra("from_cloud_sync", false)
+        val providerIdExtra = intent.getStringExtra("provider_id")
+        Log.d(TAG, "Portal setup activity initialized (from_cloud_sync=$fromCloudSyncExtra, provider_id=$providerIdExtra)")
     }
     
     private fun showCategorySelectionForm(provider: ProviderEntity) {

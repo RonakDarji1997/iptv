@@ -491,11 +491,13 @@ class SeriesDetailComponent @JvmOverloads constructor(
     
     private fun updateFavoriteButtonUI() {
         if (isFavorited) {
-            favoriteButton.text = "❤ Favourited"
-            favoriteButton.setBackgroundColor(0xFF444444.toInt())
+            favoriteButton.text = "Favorited"
+            favoriteButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_favorite_filled, 0, 0, 0)
+            favoriteButton.compoundDrawableTintList = androidx.core.content.ContextCompat.getColorStateList(context, R.color.button_text_color)
         } else {
-            favoriteButton.text = "♡ Favourite"
-            favoriteButton.setBackgroundColor(0xFF333333.toInt())
+            favoriteButton.text = "Favorite"
+            favoriteButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_favorite_outline, 0, 0, 0)
+            favoriteButton.compoundDrawableTintList = androidx.core.content.ContextCompat.getColorStateList(context, R.color.button_text_color)
         }
     }
     

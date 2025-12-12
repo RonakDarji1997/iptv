@@ -846,6 +846,24 @@ class IPTVSyncService(private val context: Context) {
                             if (categories.isNotEmpty()) {
                                 database.categoryDao().upsertCategories(categories)
                                 Log.d(TAG, "✅ Upserted ${categories.size} categories from cloud")
+
+                                // Mark providers which had categories as configured and set setup step to category selection
+                                val providerIds = categories.map { it.providerId }.distinct()
+                                providerIds.forEach { pid ->
+                                    try {
+                                        val existingProvider = database.providerDao().getProviderById(pid)
+                                        if (existingProvider != null) {
+                                            val updatedProvider = existingProvider.copy(
+                                                isConfigured = true,
+                                                setupStep = 2 // SETUP_STEP_CATEGORIES
+                                            )
+                                            database.providerDao().updateProvider(updatedProvider)
+                                            Log.d(TAG, "🔁 Updated provider ${existingProvider.name} to isConfigured=true, setupStep=2")
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "⚠️ Failed to update provider setup state for $pid", e)
+                                    }
+                                }
                             } else {
                                 Log.d(TAG, "⏭️  No categories to sync from cloud")
                             }
@@ -948,6 +966,7 @@ class IPTVSyncService(private val context: Context) {
             val providers = database.providerDao().getAllProvidersList()
             
             for (provider in providers) {
+                var providerHasNewCategories = false
                 if (provider.type == "stalker" && provider.isConfigured) {
                     Log.d(TAG, "🔍 Fetching categories for provider: ${provider.name}")
                     
@@ -988,6 +1007,7 @@ class IPTVSyncService(private val context: Context) {
                             if (categories.isNotEmpty()) {
                                 database.categoryDao().upsertCategories(categories)
                                 Log.d(TAG, "  ✅ Saved ${categories.size} live TV categories")
+                                providerHasNewCategories = true
                                 
                                 // Sync to cloud to update external_id
                                 try {
@@ -1023,6 +1043,7 @@ class IPTVSyncService(private val context: Context) {
                             if (vodCategories.isNotEmpty()) {
                                 database.categoryDao().upsertCategories(vodCategories)
                                 Log.d(TAG, "  ✅ Saved ${vodCategories.size} VOD categories")
+                                providerHasNewCategories = true
                                 
                                 // Sync to cloud to update external_id
                                 try {
@@ -1058,6 +1079,7 @@ class IPTVSyncService(private val context: Context) {
                             if (seriesCategories.isNotEmpty()) {
                                 database.categoryDao().upsertCategories(seriesCategories)
                                 Log.d(TAG, "  ✅ Saved ${seriesCategories.size} series categories")
+                                providerHasNewCategories = true
                                 
                                 // Sync to cloud to update external_id
                                 try {
@@ -1068,6 +1090,19 @@ class IPTVSyncService(private val context: Context) {
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "  ❌ Failed to fetch series categories: ${e.message}")
+                        }
+                    }
+                    // If we saved categories for this provider, ensure provider is updated to configured + setupStep=2
+                    if (providerHasNewCategories) {
+                        try {
+                            val existingProvider = database.providerDao().getProviderById(provider.id)
+                            if (existingProvider != null) {
+                                val updatedProvider = existingProvider.copy(isConfigured = true, setupStep = 2)
+                                database.providerDao().updateProvider(updatedProvider)
+                                Log.d(TAG, "🔁 Updated provider ${existingProvider.name} to isConfigured=true, setupStep=2 (via Stalker fetch)")
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Failed to update provider after Stalker category fetch: ${provider.name}", e)
                         }
                     }
                 }

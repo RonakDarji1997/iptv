@@ -7,10 +7,11 @@ import {
   TouchableOpacity, 
   Text, 
   StyleSheet,
-  Dimensions,
+  useWindowDimensions,
   ActivityIndicator,
   Modal,
-  StatusBar
+  StatusBar,
+  Platform,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { COLORS, SPACING, API_CONFIG } from '../constants';
@@ -24,15 +25,17 @@ import { Ionicons } from '@expo/vector-icons';
 import { ProviderService } from '../services/ProviderService';
 import { onSelectedProvidersChange } from '../services/ProviderSelectionEvents';
 
-const { width } = Dimensions.get('window');
-const isTablet = width >= 768;
-const THUMBNAIL_WIDTH = isTablet ? (width - SPACING.lg * 7) / 5 : (width - SPACING.lg * 5) / 3;
-const THUMBNAIL_HEIGHT = THUMBNAIL_WIDTH * 1.5;
-const MAX_THUMBNAILS = 25;
 const FALLBACK_IMAGE = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzAwIiBoZWlnaHQ9IjQ1MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMzAwIiBoZWlnaHQ9IjQ1MCIgZmlsbD0iIzFhMWExYSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LXNpemU9IjIwIiBmaWxsPSIjZmZmZmZmIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSI+Tm8gSW1hZ2U8L3RleHQ+PC9zdmc+';
+const MAX_THUMBNAILS = 25;
 
 export default function LiveTVScreen() {
   const navigation = useNavigation();
+  const parentNav = navigation.getParent();
+  const { width } = useWindowDimensions();
+  const isTablet = width >= 768;
+  const CHANNEL_COLUMNS = isTablet ? 4 : 3;
+  const THUMBNAIL_WIDTH = isTablet ? (width - SPACING.lg * 7) / 5 : (width - SPACING.lg * 5) / 3;
+  const THUMBNAIL_HEIGHT = THUMBNAIL_WIDTH * 1.5;
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
   const [selectedProviderId, setSelectedProviderId] = useState<string | undefined>(undefined);
@@ -62,17 +65,19 @@ export default function LiveTVScreen() {
   }, [loadedCategoryIds]);
 
   // Lazy loading configuration - must remain stable
-  const handleViewableItemsChanged = React.useCallback(({ viewableItems }: any) => {
-    // Load channels for categories that come into view
-    if (stalkerClientRef.current && isFocusedRef.current) {
+  const loadCategoryChannelsRef = React.useRef<typeof loadCategoryChannels | null>(null);
+
+  const onViewRef = React.useRef((args: { viewableItems: any[] }) => {
+    const { viewableItems } = args;
+    if (stalkerClientRef.current && isFocusedRef.current && loadCategoryChannelsRef.current) {
       viewableItems.forEach((viewableItem: any) => {
         const category = viewableItem.item;
         if (category && !loadedCategoryIdsRef.current.has(category.id)) {
-          loadCategoryChannels(category, stalkerClientRef.current);
+          loadCategoryChannelsRef.current!(category, stalkerClientRef.current!);
         }
       });
     }
-  }, []); // Empty deps - callback never changes
+  });
 
   const viewabilityConfig = React.useRef({
     itemVisiblePercentThreshold: 50,
@@ -139,6 +144,123 @@ export default function LiveTVScreen() {
       unsubscribeBlur();
     };
   }, [navigation]);
+
+  // Hide bottom tab bar when the full-screen player overlay is open
+  useEffect(() => {
+    if (playingChannel) {
+      try {
+        // Try to hide the tab bar via style and height zero as a fallback for web
+        parentNav?.setOptions?.({ tabBarStyle: { display: 'none', height: 0, opacity: 0 } });
+      } catch (err) {
+        // ignore
+      }
+      // For web, also lock body scroll and hide common tab/footer elements
+      if (Platform.OS === 'web') {
+        try {
+          (document?.documentElement as any).style.overflow = 'hidden';
+          (document?.body as any).style.overflow = 'hidden';
+        } catch (_) {}
+        try {
+          const selectors = ['div[role="tablist"]', 'nav', 'footer', '[data-testid="bottom-tabbar"]', '.tabBar', '.bottom-tab-bar', '#tabbar'];
+          selectors.forEach((sel) => {
+            const el = document.querySelector(sel) as HTMLElement | null;
+            if (el) {
+              console.log('🔒 [LiveTVScreen] Hiding DOM element for full-screen player:', sel, el);
+              el.setAttribute('data-iptv-original-display', el.style.display || '');
+              el.setAttribute('data-iptv-original-opacity', el.style.opacity || '');
+              el.style.display = 'none';
+              el.style.opacity = '0';
+              el.style.pointerEvents = 'none';
+            }
+          });
+        } catch (err) {
+          console.log('🔒 [LiveTVScreen] Error while trying to hide DOM elements for overlay:', err);
+        }
+      }
+    } else {
+      try {
+        parentNav?.setOptions?.({ tabBarStyle: undefined });
+      } catch (err) {
+        // ignore
+      }
+      if (Platform.OS === 'web') {
+        try {
+          (document?.documentElement as any).style.overflow = '';
+          (document?.body as any).style.overflow = '';
+        } catch (_) {}
+        try {
+          const selectors = ['div[role="tablist"]', 'nav', 'footer', '[data-testid="bottom-tabbar"]', '.tabBar', '.bottom-tab-bar', '#tabbar'];
+          selectors.forEach((sel) => {
+            const el = document.querySelector(sel) as HTMLElement | null;
+            if (el) {
+              console.log('🔓 [LiveTVScreen] Restoring DOM element after player closed:', sel, el);
+              const origDisplay = el.getAttribute('data-iptv-original-display');
+              const origOpacity = el.getAttribute('data-iptv-original-opacity');
+              if (origDisplay !== null) el.style.display = origDisplay;
+              else el.style.display = '';
+              if (origOpacity !== null) el.style.opacity = origOpacity;
+              else el.style.opacity = '';
+              el.style.pointerEvents = '';
+              el.removeAttribute('data-iptv-original-display');
+              el.removeAttribute('data-iptv-original-opacity');
+            }
+          });
+        } catch (err) {
+          console.log('🔓 [LiveTVScreen] Error while trying to restore DOM elements after overlay:', err);
+        }
+      }
+    }
+    return () => {
+      try {
+        parentNav?.setOptions?.({ tabBarStyle: undefined });
+      } catch (err) {}
+      if (Platform.OS === 'web') {
+        try {
+          (document?.documentElement as any).style.overflow = '';
+          (document?.body as any).style.overflow = '';
+        } catch (_) {}
+      }
+    };
+  }, [playingChannel, parentNav]);
+
+  // Helper to restore DOM and nav when closing player
+  const restoreChrome = () => {
+    try {
+      parentNav?.setOptions?.({ tabBarStyle: undefined });
+    } catch (err) {}
+    if (Platform.OS === 'web') {
+      try {
+        (document?.documentElement as any).style.overflow = '';
+        (document?.body as any).style.overflow = '';
+      } catch (_) {}
+      try {
+        const selectors = ['div[role="tablist"]', 'nav', 'footer', '[data-testid="bottom-tabbar"]', '.tabBar', '.bottom-tab-bar', '#tabbar'];
+        selectors.forEach((sel) => {
+          const el = document.querySelector(sel) as HTMLElement | null;
+          if (el) {
+            const origDisplay = el.getAttribute('data-iptv-original-display');
+            const origOpacity = el.getAttribute('data-iptv-original-opacity');
+            if (origDisplay !== null) el.style.display = origDisplay || '';
+            else el.style.display = '';
+            if (origOpacity !== null) el.style.opacity = origOpacity || '';
+            else el.style.opacity = '';
+            el.style.pointerEvents = '';
+            el.removeAttribute('data-iptv-original-display');
+            el.removeAttribute('data-iptv-original-opacity');
+            console.log('🔓 [LiveTVScreen] Restored DOM element after player closed:', sel, el);
+          }
+        });
+      } catch (err) {
+        console.warn('🔓 [LiveTVScreen] Error while restoring DOM elements:', err);
+      }
+    }
+  };
+
+  const closePlayer = () => {
+    console.log('◀️ [LiveTVScreen] closePlayer invoked - closing overlay and restoring chrome');
+    restoreChrome();
+    setPlayingChannel(null);
+  };
 
   // Subscribe to provider selection changes to force a categories refresh
   useEffect(() => {
@@ -277,8 +399,16 @@ export default function LiveTVScreen() {
     }
   };
 
+    // Ensure the ref targets the current loader function
+    React.useEffect(() => { loadCategoryChannelsRef.current = loadCategoryChannels; }, [loadCategoryChannels]);
+
   const handleCategoryPress = (category: Category) => {
     console.log(`🎯 Category clicked: ${category.name} (ID: ${category.id})`);
+    loadAllChannels(category);
+  };
+
+  const handleViewAllPress = (category: Category) => {
+    console.log(`🗂️ [LiveTVScreen] View All clicked for category: ${category.name} (ID: ${category.id})`);
     loadAllChannels(category);
   };
 
@@ -336,44 +466,62 @@ export default function LiveTVScreen() {
     }
 
     try {
-      console.log(`▶️ Playing channel: ${channel.name}`);
-      console.log(`📡 Fetching stream URL for cmd: ${channel.cmd}`);
-      
+      console.log(new Date().toISOString(), `▶️ Channel clicked: ${channel.name}`);
+
+      // Prepare a best-effort channels array for navigation immediately so the player opens
+      let allChannels = channels && channels.length > 0 ? channels : [channel];
+      let categoryId: string | undefined;
+
+      // If this was a preview thumbnail (no selectedCategory), try to infer category mapping
+      if (!selectedCategory) {
+        categoryId = channelCategoryMap[channel.id];
+        // If we have cached preview channels for the category, use them for initial navigation
+        if (categoryId && categoryChannels[categoryId] && categoryChannels[categoryId].length > 0) {
+          allChannels = categoryChannels[categoryId];
+        } else {
+          // Fallback: show at least the current channel while we fetch the full list
+          allChannels = [channel];
+        }
+      }
+
+      console.log(new Date().toISOString(), `🎮 Opening player immediately for channel: ${channel.name}`);
+      // Open player immediately (streamUrl will be filled shortly)
+      setPlayingChannel({ channel, streamUrl: '', channels: allChannels, categoryId });
+      console.log(new Date().toISOString(), `🟢 Player opened (placeholder) for: ${channel.name}`);
+
+      // Fetch the actual stream URL in background and update the player when available
+      console.log(new Date().toISOString(), `📡 Fetching stream URL for cmd: ${channel.cmd}`);
       const streamData = await stalkerClient.getChannelStream(channel.cmd);
       console.log(`🎬 Stream data received:`, streamData);
-      
-      if (streamData.cmd) {
-        console.log(`✅ Opening player with stream URL: ${streamData.cmd.substring(0, 50)}...`);
-        
-        // Determine which channels array to use for navigation
-        let allChannels = channels; // Default: use loaded channels (View All mode)
-        let categoryId: string | undefined;
-        
-          if (!selectedCategory) {
-          // Playing from preview - need to load all channels from category
-          categoryId = channelCategoryMap[channel.id];
 
-          if (categoryId) {
-            console.log(`📺 Loading all channels for category ${categoryId} for navigation`);
-            try {
-              const response = await stalkerClient.getChannelsByCategory(categoryId, 1);
-              allChannels = response.channels || [];
-              console.log(`✅ Loaded ${allChannels.length} channels for navigation`);
-            } catch (error) {
-              // Failed to load, use single channel
-              allChannels = [channel]; // Fallback: at least include current channel
-            }
-          } else {
-            // No category mapping
-            allChannels = [channel];
+      if (streamData && streamData.cmd) {
+        console.log(new Date().toISOString(), `✅ Received stream URL, updating player`);
+
+        // If the full category channels are not loaded yet, try to fetch them for navigation
+        if (!selectedCategory && categoryId && (!categoryChannels[categoryId] || categoryChannels[categoryId].length === 0)) {
+          try {
+            const resp = await stalkerClient.getChannelsByCategory(categoryId, 1);
+            const loadedAll = resp.channels || [channel];
+            setPlayingChannel(prev => prev ? { ...prev, streamUrl: streamData.cmd, channels: loadedAll } : { channel, streamUrl: streamData.cmd, channels: loadedAll, categoryId });
+            console.log(new Date().toISOString(), `✅ Loaded navigation channels for category ${categoryId} (${loadedAll.length})`);
+            return;
+          } catch (err) {
+            // If we fail to load full category, still update the stream URL
+            console.warn('⚠️ Failed to load full category channels for navigation, proceeding with current channel only');
           }
         }
-        
-        console.log(`🎮 Setting up player with ${allChannels.length} channels for navigation`);
-        setPlayingChannel({ channel, streamUrl: streamData.cmd, channels: allChannels, categoryId });
+
+        // Update stream URL (and keep any channels we already set)
+        setPlayingChannel(prev => prev ? { ...prev, streamUrl: streamData.cmd } : { channel, streamUrl: streamData.cmd, channels: allChannels, categoryId });
+      } else {
+        console.warn('⚠️ No stream URL returned for channel, leaving player open to show error UI');
+        // ensure player remains open to show error state
+        setPlayingChannel(prev => prev ? { ...prev } : { channel, streamUrl: '', channels: [channel] });
       }
     } catch (error) {
-      // Silently handle error
+      console.error('❌ Error while handling channel press:', error);
+      // Open player so user sees error UI instead of nothing
+      setPlayingChannel({ channel, streamUrl: '', channels: [channel] });
     }
   };
 
@@ -399,6 +547,7 @@ export default function LiveTVScreen() {
   };
 
   const handleBack = () => {
+    console.log('◀️ [LiveTVScreen] Back pressed - returning to categories');
     setSelectedCategory(null);
     setChannels([]);
   };
@@ -414,18 +563,18 @@ export default function LiveTVScreen() {
 
     return (
       <TouchableOpacity
-        style={styles.thumbnail}
+        style={[styles.thumbnail, { width: THUMBNAIL_WIDTH }]}
         onPress={() => handleChannelPress(item)}
         activeOpacity={0.7}
       >
         {hasError ? (
-          <View style={[styles.thumbnailImage, styles.noImagePlaceholder]}>
+          <View style={[styles.thumbnailImage, styles.noImagePlaceholder, { width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT }]}> 
             <Ionicons name="tv-outline" size={48} color="#666" />
           </View>
         ) : (
           <Image
             source={{ uri: imageUrl }}
-            style={styles.thumbnailImage}
+            style={[styles.thumbnailImage, { width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT }]}
             resizeMode="cover"
             onError={() => setHasError(true)}
           />
@@ -446,7 +595,7 @@ export default function LiveTVScreen() {
         <View style={styles.categoryHeader}>
           <Text style={styles.categoryName}>{category.name}</Text>
           <TouchableOpacity 
-            onPress={() => loadAllChannels(category)}
+            onPress={() => handleViewAllPress(category)}
             style={styles.viewAllButton}
           >
             <Text style={styles.viewAllText}>View All</Text>
@@ -468,7 +617,7 @@ export default function LiveTVScreen() {
             contentContainerStyle={styles.thumbnailList}
           />
         ) : (
-          <View style={styles.loadingThumbnails}>
+          <View style={[styles.loadingThumbnails, { width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT }]}> 
             <Text style={styles.loadingText}>No channels</Text>
           </View>
         )}
@@ -476,20 +625,23 @@ export default function LiveTVScreen() {
     );
   };
 
+  const channelItemWidth = isTablet ? (width - SPACING.lg * 6) / 4 : (width - SPACING.lg * 4) / 3;
+  const channelLogoHeight = channelItemWidth * 1.5;
+
   const renderChannel = ({ item }: { item: StalkerChannel }) => (
     <TouchableOpacity
-      style={styles.channelItem}
+      style={[styles.channelItem, { width: channelItemWidth }]}
       onPress={() => handleChannelPress(item)}
       activeOpacity={0.7}
     >
       {item.logo ? (
         <Image
           source={{ uri: `${portalUrl}/stalker_portal/misc/logos/320/${item.logo}` }}
-          style={styles.channelLogo}
+          style={[styles.channelLogo, { height: channelLogoHeight }]}
           resizeMode="cover"
         />
       ) : (
-        <View style={[styles.channelLogo, styles.channelPlaceholder]}>
+        <View style={[styles.channelLogo, styles.channelPlaceholder, { height: channelLogoHeight }]}> 
           <Ionicons name="tv-outline" size={48} color={COLORS.textMuted} />
         </View>
       )}
@@ -516,6 +668,72 @@ export default function LiveTVScreen() {
     return <EmptyState message="No live TV categories found" icon="📺" />;
   }
 
+  // Compute overlay element for player so we can port it to document.body on web
+  let overlayElement: React.ReactNode = null;
+  if (playingChannel) {
+    console.log('🔔 [LiveTVScreen] (pre) Rendering player overlay for channel:', playingChannel.channel.name);
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      try {
+        const createPortal = require('react-dom').createPortal;
+        overlayElement = createPortal(
+          <View style={styles.webModalOverlay} testID="player-portal">
+            <LiveTVPlayer
+              streamUrl={playingChannel.streamUrl}
+              channel={playingChannel.channel}
+              channels={playingChannel.channels}
+              onClose={closePlayer}
+              onChannelChange={handleChannelChange}
+            />
+          </View>,
+          document.body
+        );
+      } catch (err) {
+        // If portal cannot be created, just render inline overlay as a fallback
+        overlayElement = (
+          <View style={styles.webModalOverlay} testID="player-portal">
+            <LiveTVPlayer
+              streamUrl={playingChannel.streamUrl}
+              channel={playingChannel.channel}
+              channels={playingChannel.channels}
+              onClose={closePlayer}
+              onChannelChange={handleChannelChange}
+            />
+          </View>
+        );
+      }
+    } else if (Platform.OS === 'web') {
+      overlayElement = (
+        <View style={styles.webModalOverlay} testID="player-portal">
+          <LiveTVPlayer
+            streamUrl={playingChannel.streamUrl}
+            channel={playingChannel.channel}
+            channels={playingChannel.channels}
+            onClose={closePlayer}
+            onChannelChange={handleChannelChange}
+          />
+        </View>
+      );
+    } else {
+      overlayElement = (
+        <Modal
+          visible={true}
+          animationType="slide"
+          onRequestClose={() => setPlayingChannel(null)}
+          statusBarTranslucent={true}
+          presentationStyle="fullScreen"
+        >
+          <LiveTVPlayer
+            streamUrl={playingChannel.streamUrl}
+            channel={playingChannel.channel}
+            channels={playingChannel.channels}
+            onClose={() => setPlayingChannel(null)}
+            onChannelChange={handleChannelChange}
+          />
+        </Modal>
+      );
+    }
+  }
+
   // Show channels list when category selected
   if (selectedCategory) {
     return (
@@ -537,6 +755,9 @@ export default function LiveTVScreen() {
           contentContainerStyle={styles.channelsList}
           onEndReached={handleLoadMore}
           onEndReachedThreshold={0.5}
+          numColumns={CHANNEL_COLUMNS}
+          key={`channels-grid-${CHANNEL_COLUMNS}`}
+          columnWrapperStyle={styles.channelColumnWrapper}
           ListFooterComponent={
             channelsLoading ? (
               <View style={styles.loadingFooter}>
@@ -551,11 +772,14 @@ export default function LiveTVScreen() {
           }
         />
         </View>
+        {/* Render overlay while inside category view so player appears immediately */}
+        {overlayElement}
       </>
     );
   }
 
   // Show category rows with channel previews
+
   return (
     <>
       <View style={styles.container}>
@@ -576,7 +800,7 @@ export default function LiveTVScreen() {
           renderItem={renderCategoryRow}
           keyExtractor={(item) => `${item.providerId || 'all'}_${item.id}`}
           contentContainerStyle={styles.categoriesContainer}
-          onViewableItemsChanged={handleViewableItemsChanged}
+          onViewableItemsChanged={onViewRef.current}
           viewabilityConfig={viewabilityConfig}
           removeClippedSubviews={true}
           maxToRenderPerBatch={5}
@@ -586,23 +810,9 @@ export default function LiveTVScreen() {
       </View>
       
       {/* Full Screen Player Modal - Available from all views */}
-      {playingChannel && (
-        <Modal
-          visible={true}
-          animationType="slide"
-          onRequestClose={() => setPlayingChannel(null)}
-          statusBarTranslucent={true}
-          presentationStyle="fullScreen"
-        >
-          <LiveTVPlayer
-            streamUrl={playingChannel.streamUrl}
-            channel={playingChannel.channel}
-            channels={playingChannel.channels}
-            onClose={() => setPlayingChannel(null)}
-            onChannelChange={handleChannelChange}
-          />
-        </Modal>
-      )}
+      {/** Computed overlay to ensure portal usage on web and modal usage on native */}
+      {overlayElement}
+
     </>
   );
 }
@@ -651,12 +861,9 @@ const styles = StyleSheet.create({
     paddingRight: SPACING.lg,
   },
   thumbnail: {
-    width: THUMBNAIL_WIDTH,
     marginRight: SPACING.md,
   },
   thumbnailImage: {
-    width: THUMBNAIL_WIDTH,
-    height: THUMBNAIL_HEIGHT,
     borderRadius: 8,
     backgroundColor: COLORS.backgroundLight,
   },
@@ -671,8 +878,6 @@ const styles = StyleSheet.create({
     marginTop: SPACING.sm,
   },
   loadingThumbnails: {
-    width: THUMBNAIL_WIDTH,
-    height: THUMBNAIL_HEIGHT,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -698,17 +903,16 @@ const styles = StyleSheet.create({
   },
   channelsList: {
     padding: SPACING.lg,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+  },
+  channelColumnWrapper: {
+    justifyContent: 'space-between',
   },
   channelItem: {
-    width: isTablet ? (width - SPACING.lg * 6) / 4 : (width - SPACING.lg * 4) / 3,
     margin: SPACING.sm,
     minWidth: 100,
   },
   channelLogo: {
     width: '100%',
-    height: isTablet ? (width - SPACING.lg * 6) / 4 * 1.5 : (width - SPACING.lg * 4) / 3 * 1.5,
     borderRadius: 8,
     backgroundColor: COLORS.backgroundLight,
   },
@@ -732,5 +936,15 @@ const styles = StyleSheet.create({
   loadingFooter: {
     paddingVertical: SPACING.xl,
     alignItems: 'center',
+  },
+  webModalOverlay: {
+    position: 'fixed' as any,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 2147483647,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    pointerEvents: 'auto' as any,
   },
 });

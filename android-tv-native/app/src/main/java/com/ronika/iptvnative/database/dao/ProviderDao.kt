@@ -101,6 +101,9 @@ interface ProviderDao {
     
     @Query("SELECT * FROM providers WHERE type = 'stalker' AND isConfigured = 0 AND token IS NULL ORDER BY createdAt DESC LIMIT 1")
     suspend fun getPendingStalkerProvider(): ProviderEntity?
+
+    @Query("DELETE FROM providers")
+    suspend fun deleteAll()
     
     /**
      * Set a provider as the active one (deactivates all others first)

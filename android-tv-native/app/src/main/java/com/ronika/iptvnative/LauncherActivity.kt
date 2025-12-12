@@ -54,7 +54,16 @@ class LauncherActivity : ComponentActivity() {
                     // No providers but cloud sync was configured (user declined or logged in before)
                     cloudSyncConfigured -> {
                         Log.d(TAG, "Routing to PortalSetupActivity (cloud sync configured)")
-                        Intent(this@LauncherActivity, PortalSetupActivity::class.java)
+                        // If cloud sync configured, try to pass provider id so PortalSetup resumes step 2
+                        val portalIntent = Intent(this@LauncherActivity, PortalSetupActivity::class.java)
+                        try {
+                            val database = AppDatabase.getDatabase(this@LauncherActivity)
+                            val providers = withContext(Dispatchers.IO) { database.providerDao().getAllProvidersList() }
+                            providers.firstOrNull()?.let { portalIntent.putExtra("from_cloud_sync", true); portalIntent.putExtra("provider_id", it.id) }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to attach provider_id to PortalSetup intent: ${e.message}")
+                        }
+                        portalIntent
                     }
                     // First time - show cloud sync option (skippable)
                     else -> {

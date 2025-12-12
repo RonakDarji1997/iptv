@@ -860,11 +860,15 @@ class VODComponent @JvmOverloads constructor(
     
     private fun updateFavoriteButtonUI() {
         if (currentItemFavorited) {
-            detailFavoriteButton.text = "❤ Favourited"
-            detailFavoriteButton.setBackgroundColor(0xFF444444.toInt())
+            detailFavoriteButton.text = "Favorited"
+            // Use filled heart icon and let background/text colors be handled by selector
+            detailFavoriteButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_favorite_filled, 0, 0, 0)
+            detailFavoriteButton.compoundDrawableTintList = androidx.core.content.ContextCompat.getColorStateList(context, R.color.button_text_color)
         } else {
-            detailFavoriteButton.text = "♡ Favourite"
-            detailFavoriteButton.setBackgroundColor(0xFF333333.toInt())
+            detailFavoriteButton.text = "Favorite"
+            // Use outline heart icon
+            detailFavoriteButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_favorite_outline, 0, 0, 0)
+            detailFavoriteButton.compoundDrawableTintList = androidx.core.content.ContextCompat.getColorStateList(context, R.color.button_text_color)
         }
     }
     

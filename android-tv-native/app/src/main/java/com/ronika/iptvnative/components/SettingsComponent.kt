@@ -59,6 +59,7 @@ class SettingsComponent @JvmOverloads constructor(
     private lateinit var menuParental: TextView
     private lateinit var menuPlayer: TextView
     private lateinit var menuAbout: TextView
+    private lateinit var menuLogout: TextView
     
     // Content sections
     private lateinit var contentPlaylist: ScrollView
@@ -162,6 +163,7 @@ class SettingsComponent @JvmOverloads constructor(
         aboutMacAddress = findViewById(R.id.about_mac_address)
         aboutSerialNumber = findViewById(R.id.about_serial_number)
         aboutCreatedAt = findViewById(R.id.about_created_at)
+        menuLogout = findViewById(R.id.menu_logout)
     }
     
     private fun setupMenuListeners() {
@@ -222,6 +224,18 @@ class SettingsComponent @JvmOverloads constructor(
             if (hasFocus) {
                 updateMenuHighlight(Section.ABOUT)
                 switchSection(Section.ABOUT)
+                isInContentSection = false
+            }
+        }
+
+        menuLogout.setOnClickListener {
+            // Logout should show confirmation dialog
+            showLogoutConfirmation()
+        }
+        menuLogout.setOnFocusChangeListener { _, hasFocus ->
+            menuLogout.setTextColor(if (hasFocus) 0xFF000000.toInt() else 0xFFFFFFFF.toInt())
+            if (hasFocus) {
+                // Do not auto-switch sections; just highlight
                 isInContentSection = false
             }
         }
@@ -306,6 +320,47 @@ class SettingsComponent @JvmOverloads constructor(
                 }
             }
         })
+
+        // Intercept DPAD LEFT/RIGHT when slider has focus so the left key doesn't move focus back
+        // Prevent focus navigation while the seek bar is focused by setting nextFocusLeft/Right
+        // to itself and then intercept key events so left/right adjust value instead of moving focus.
+        seekTimeSlider.nextFocusLeftId = seekTimeSlider.id
+        seekTimeSlider.nextFocusRightId = seekTimeSlider.id
+
+        seekTimeSlider.setOnKeyListener { _, keyCode, event ->
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        // Decrease by one step (10 seconds)
+                        val newProgress = (seekTimeSlider.progress - 1).coerceAtLeast(0)
+                        if (newProgress != seekTimeSlider.progress) {
+                            seekTimeSlider.progress = newProgress
+                            val seconds = 10 + newProgress
+                            updateSeekTimeDisplay(seconds)
+                            coroutineScope.launch {
+                                AppPreferences.setSeekTimeSeconds(context, seconds)
+                            }
+                        }
+                        // Consume the event so focus does not move to the sidenav
+                        return@setOnKeyListener true
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        // Increase by one step (10 seconds)
+                        val newProgress = (seekTimeSlider.progress + 1).coerceAtMost(seekTimeSlider.max)
+                        if (newProgress != seekTimeSlider.progress) {
+                            seekTimeSlider.progress = newProgress
+                            val seconds = 10 + newProgress
+                            updateSeekTimeDisplay(seconds)
+                            coroutineScope.launch {
+                                AppPreferences.setSeekTimeSeconds(context, seconds)
+                            }
+                        }
+                        return@setOnKeyListener true
+                    }
+                }
+            }
+            false
+        }
         
         // Parental buttons
         btnChangePin.setOnClickListener {
@@ -315,6 +370,8 @@ class SettingsComponent @JvmOverloads constructor(
         btnResetPin.setOnClickListener {
             showResetPinDialog()
         }
+
+        // logout is handled in menu listeners
     }
     
     private fun moveToSectionContent() {
@@ -330,7 +387,8 @@ class SettingsComponent @JvmOverloads constructor(
             Section.PARENTAL -> btnChangePin.requestFocus()
             Section.PLAYER -> btnToggleBitrate.requestFocus()
             Section.ABOUT -> {
-                // About is non-focusable, stay on menu
+                // Focus first About element (logout button or first info row)
+                // If we have a logout button, request focus to it, otherwise remain on menu
                 menuAbout.requestFocus()
             }
         }
@@ -536,6 +594,75 @@ class SettingsComponent @JvmOverloads constructor(
             } else {
                 Toast.makeText(context, "Playlist deleted", Toast.LENGTH_SHORT).show()
                 loadData()
+            }
+        }
+    }
+
+    private fun showLogoutConfirmation() {
+        AlertDialog.Builder(context)
+            .setTitle("Logout")
+            .setMessage("Are you sure you want to logout? This will remove your account, playlists and categories from this device.")
+            .setPositiveButton("Logout") { _, _ ->
+                performLogout()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun performLogout() {
+        coroutineScope.launch {
+            try {
+                // Clear sync preferences (tokens)
+                withContext(Dispatchers.IO) {
+                    try {
+                        val syncPrefs = context.getSharedPreferences("iptv_sync_prefs", Context.MODE_PRIVATE)
+                        syncPrefs.edit().clear().apply()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to clear IPTV sync prefs: ${e.message}")
+                    }
+
+                    // Clear database: channels, categories, providers, users
+                    try {
+                        database.channelDao().deleteAll()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to clear channels: ${e.message}")
+                    }
+                    try {
+                        database.categoryDao().deleteAll()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to clear categories: ${e.message}")
+                    }
+                    try {
+                        database.providerDao().deleteAll()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to clear providers: ${e.message}")
+                    }
+                    try {
+                        database.userDao().deleteAll()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to clear user: ${e.message}")
+                    }
+                }
+
+                // Clear portal configuration prefs
+                PortalSetupActivity.clearConfiguration(context)
+
+                // Inform the user
+                Toast.makeText(context, "Logged out. Restarting setup...", Toast.LENGTH_SHORT).show()
+                Log.d(TAG, "User logged out and local configuration cleared")
+
+                // Navigate back to PortalSetupActivity
+                val intent = Intent(context, PortalSetupActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                }
+                context.startActivity(intent)
+
+                // Finish the activity that hosts this component (if any)
+                (context as? Activity)?.finish()
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Error during logout: ${e.message}", e)
+                Toast.makeText(context, "Logout failed: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -847,7 +974,7 @@ class SettingsComponent @JvmOverloads constructor(
             when (event.keyCode) {
                 KeyEvent.KEYCODE_BACK -> {
                     val focusedView = findFocus()
-                    val isOnMenu = focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuPlayer || focusedView == menuAbout
+                    val isOnMenu = focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuPlayer || focusedView == menuAbout || focusedView == menuLogout
                     
                     if (isInContentSection && !isOnMenu) {
                         // Back from content section -> menu option
@@ -864,13 +991,18 @@ class SettingsComponent @JvmOverloads constructor(
                 KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
                     // If menu item is focused, move to content
                     val focusedView = findFocus()
-                    if (focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuPlayer || focusedView == menuAbout) {
+                    if (focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuPlayer || focusedView == menuAbout || focusedView == menuLogout) {
                         if (event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || 
                             event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
                             event.keyCode == KeyEvent.KEYCODE_ENTER) {
                             // Parental requires password check first
                             if (focusedView == menuParental) {
                                 checkPasswordAndShowParental()
+                                return true
+                            }
+                            // Menu logout should open confirmation instead of moving to content
+                            if (focusedView == menuLogout) {
+                                showLogoutConfirmation()
                                 return true
                             }
                             moveToSectionContent()
@@ -881,7 +1013,7 @@ class SettingsComponent @JvmOverloads constructor(
                 KeyEvent.KEYCODE_DPAD_LEFT -> {
                     // If content button is focused, move back to menu
                     val focusedView = findFocus()
-                    val isOnMenu = focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuPlayer || focusedView == menuAbout
+                    val isOnMenu = focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuPlayer || focusedView == menuAbout || focusedView == menuLogout
                     if (!isOnMenu) {
                         moveToMenuOption()
                         return true
@@ -890,7 +1022,7 @@ class SettingsComponent @JvmOverloads constructor(
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
                     // Prevent focus from escaping to main sidenav when at bottom
                     val focusedView = findFocus()
-                    val isOnMenu = focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuPlayer || focusedView == menuAbout
+                    val isOnMenu = focusedView == menuPlaylist || focusedView == menuParental || focusedView == menuPlayer || focusedView == menuAbout || focusedView == menuLogout
                     
                     // If on menu About (bottom item), consume to prevent escape
                     if (focusedView == menuAbout || 

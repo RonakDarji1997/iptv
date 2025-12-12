@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import {
+import { 
   StyleSheet,
   View,
   FlatList,
@@ -7,7 +7,7 @@ import {
   TouchableOpacity,
   Text,
   ActivityIndicator,
-  Dimensions,
+  useWindowDimensions,
   Modal,
   StatusBar
 } from 'react-native';
@@ -22,14 +22,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { ProviderService } from '../services/ProviderService';
 import { onSelectedProvidersChange } from '../services/ProviderSelectionEvents';
 
-const { width } = Dimensions.get('window');
-const isTablet = width >= 768;
-const THUMBNAIL_WIDTH = isTablet ? (width - SPACING.lg * 7) / 5 : (width - SPACING.lg * 5) / 3;
-const THUMBNAIL_HEIGHT = THUMBNAIL_WIDTH * 1.5;
 const MAX_THUMBNAILS = 25;
 const FALLBACK_IMAGE = 'https://via.placeholder.com/300x450/1a1a1a/ffffff?text=No+Image';
 
 export default function MoviesScreen({ navigation }: any) {
+  const { width } = useWindowDimensions();
+  const isTablet = width >= 768;
+  const MOVIE_COLUMNS = isTablet ? 4 : 3;
+  const THUMBNAIL_WIDTH = isTablet ? (width - SPACING.lg * 7) / 5 : (width - SPACING.lg * 5) / 3;
+  const THUMBNAIL_HEIGHT = THUMBNAIL_WIDTH * 1.5;
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
   const [selectedProviderId, setSelectedProviderId] = useState<string | undefined>(undefined);
@@ -340,18 +341,18 @@ export default function MoviesScreen({ navigation }: any) {
 
     return (
       <TouchableOpacity
-        style={styles.thumbnail}
+        style={[styles.thumbnail, { width: THUMBNAIL_WIDTH }]}
         onPress={() => handleMoviePress(item)}
         activeOpacity={0.7}
       >
         {hasError ? (
-          <View style={[styles.thumbnailImage, styles.noImagePlaceholder]}>
+          <View style={[styles.thumbnailImage, styles.noImagePlaceholder, { width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT }]}> 
             <Ionicons name="film-outline" size={48} color="#666" />
           </View>
         ) : (
           <Image
             source={{ uri: imageUrl }}
-            style={styles.thumbnailImage}
+            style={[styles.thumbnailImage, { width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT }]}
             resizeMode="cover"
             onError={() => setHasError(true)}
           />
@@ -381,7 +382,7 @@ export default function MoviesScreen({ navigation }: any) {
         </View>
         
         {!isLoaded ? (
-          <View style={styles.loadingThumbnails}>
+          <View style={[styles.loadingThumbnails, { width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT }]}> 
             <Text style={styles.loadingText}>Loading...</Text>
           </View>
         ) : movies.length > 0 ? (
@@ -394,7 +395,7 @@ export default function MoviesScreen({ navigation }: any) {
             contentContainerStyle={styles.thumbnailList}
           />
         ) : (
-          <View style={styles.loadingThumbnails}>
+          <View style={[styles.loadingThumbnails, { width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT }]}> 
             <Text style={styles.loadingText}>No movies</Text>
           </View>
         )}
@@ -403,19 +404,21 @@ export default function MoviesScreen({ navigation }: any) {
   };
 
   const MovieCard = React.memo(({ item }: { item: StalkerVodItem }) => {
+    const movieCardWidth = isTablet ? (width - SPACING.lg * 6) / 4 : (width - SPACING.lg * 4) / 3;
+    const movieImageHeight = movieCardWidth * 1.5;
     const imageUrl = item.screenshot_uri 
       ? `${portalUrl}${item.screenshot_uri}` 
       : FALLBACK_IMAGE;
 
     return (
       <TouchableOpacity
-        style={styles.movieCard}
+        style={[styles.movieCard, { width: movieCardWidth }]}
         onPress={() => handleMoviePress(item)}
         activeOpacity={0.7}
       >
         <Image
           source={{ uri: imageUrl }}
-          style={styles.movieImage}
+          style={[styles.movieImage, { height: movieImageHeight }]}
           resizeMode="cover"
           defaultSource={require('../../assets/icon.png')}
         />
@@ -435,20 +438,21 @@ export default function MoviesScreen({ navigation }: any) {
   });
 
   // Lazy loading configuration - must be before any conditional returns
-  const handleViewableItemsChanged = React.useCallback(({ viewableItems }: any) => {
-    if (stalkerClientRef.current && isFocusedRef.current) {
+  const loadCategoryMoviesRef = React.useRef<typeof loadCategoryMovies | null>(null);
+  useEffect(() => { loadCategoryMoviesRef.current = loadCategoryMovies; }, [loadCategoryMovies]);
+  const onViewRef = React.useRef((args: { viewableItems: any[] }) => {
+    const { viewableItems } = args;
+    if (stalkerClientRef.current && isFocusedRef.current && loadCategoryMoviesRef.current) {
       viewableItems.forEach((viewableItem: any) => {
         const category = viewableItem.item;
         if (category && !loadedCategoryIdsRef.current.has(category.id)) {
-          loadCategoryMovies(category, stalkerClientRef.current);
+          loadCategoryMoviesRef.current!(category, stalkerClientRef.current!);
         }
       });
     }
-  }, []); // Empty deps - callback never changes
+  });
 
-  const viewabilityConfig = React.useRef({
-    itemVisiblePercentThreshold: 50,
-  }).current;
+  const viewabilityConfig = React.useRef({ itemVisiblePercentThreshold: 50 }).current;
 
   const renderMovieThumbnail = ({ item }: { item: StalkerVodItem }) => {
     return <MovieThumbnail item={item} />;
@@ -488,6 +492,9 @@ export default function MoviesScreen({ navigation }: any) {
             renderItem={renderMovieCard}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.movieGrid}
+            numColumns={MOVIE_COLUMNS}
+            columnWrapperStyle={styles.movieColumnWrapper}
+            key={`movies-grid-${MOVIE_COLUMNS}`}
             onEndReached={loadMoreMovies}
             onEndReachedThreshold={0.5}
             ListFooterComponent={
@@ -523,7 +530,7 @@ export default function MoviesScreen({ navigation }: any) {
           renderItem={renderCategoryRow}
           keyExtractor={(item) => `${item.providerId || 'all'}_${item.id}`}
           contentContainerStyle={styles.categoryList}
-          onViewableItemsChanged={handleViewableItemsChanged}
+          onViewableItemsChanged={onViewRef.current}
           viewabilityConfig={viewabilityConfig}
           removeClippedSubviews={true}
           maxToRenderPerBatch={5}
@@ -579,12 +586,9 @@ const styles = StyleSheet.create({
     paddingRight: SPACING.lg,
   },
   thumbnail: {
-    width: THUMBNAIL_WIDTH,
     marginRight: SPACING.md,
   },
   thumbnailImage: {
-    width: THUMBNAIL_WIDTH,
-    height: THUMBNAIL_HEIGHT,
     borderRadius: 8,
     backgroundColor: COLORS.backgroundLight,
   },
@@ -594,8 +598,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#1a1a1a',
   },
   thumbnailPlaceholder: {
-    width: THUMBNAIL_WIDTH,
-    height: THUMBNAIL_HEIGHT,
     borderRadius: 8,
     backgroundColor: COLORS.backgroundLight,
     justifyContent: 'center',
@@ -626,23 +628,21 @@ const styles = StyleSheet.create({
   },
   movieGrid: {
     padding: SPACING.lg,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+  },
+  movieColumnWrapper: {
+    justifyContent: 'space-between',
   },
   movieCard: {
-    width: isTablet ? (width - SPACING.lg * 6) / 4 : (width - SPACING.lg * 4) / 3,
     margin: SPACING.sm,
     minWidth: 100,
   },
   movieImage: {
     width: '100%',
-    height: isTablet ? (width - SPACING.lg * 6) / 4 * 1.5 : (width - SPACING.lg * 4) / 3 * 1.5,
     borderRadius: 8,
     backgroundColor: COLORS.backgroundLight,
   },
   movieImagePlaceholder: {
     width: '100%',
-    height: isTablet ? (width - SPACING.lg * 6) / 4 * 1.5 : (width - SPACING.lg * 4) / 3 * 1.5,
     borderRadius: 8,
     backgroundColor: COLORS.backgroundLight,
     justifyContent: 'center',
@@ -671,8 +671,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   loadingThumbnails: {
-    width: THUMBNAIL_WIDTH,
-    height: THUMBNAIL_HEIGHT,
     justifyContent: 'center',
     alignItems: 'center',
   },

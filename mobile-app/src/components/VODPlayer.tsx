@@ -163,7 +163,27 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
     
     return () => {
       if (videoRef.current) {
-        videoRef.current.unloadAsync();
+        // If it's an Expo Video instance, it has unloadAsync(); otherwise it's a DOM <video>
+        if (typeof (videoRef.current as any).unloadAsync === 'function') {
+          try {
+            (videoRef.current as any).unloadAsync();
+          } catch (err) {
+            console.warn('Error unloading expo video:', err);
+          }
+        } else {
+          try {
+            const el: any = (videoRef as any).current;
+            if (el && el.pause) {
+              el.pause();
+            }
+            if (el && el.removeAttribute) {
+              try { el.removeAttribute('src'); } catch (_) {}
+              try { el.load(); } catch (_) {}
+            }
+          } catch (err) {
+            // ignore
+          }
+        }
       }
       if (controlsTimeoutRef.current) {
         clearTimeout(controlsTimeoutRef.current);
@@ -265,12 +285,25 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
   };
 
   const togglePlayPause = async () => {
-    if (videoRef.current) {
-      if (isPlaying) {
-        await videoRef.current.pauseAsync();
+    if (!videoRef.current) return;
+    try {
+      if (Platform.OS === 'web') {
+        const el: any = (videoRef as any).current;
+        if (!el) return;
+        if (isPlaying) {
+          el.pause();
+        } else {
+          await el.play();
+        }
       } else {
-        await videoRef.current.playAsync();
+        if (isPlaying && typeof (videoRef.current as any).pauseAsync === 'function') {
+          await (videoRef.current as any).pauseAsync();
+        } else if (!isPlaying && typeof (videoRef.current as any).playAsync === 'function') {
+          await (videoRef.current as any).playAsync();
+        }
       }
+    } catch (err) {
+      console.warn('Toggle play error:', err);
     }
   };
 
@@ -283,18 +316,36 @@ export const VODPlayer: React.FC<VODPlayerProps> = ({ streamUrl, title, onClose,
   };
 
   const seek = async (milliseconds: number) => {
-    if (videoRef.current) {
-      const newPosition = Math.max(0, Math.min(duration, position + milliseconds));
-      await videoRef.current.setPositionAsync(newPosition);
-      setPosition(newPosition);
+    if (!videoRef.current) return;
+    const newPosition = Math.max(0, Math.min(duration, position + milliseconds));
+    try {
+      if (Platform.OS === 'web') {
+        const el: any = (videoRef as any).current;
+        if (el) {
+          el.currentTime = newPosition / 1000;
+        }
+      } else if (typeof (videoRef.current as any).setPositionAsync === 'function') {
+        await (videoRef.current as any).setPositionAsync(newPosition);
+      }
+    } catch (err) {
+      console.warn('Seek error:', err);
     }
+    setPosition(newPosition);
   };
 
   const seekTo = async (milliseconds: number) => {
-    if (videoRef.current) {
-      await videoRef.current.setPositionAsync(milliseconds);
-      setPosition(milliseconds);
+    if (!videoRef.current) return;
+    try {
+      if (Platform.OS === 'web') {
+        const el: any = (videoRef as any).current;
+        if (el) el.currentTime = milliseconds / 1000;
+      } else if (typeof (videoRef.current as any).setPositionAsync === 'function') {
+        await (videoRef.current as any).setPositionAsync(milliseconds);
+      }
+    } catch (err) {
+      console.warn('SeekTo error:', err);
     }
+    setPosition(milliseconds);
   };
 
   const showSeekIndicator = (direction: 'forward' | 'backward') => {

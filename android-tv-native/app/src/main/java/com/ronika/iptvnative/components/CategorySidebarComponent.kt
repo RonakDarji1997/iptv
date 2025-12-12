@@ -96,8 +96,17 @@ class CategorySidebarComponent @JvmOverloads constructor(
                 
                 // Load categories for each provider (ALL categories, not just enabled)
                 val providersWithCategories = providersList.map { provider ->
+                    // Load only enabled categories for display. Categories' isEnabled flag
+                    // is set during PortalSetup and indicates the user's selection.
                     val categories = withContext(Dispatchers.IO) {
-                        database.categoryDao().getCategoriesByProviderId(provider.id)
+                        val enabled = database.categoryDao().getEnabledCategoriesByProviderId(provider.id)
+                        // For debugging: find disabled categories (if any) and log them
+                        val all = database.categoryDao().getCategoriesByProviderId(provider.id)
+                        val disabled = all.filter { it.isEnabled == false }
+                        if (disabled.isNotEmpty()) {
+                            Log.d(TAG, "⚠️ Disabled categories for provider ${provider.name}: ${disabled.map { it.name }}")
+                        }
+                        enabled
                     }
                     
                     Log.d(TAG, "📊 Total categories for provider ${provider.name}: ${categories.size}")

@@ -7,7 +7,7 @@ import {
   TouchableOpacity, 
   Text, 
   ActivityIndicator, 
-  Dimensions,
+  useWindowDimensions,
   StatusBar
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
@@ -22,14 +22,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { ProviderService } from '../services/ProviderService';
 import { onSelectedProvidersChange } from '../services/ProviderSelectionEvents';
 
-const { width } = Dimensions.get('window');
-const isTablet = width >= 768;
-const THUMBNAIL_WIDTH = isTablet ? (width - SPACING.lg * 7) / 5 : (width - SPACING.lg * 5) / 3;
-const THUMBNAIL_HEIGHT = THUMBNAIL_WIDTH * 1.5;
 const MAX_THUMBNAILS = 25;
 const FALLBACK_IMAGE = 'https://via.placeholder.com/300x450/1a1a1a/ffffff?text=No+Image';
 
 export default function SeriesScreen({ navigation }: any) {
+  const { width } = useWindowDimensions();
+  const isTablet = width >= 768;
+  const SERIES_COLUMNS = isTablet ? 4 : 3;
+  const THUMBNAIL_WIDTH = isTablet ? (width - SPACING.lg * 7) / 5 : (width - SPACING.lg * 5) / 3;
+  const THUMBNAIL_HEIGHT = THUMBNAIL_WIDTH * 1.5;
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
   const [selectedProviderId, setSelectedProviderId] = useState<string | undefined>(undefined);
@@ -325,18 +326,18 @@ export default function SeriesScreen({ navigation }: any) {
 
     return (
       <TouchableOpacity
-        style={styles.thumbnail}
+        style={[styles.thumbnail, { width: THUMBNAIL_WIDTH }]}
         onPress={() => handleSeriesPress(item)}
         activeOpacity={0.7}
       >
         {hasError ? (
-          <View style={[styles.thumbnailImage, styles.noImagePlaceholder]}>
+          <View style={[styles.thumbnailImage, styles.noImagePlaceholder, { width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT }]}> 
             <Ionicons name="play-circle-outline" size={48} color="#666" />
           </View>
         ) : (
           <Image
             source={{ uri: imageUrl }}
-            style={styles.thumbnailImage}
+            style={[styles.thumbnailImage, { width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT }]}
             resizeMode="cover"
             onError={() => setHasError(true)}
           />
@@ -379,7 +380,7 @@ export default function SeriesScreen({ navigation }: any) {
             contentContainerStyle={styles.thumbnailList}
           />
         ) : (
-          <View style={styles.loadingThumbnails}>
+          <View style={[styles.loadingThumbnails, { width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT }]}> 
             <Text style={styles.loadingText}>No series</Text>
           </View>
         )}
@@ -392,19 +393,21 @@ export default function SeriesScreen({ navigation }: any) {
   };
 
   const SeriesCard = React.memo(({ item }: { item: StalkerVodItem }) => {
+    const seriesCardWidth = isTablet ? (width - SPACING.lg * 6) / 4 : (width - SPACING.lg * 4) / 3;
+    const seriesImageHeight = seriesCardWidth * 1.5;
     const imageUrl = item.screenshot_uri 
       ? `${portalUrl}${item.screenshot_uri}` 
       : FALLBACK_IMAGE;
 
     return (
       <TouchableOpacity
-        style={styles.seriesCard}
+        style={[styles.seriesCard, { width: seriesCardWidth }]}
         onPress={() => handleSeriesPress(item)}
         activeOpacity={0.7}
       >
         <Image
           source={{ uri: imageUrl }}
-          style={styles.seriesImage}
+          style={[styles.seriesImage, { height: seriesImageHeight }]}
           resizeMode="cover"
           defaultSource={require('../../assets/icon.png')}
         />
@@ -424,20 +427,21 @@ export default function SeriesScreen({ navigation }: any) {
   });
 
   // Lazy loading configuration - must be before any conditional returns
-  const handleViewableItemsChanged = React.useCallback(({ viewableItems }: any) => {
-    if (stalkerClientRef.current) {
+  const loadCategorySeriesRef = React.useRef<typeof loadCategorySeries | null>(null);
+  useEffect(() => { loadCategorySeriesRef.current = loadCategorySeries; }, [loadCategorySeries]);
+  const onViewRef = React.useRef((args: { viewableItems: any[] }) => {
+    const { viewableItems } = args;
+    if (stalkerClientRef.current && loadCategorySeriesRef.current) {
       viewableItems.forEach((viewableItem: any) => {
         const category = viewableItem.item;
         if (category && !loadedCategoryIdsRef.current.has(category.id)) {
-          loadCategorySeries(category, stalkerClientRef.current);
+          loadCategorySeriesRef.current!(category, stalkerClientRef.current!);
         }
       });
     }
-  }, []); // Empty deps - callback never changes
+  });
 
-  const viewabilityConfig = React.useRef({
-    itemVisiblePercentThreshold: 50,
-  }).current;
+  const viewabilityConfig = React.useRef({ itemVisiblePercentThreshold: 50 }).current;
 
   const renderSeriesCard = ({ item }: { item: StalkerVodItem }) => {
     return <SeriesCard item={item} />;
@@ -472,7 +476,10 @@ export default function SeriesScreen({ navigation }: any) {
           renderItem={renderSeriesCard}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.seriesGrid}
+          numColumns={SERIES_COLUMNS}
+          columnWrapperStyle={styles.seriesColumnWrapper}
           onEndReached={loadMoreSeries}
+          key={`series-grid-${SERIES_COLUMNS}`}
           onEndReachedThreshold={0.5}
           ListFooterComponent={
             loading ? (
@@ -500,12 +507,12 @@ export default function SeriesScreen({ navigation }: any) {
         />
         */}
       </View>
-      <FlatList
+        <FlatList
         data={categories}
         renderItem={renderCategoryRow}
         keyExtractor={(item) => `${item.providerId || 'all'}_${item.id}`}
         contentContainerStyle={styles.categoryList}
-        onViewableItemsChanged={handleViewableItemsChanged}
+          onViewableItemsChanged={onViewRef.current}
         viewabilityConfig={viewabilityConfig}
         removeClippedSubviews={true}
         maxToRenderPerBatch={5}
@@ -560,12 +567,10 @@ const styles = StyleSheet.create({
     paddingRight: SPACING.lg,
   },
   thumbnail: {
-    width: THUMBNAIL_WIDTH,
+    marginRight: SPACING.md,
     marginRight: SPACING.md,
   },
   thumbnailImage: {
-    width: THUMBNAIL_WIDTH,
-    height: THUMBNAIL_HEIGHT,
     borderRadius: 8,
     backgroundColor: COLORS.backgroundLight,
   },
@@ -599,17 +604,16 @@ const styles = StyleSheet.create({
   },
   seriesGrid: {
     padding: SPACING.lg,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+  },
+  seriesColumnWrapper: {
+    justifyContent: 'space-between',
   },
   seriesCard: {
-    width: isTablet ? (width - SPACING.lg * 6) / 4 : (width - SPACING.lg * 4) / 3,
     margin: SPACING.sm,
     minWidth: 100,
   },
   seriesImage: {
     width: '100%',
-    height: isTablet ? (width - SPACING.lg * 6) / 4 * 1.5 : (width - SPACING.lg * 4) / 3 * 1.5,
     borderRadius: 8,
     backgroundColor: COLORS.backgroundLight,
   },
@@ -636,8 +640,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   loadingThumbnails: {
-    width: THUMBNAIL_WIDTH,
-    height: THUMBNAIL_HEIGHT,
     justifyContent: 'center',
     alignItems: 'center',
   },
