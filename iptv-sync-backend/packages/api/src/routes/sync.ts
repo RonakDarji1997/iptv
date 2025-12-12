@@ -125,6 +125,8 @@ export const createSyncRouter = (pool: Pool) => {
         
         // Sync each category
         for (const cat of categories) {
+          // Normalize type to uppercase so partial unique indexes (LIVE/MOVIE/SERIES) match
+          cat.type = (cat.type || '').toUpperCase();
           await client.query(
             `INSERT INTO categories (
               category_id, external_id, user_id, provider_id, name, type, content_type, 
