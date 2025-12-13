@@ -8,12 +8,15 @@ export interface ContentItem {
   id: string
   name: string
   title?: string
+  description?: string
   logo?: string
+  screenshot_uri?: string
   imageUrl?: string
   cmd?: string
   url?: string
   number?: string
   is_series?: number
+  type?: string
 }
 
 export interface Category {
@@ -23,6 +26,10 @@ export interface Category {
   type: string
   is_enabled: boolean
   censored?: number
+}
+
+export interface ContentCategory extends Category {
+  items?: ContentItem[]
 }
 
 export interface PaginatedContent {
@@ -280,6 +287,101 @@ class ContentService {
     } catch (error) {
       console.error('[ContentService] Failed to fetch all channels:', error);
       return [];
+    }
+  }
+
+  // Get featured content (mix of content from different categories)
+  async getFeaturedContent(): Promise<ContentItem[]> {
+    try {
+      // Get some content from the first few categories
+      const categories = await this.getCategories()
+      if (categories.length === 0) return []
+
+      // Take first 3 categories and get first page from each
+      const featuredPromises = categories.slice(0, 3).map(async (cat) => {
+        if (cat.type === 'LIVE') {
+          const result = await this.getLiveChannels(cat.category_id, 1)
+          return result.items.slice(0, 5) // Take 5 items from each
+        } else {
+          const result = await this.getVODContent(cat.category_id, 1)
+          return result.items.slice(0, 5)
+        }
+      })
+
+      const featuredArrays = await Promise.all(featuredPromises)
+      return featuredArrays.flat()
+    } catch (error) {
+      console.error('Failed to fetch featured content:', error)
+      return []
+    }
+  }
+
+  // Get movies categories with content
+  async getMovies(): Promise<ContentCategory[]> {
+    try {
+      const categories = await this.getCategories('MOVIE')
+      
+      // Fetch first page of content for each category in parallel
+      const categoriesWithContent = await Promise.all(
+        categories.map(async (cat) => {
+          const result = await this.getVODContent(cat.category_id, 1)
+          return {
+            ...cat,
+            items: result.items.slice(0, 20) // Limit to 20 items per category
+          }
+        })
+      )
+      
+      return categoriesWithContent
+    } catch (error) {
+      console.error('Failed to fetch movies:', error)
+      return []
+    }
+  }
+
+  // Get series categories with content
+  async getSeries(): Promise<ContentCategory[]> {
+    try {
+      const categories = await this.getCategories('SERIES')
+      
+      // Fetch first page of content for each category in parallel
+      const categoriesWithContent = await Promise.all(
+        categories.map(async (cat) => {
+          const result = await this.getVODContent(cat.category_id, 1)
+          return {
+            ...cat,
+            items: result.items.slice(0, 20)
+          }
+        })
+      )
+      
+      return categoriesWithContent
+    } catch (error) {
+      console.error('Failed to fetch series:', error)
+      return []
+    }
+  }
+
+  // Get live TV categories with content
+  async getLiveTV(): Promise<ContentCategory[]> {
+    try {
+      const categories = await this.getCategories('LIVE')
+      
+      // Fetch first page of content for each category in parallel
+      const categoriesWithContent = await Promise.all(
+        categories.map(async (cat) => {
+          const result = await this.getLiveChannels(cat.category_id, 1)
+          return {
+            ...cat,
+            items: result.items.slice(0, 20)
+          }
+        })
+      )
+      
+      return categoriesWithContent
+    } catch (error) {
+      console.error('Failed to fetch live TV:', error)
+      return []
     }
   }
 }

@@ -71,10 +71,10 @@ export default function BrowsePage() {
 
   const heroSlides = featuredContent.map(item => ({
     id: item.id,
-    title: item.title,
+    title: item.title || item.name || 'Untitled',
     description: item.description || '',
-    imageUrl: item.imageUrl,
-    type: item.type,
+    imageUrl: item.imageUrl || '',
+    type: (item.type as 'movie' | 'series' | 'live') || 'movie',
   }))
 
   return (
@@ -96,7 +96,7 @@ export default function BrowsePage() {
             <ContentRow
               key={category.id}
               title={category.name}
-              items={category.items}
+              items={category.items || []}
               type="movie"
               onItemClick={handleInfoClick}
             />
@@ -107,7 +107,7 @@ export default function BrowsePage() {
             <ContentRow
               key={category.id}
               title={category.name}
-              items={category.items}
+              items={category.items || []}
               type="series"
               onItemClick={handleInfoClick}
             />
@@ -118,7 +118,7 @@ export default function BrowsePage() {
             <ContentRow
               key={category.id}
               title={category.name}
-              items={category.items}
+              items={category.items || []}
               type="live"
               onItemClick={handleInfoClick}
             />
@@ -129,7 +129,7 @@ export default function BrowsePage() {
             <ContentRow
               key={category.id}
               title={category.name}
-              items={category.items}
+              items={category.items || []}
               type="movie"
               onItemClick={handleInfoClick}
             />

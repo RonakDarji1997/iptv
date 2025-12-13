@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Navbar from '@/components/Navbar'
 import { authService } from '@/services/authService'
@@ -10,7 +10,7 @@ import CategoryManager from '@/components/CategoryManager'
 import { Settings, User, Bell, Shield, Palette, Info, Tv2, Plus, RefreshCw, Trash2, Check, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-export default function SettingsPage() {
+function SettingsContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const tabFromUrl = searchParams.get('tab') || 'general'
@@ -468,5 +468,20 @@ export default function SettingsPage() {
         />
       )}
     </div>
+  )
+}
+
+export default function SettingsPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-black">
+        <Navbar />
+        <div className="pt-16 flex items-center justify-center h-screen">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-white"></div>
+        </div>
+      </div>
+    }>
+      <SettingsContent />
+    </Suspense>
   )
 }

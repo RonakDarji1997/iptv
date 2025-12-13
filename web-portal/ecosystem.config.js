@@ -4,14 +4,15 @@ module.exports = {
       name: 'iptv-web-portal',
       script: 'npm',
       args: 'start',
-      cwd: '/root/iptv/web-portal',
+      cwd: '/volume1/docker/iptv/web-portal',
       instances: 1,
       exec_mode: 'fork',
       watch: false,
       max_memory_restart: '500M',
       env: {
         NODE_ENV: 'production',
-        PORT: 8082
+        PORT: 8082,
+        HOSTNAME: '127.0.0.1'
       },
       error_file: './logs/error.log',
       out_file: './logs/out.log',
