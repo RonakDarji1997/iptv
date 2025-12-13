@@ -12,7 +12,7 @@ function VODPlayerContent() {
   const searchParams = useSearchParams();
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const controlsTimeoutRef = useRef<number | undefined>(undefined);
+  const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   
   const streamUrl = searchParams.get('url');
   const title = searchParams.get('title');
