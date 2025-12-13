@@ -59,8 +59,8 @@ class AuthService {
 
   logout() {
     if (typeof window !== 'undefined') {
-      localStorage.removeItem(this.tokenKey)
-      localStorage.removeItem(this.refreshTokenKey)
+      // Clear all localStorage data
+      localStorage.clear()
     }
   }
 

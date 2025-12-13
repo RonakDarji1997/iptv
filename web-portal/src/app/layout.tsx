@@ -6,8 +6,8 @@ import { Toaster } from 'react-hot-toast'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'IPTV Central - Manage Your Providers',
-  description: 'Central provider management for all your IPTV devices',
+  title: 'StreamHub - Your Entertainment Hub',
+  description: 'Watch Movies, Series, and Live TV - All in One Place',
 }
 
 export default function RootLayout({

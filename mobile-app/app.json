@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Ronika's IPTV",
-    "slug": "mobile-app",
+    "name": "StreamHub",
+    "slug": "streamhub-mobile",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/icon.png",

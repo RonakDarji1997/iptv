@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Tv2, LogOut, Plus, RefreshCw, Settings, Trash2, Check, X } from 'lucide-react'
 import toast from 'react-hot-toast'
+import Navbar from '@/components/Navbar'
 import { authService } from '@/services/authService'
 import { providerService, Provider, Category } from '@/services/providerService'
 import AddProviderModal from '@/components/AddProviderModal'
@@ -80,42 +81,16 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900">
-      {/* Navigation */}
-      <nav className="bg-black/30 backdrop-blur-lg border-b border-white/10">
-        <div className="container mx-auto px-4 py-4 flex justify-between items-center">
-          <div className="flex items-center space-x-2">
-            <Tv2 className="w-8 h-8 text-blue-500" />
-            <span className="text-2xl font-bold text-white">IPTV Central</span>
-          </div>
-
-          <div className="flex items-center space-x-4">
-            <button
-              onClick={() => setShowDevicePairing(true)}
-              className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors flex items-center space-x-2"
-            >
-              <Tv2 className="w-5 h-5" />
-              <span>Pair Device</span>
-            </button>
-
-            <button
-              onClick={handleLogout}
-              className="flex items-center space-x-2 px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
-            >
-              <LogOut className="w-5 h-5" />
-              <span>Logout</span>
-            </button>
-          </div>
-        </div>
-      </nav>
-
+    <div className="min-h-screen bg-black pb-24">
+      <Navbar />
+      
       {/* Main Content */}
-      <div className="container mx-auto px-4 py-8">
+      <div className="container mx-auto px-4 py-8 md:pt-24">
         {/* Header */}
         <div className="flex justify-between items-center mb-8">
           <div>
-            <h1 className="text-4xl font-bold mb-2">Your Providers</h1>
-            <p className="text-gray-400">Manage your IPTV providers and categories</p>
+            <h1 className="text-3xl font-bold mb-1 text-white">Your Providers</h1>
+            <p className="text-gray-400 text-sm">Manage your IPTV providers and categories</p>
           </div>
 
           <button

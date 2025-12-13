@@ -1,7 +1,7 @@
 {
-  "name": "iptv-web-portal",
+  "name": "streamhub-web-portal",
   "version": "1.0.0",
-  "description": "IPTV Central Provider Management Portal",
+  "description": "StreamHub - Your Entertainment Hub",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3001",

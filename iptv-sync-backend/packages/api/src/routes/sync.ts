@@ -133,11 +133,10 @@ export const createSyncRouter = (pool: Pool) => {
               censored, is_enabled, sort_order
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ON CONFLICT (provider_id, type, category_id) 
+            ON CONFLICT (user_id, provider_id, category_id, type) 
             DO UPDATE SET 
               external_id = EXCLUDED.external_id,
               name = EXCLUDED.name,
-              type = EXCLUDED.type,
               content_type = EXCLUDED.content_type,
               censored = EXCLUDED.censored,
               is_enabled = EXCLUDED.is_enabled,
@@ -511,27 +510,41 @@ export const createSyncRouter = (pool: Pool) => {
       
       const allCategories = [];
       let savedCategoryCount = 0;
+      let skippedCategoryCount = 0;
       
-      // Save Live TV genres
+      // Get existing Live TV categories to skip duplicates
+      const existingLiveResult = await client.query(
+        `SELECT category_id FROM categories 
+         WHERE user_id = $1 AND provider_id = $2 AND type = 'LIVE'`,
+        [userId, providerId]
+      );
+      const existingLiveIds = new Set(existingLiveResult.rows.map(r => r.category_id));
+      
+      // Save Live TV genres (skip if already exists)
       for (const genre of liveGenres) {
+        if (existingLiveIds.has(genre.id)) {
+          console.log(`  ⏭️  ${genre.title} (LIVE) - already exists, skipping`);
+          skippedCategoryCount++;
+          allCategories.push({
+            id: genre.id,
+            name: genre.title,
+            type: 'LIVE',
+            contentType: 'LIVE'
+          });
+          continue;
+        }
+        
         await client.query(
           `INSERT INTO categories (
             category_id, user_id, provider_id, name, type, content_type, 
             censored, is_enabled, sort_order, created_at, updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-          ON CONFLICT (provider_id, category_id) 
-          DO UPDATE SET 
-            name = EXCLUDED.name,
-            type = EXCLUDED.type,
-            content_type = EXCLUDED.content_type,
-            censored = EXCLUDED.censored,
-            sort_order = EXCLUDED.sort_order,
-            updated_at = NOW()`,
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
           [genre.id, userId, providerId, genre.title, 'LIVE', 'LIVE',
            genre.censored || 0, true, parseInt(genre.number || '0', 10)]
         );
         
+        console.log(`  ✅ ${genre.title} (LIVE) - added`);
         allCategories.push({
           id: genre.id,
           name: genre.title,
@@ -541,91 +554,117 @@ export const createSyncRouter = (pool: Pool) => {
         savedCategoryCount++;
       }
       
-      // Sample and save VOD categories with movie/series detection
-      for (const category of vodCategories) {
-        try {
-          // Sample first page to detect type
-          const sampleResponse = await axios.get(url, {
-            params: {
-              type: 'vod',
-              action: 'get_ordered_list',
-              category: category.id,
-              sortby: '',
-              p: 1,
-              JsHttpRequest: '1-xml'
-            },
-            headers,
-            timeout: 10000,
-          });
-
-          const items = sampleResponse.data.js?.data || [];
-          const hasSeries = items.slice(0, 3).some((item: any) => {
-            const isSeries = item.is_series;
-            return isSeries === '1' || isSeries === 1;
-          });
-
-          const type = hasSeries ? 'SERIES' : 'MOVIE';
-          
-          await client.query(
-            `INSERT INTO categories (
-              category_id, user_id, provider_id, name, type, content_type, 
-              censored, is_enabled, sort_order, created_at, updated_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-            ON CONFLICT (provider_id, category_id) 
-            DO UPDATE SET 
-              name = EXCLUDED.name,
-              type = EXCLUDED.type,
-              content_type = EXCLUDED.content_type,
-              censored = EXCLUDED.censored,
-              updated_at = NOW()`,
-            [category.id, userId, providerId, category.title, type, 'VOD',
-             category.censored || 0, true, 0]
-          );
+      // Get existing VOD categories to check for duplicates
+      const existingVodResult = await client.query(
+        `SELECT category_id, type FROM categories 
+         WHERE user_id = $1 AND provider_id = $2 AND type IN ('MOVIE', 'SERIES')`,
+        [userId, providerId]
+      );
+      const existingVodMap = new Map();
+      existingVodResult.rows.forEach(row => {
+        existingVodMap.set(`${row.category_id}-${row.type}`, true);
+      });
+      
+      // Filter out categories that need processing (not in DB yet)
+      const categoriesToDetect = vodCategories.filter(category => {
+        // Check if this category exists with either MOVIE or SERIES type
+        const existsAsMovie = existingVodMap.has(`${category.id}-MOVIE`);
+        const existsAsSeries = existingVodMap.has(`${category.id}-SERIES`);
+        
+        if (existsAsMovie || existsAsSeries) {
+          const existingType = existsAsMovie ? 'MOVIE' : 'SERIES';
+          console.log(`  ⏭️  ${category.title} (${existingType}) - already exists, skipping`);
+          skippedCategoryCount++;
           
           allCategories.push({
             id: category.id,
             name: category.title,
-            type: type,
+            type: existingType,
             contentType: 'VOD'
           });
-          savedCategoryCount++;
-          
-          console.log(`  ✓ ${category.title} → ${type}`);
-          
-          // Small delay to avoid overwhelming server
-          await new Promise(resolve => setTimeout(resolve, 100));
-        } catch (err) {
-          console.error(`  ✗ Failed to detect type for ${category.title}, defaulting to MOVIE`);
-          
-          await client.query(
-            `INSERT INTO categories (
-              category_id, user_id, provider_id, name, type, content_type, 
-              censored, is_enabled, sort_order, created_at, updated_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-            ON CONFLICT (provider_id, category_id) 
-            DO UPDATE SET 
-              name = EXCLUDED.name,
-              type = EXCLUDED.type,
-              content_type = EXCLUDED.content_type,
-              updated_at = NOW()`,
-            [category.id, userId, providerId, category.title, 'MOVIE', 'VOD',
-             category.censored || 0, true, 0]
-          );
-          
-          allCategories.push({
-            id: category.id,
-            name: category.title,
-            type: 'MOVIE',
-            contentType: 'VOD'
-          });
-          savedCategoryCount++;
+          return false; // Skip this category
         }
+        return true; // Process this category
+      });
+      
+      console.log(`📊 Need to detect type for ${categoriesToDetect.length} new categories (${vodCategories.length - categoriesToDetect.length} already exist)`);
+      
+      // Sample and save VOD categories with movie/series detection
+      // Process in parallel batches for faster sync
+      const BATCH_SIZE = 10;
+      const categoriesToProcess = [];
+      
+      // Detect types in parallel batches (only for new categories)
+      for (let i = 0; i < categoriesToDetect.length; i += BATCH_SIZE) {
+        const batch = categoriesToDetect.slice(i, i + BATCH_SIZE);
+        
+        const batchResults = await Promise.allSettled(
+          batch.map(async (category) => {
+            try {
+              const sampleResponse = await axios.get(url, {
+                params: {
+                  type: 'vod',
+                  action: 'get_ordered_list',
+                  category: category.id,
+                  sortby: '',
+                  p: 1,
+                  JsHttpRequest: '1-xml'
+                },
+                headers,
+                timeout: 10000,
+              });
+
+              const items = sampleResponse.data.js?.data || [];
+              const hasSeries = items.slice(0, 3).some((item: any) => {
+                const isSeries = item.is_series;
+                return isSeries === '1' || isSeries === 1;
+              });
+
+              const type = hasSeries ? 'SERIES' : 'MOVIE';
+              console.log(`  ✓ ${category.title} → ${type}`);
+              
+              return { category, type, success: true };
+            } catch (err) {
+              console.error(`  ✗ Failed to detect type for ${category.title}, defaulting to MOVIE`);
+              return { category, type: 'MOVIE', success: false };
+            }
+          })
+        );
+        
+        // Collect results
+        batchResults.forEach((result) => {
+          if (result.status === 'fulfilled') {
+            categoriesToProcess.push(result.value);
+          }
+        });
+      }
+      
+      // Batch insert all new categories
+      for (const { category, type } of categoriesToProcess) {
+        await client.query(
+          `INSERT INTO categories (
+            category_id, user_id, provider_id, name, type, content_type, 
+            censored, is_enabled, sort_order, created_at, updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
+          [category.id, userId, providerId, category.title, type, 'VOD',
+           category.censored || 0, true, 0]
+        );
+        
+        allCategories.push({
+          id: category.id,
+          name: category.title,
+          type: type,
+          contentType: 'VOD'
+        });
+        savedCategoryCount++;
       }
       
       await client.query('COMMIT');
-      console.log(`✅ Saved ${savedCategoryCount} categories to database`);
+      console.log(`\n📊 Sync Summary:`);
+      console.log(`   ✅ Added: ${savedCategoryCount} new categories`);
+      console.log(`   ⏭️  Skipped: ${skippedCategoryCount} existing categories`);
+      console.log(`   📦 Total: ${savedCategoryCount + skippedCategoryCount} categories`);
       
       // Update provider sync status
       await client.query(

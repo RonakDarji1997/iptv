@@ -77,9 +77,38 @@ export default function CategoryManager({ provider, onClose }: CategoryManagerPr
     })
   }
 
-  const liveCategories = categories.filter((c) => c.type === 'CHANNEL' || c.type === 'LIVE')
-  const movieCategories = categories.filter((c) => c.type === 'MOVIE' || c.type === 'VOD')
-  const seriesCategories = categories.filter((c) => c.type === 'SERIES')
+  const liveCategories = categories
+    .filter((c) => c.type === 'CHANNEL' || c.type === 'LIVE')
+    .sort((a, b) => {
+      // Move censored categories to the end
+      if (a.censored !== b.censored) {
+        return (a.censored || 0) - (b.censored || 0)
+      }
+      // Sort alphabetically by name
+      return a.name.localeCompare(b.name)
+    })
+  
+  const movieCategories = categories
+    .filter((c) => c.type === 'MOVIE' || c.type === 'VOD')
+    .sort((a, b) => {
+      // Move censored categories to the end
+      if (a.censored !== b.censored) {
+        return (a.censored || 0) - (b.censored || 0)
+      }
+      // Sort alphabetically by name
+      return a.name.localeCompare(b.name)
+    })
+  
+  const seriesCategories = categories
+    .filter((c) => c.type === 'SERIES')
+    .sort((a, b) => {
+      // Move censored categories to the end
+      if (a.censored !== b.censored) {
+        return (a.censored || 0) - (b.censored || 0)
+      }
+      // Sort alphabetically by name
+      return a.name.localeCompare(b.name)
+    })
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
@@ -201,15 +230,27 @@ function CategorySection({
         ) : (
           categories.map((category) => {
             const isEnabled = category.isEnabled ?? category.is_enabled ?? true
+            const isCensored = category.censored === 1
             return (
               <button
                 key={category.id}
                 onClick={() => onToggle(category.id, isEnabled)}
-                className="w-full flex items-center justify-between p-3 bg-white/5 hover:bg-white/10 rounded-lg transition-colors text-left"
+                className={`w-full flex items-center justify-between p-3 rounded-lg transition-colors text-left ${
+                  isCensored 
+                    ? 'bg-red-900/20 hover:bg-red-900/30 border border-red-500/20' 
+                    : 'bg-white/5 hover:bg-white/10'
+                }`}
               >
-                <span className="text-sm flex-1 truncate">{category.name}</span>
+                <div className="flex items-center space-x-2 flex-1">
+                  <span className="text-sm truncate">{category.name}</span>
+                  {isCensored && (
+                    <span className="text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 border border-red-500/30 rounded uppercase font-semibold">
+                      18+
+                    </span>
+                  )}
+                </div>
                 <div
-                  className={`w-5 h-5 rounded flex items-center justify-center ${
+                  className={`w-5 h-5 rounded flex items-center justify-center ml-2 ${
                     isEnabled
                       ? 'bg-green-500'
                       : 'bg-gray-700 border border-gray-600'

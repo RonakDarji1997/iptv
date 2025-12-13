@@ -5,8 +5,8 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "echo 'No build needed for database package'",
-    "migrate": "node dist/migrate.js",
+    "build": "tsc",
+    "migrate": "npm run build && node dist/migrate.js",
     "migrate:create": "node dist/create-migration.js",
     "seed": "node dist/seed.js",
     "reset": "node dist/reset.js"

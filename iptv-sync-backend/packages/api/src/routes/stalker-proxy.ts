@@ -152,10 +152,9 @@ export const createStalkerProxyRouter = (pool: Pool) => {
                 category_id, user_id, provider_id, name, type, content_type,
                 censored, is_enabled, sort_order
               ) VALUES ($1, $2, $3, $4, $5, $6, $7, true, 0)
-              ON CONFLICT (provider_id, category_id)
+              ON CONFLICT (user_id, provider_id, category_id, type)
               DO UPDATE SET 
                 name = EXCLUDED.name,
-                type = EXCLUDED.type,
                 content_type = EXCLUDED.content_type,
                 censored = EXCLUDED.censored,
                 updated_at = NOW()`,
@@ -170,10 +169,9 @@ export const createStalkerProxyRouter = (pool: Pool) => {
                 category_id, user_id, provider_id, name, type, content_type,
                 censored, is_enabled, sort_order
               ) VALUES ($1, $2, $3, $4, $5, $6, $7, true, 0)
-              ON CONFLICT (provider_id, category_id)
+              ON CONFLICT (user_id, provider_id, category_id, type)
               DO UPDATE SET 
                 name = EXCLUDED.name,
-                type = EXCLUDED.type,
                 content_type = EXCLUDED.content_type,
                 censored = EXCLUDED.censored,
                 updated_at = NOW()`,
@@ -188,10 +186,9 @@ export const createStalkerProxyRouter = (pool: Pool) => {
                 category_id, user_id, provider_id, name, type, content_type,
                 censored, is_enabled, sort_order
               ) VALUES ($1, $2, $3, $4, $5, $6, $7, true, 0)
-              ON CONFLICT (provider_id, category_id)
+              ON CONFLICT (user_id, provider_id, category_id, type)
               DO UPDATE SET 
                 name = EXCLUDED.name,
-                type = EXCLUDED.type,
                 content_type = EXCLUDED.content_type,
                 censored = EXCLUDED.censored,
                 updated_at = NOW()`,
