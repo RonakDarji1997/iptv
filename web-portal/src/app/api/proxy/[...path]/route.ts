@@ -17,9 +17,10 @@ function getCleanHeaders(request: NextRequest) {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
-  const path = params.path.join('/')
+  const { path: pathArray } = await params
+  const path = pathArray.join('/')
   const searchParams = request.nextUrl.searchParams.toString()
   const url = `${BACKEND_URL}/${path}${searchParams ? `?${searchParams}` : ''}`
   
@@ -39,9 +40,10 @@ export async function GET(
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
-  const path = params.path.join('/')
+  const { path: pathArray } = await params
+  const path = pathArray.join('/')
   const url = `${BACKEND_URL}/${path}`
   
   try {
@@ -63,9 +65,10 @@ export async function POST(
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
-  const path = params.path.join('/')
+  const { path: pathArray } = await params
+  const path = pathArray.join('/')
   const url = `${BACKEND_URL}/${path}`
   
   try {
@@ -87,9 +90,10 @@ export async function PUT(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
-  const path = params.path.join('/')
+  const { path: pathArray } = await params
+  const path = pathArray.join('/')
   const url = `${BACKEND_URL}/${path}`
   
   try {
