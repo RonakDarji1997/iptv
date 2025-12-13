@@ -12,7 +12,7 @@ function LivePlayerContent() {
   const searchParams = useSearchParams();
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const controlsTimeoutRef = useRef<number | undefined>(undefined);
+  const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   
   const cmd = searchParams.get('cmd');
   const channelName = searchParams.get('name');
