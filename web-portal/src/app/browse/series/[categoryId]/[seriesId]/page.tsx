@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { authService } from '@/services/authService';
 import { UpscaledImage } from '@/components/UpscaledImage';
 import { cache } from '@/utils/cache';
+import { API_URL } from '@/config/constants';
 
 interface SeriesInfo {
   id: string;
@@ -72,7 +73,7 @@ export default function SeriesDetailPage() {
         }
 
         const token = authService.getToken();
-        const response = await fetch('http://localhost:3000/sync/pull', {
+        const response = await fetch(`${API_URL}/sync/pull`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         
@@ -123,7 +124,7 @@ export default function SeriesDetailPage() {
         const seasonsData = await cache.getOrFetch(
           seasonsCacheKey,
           async () => {
-            const response = await fetch(`http://localhost:3000/stalker-proxy/series/seasons/${seriesId}`, {
+            const response = await fetch(`${API_URL}/stalker-proxy/series/seasons/${seriesId}`, {
               headers: { Authorization: `Bearer ${token}` },
             });
             return response.json();
@@ -163,7 +164,7 @@ export default function SeriesDetailPage() {
         episodesCacheKey,
         async () => {
           const response = await fetch(
-            `http://localhost:3000/stalker-proxy/series/episodes/${seriesId}/${seasonId}`,
+            `${API_URL}/stalker-proxy/series/episodes/${seriesId}/${seasonId}`,
             { headers: { Authorization: `Bearer ${token}` } }
           );
           return response.json();
@@ -199,7 +200,7 @@ export default function SeriesDetailPage() {
         episodeInfoCacheKey,
         async () => {
           const response = await fetch(
-            `http://localhost:3000/stalker-proxy/episode-info/${seriesId}/${seasonId}/${episodeId}`,
+            `${API_URL}/stalker-proxy/episode-info/${seriesId}/${seasonId}/${episodeId}`,
             { headers: { Authorization: `Bearer ${token}` } }
           );
           return response.json();
@@ -221,7 +222,7 @@ export default function SeriesDetailPage() {
       // Step 2: Create streaming link using the file id in proper format
       const cmd = `/media/file_${fileId}.mpg`;
       
-      const linkResponse = await fetch('http://localhost:3000/stalker-proxy/create-link', {
+      const linkResponse = await fetch(`${API_URL}/stalker-proxy/create-link`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

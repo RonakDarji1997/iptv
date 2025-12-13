@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { authService } from '@/services/authService';
 import { UpscaledImage } from '@/components/UpscaledImage';
 import { cache } from '@/utils/cache';
+import { API_URL } from '@/config/constants';
 
 interface MovieInfo {
   id: string;
@@ -57,7 +58,7 @@ export default function MovieDetailPage() {
         }
 
         const token = authService.getToken();
-        const response = await fetch('http://localhost:3000/sync/pull', {
+        const response = await fetch(`${API_URL}/sync/pull`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         
@@ -131,7 +132,7 @@ export default function MovieDetailPage() {
       const vodInfoData = await cache.getOrFetch(
         vodInfoCacheKey,
         async () => {
-          const response = await fetch(`http://localhost:3000/stalker-proxy/vod-info/${movieId}`, {
+          const response = await fetch(`${API_URL}/stalker-proxy/vod-info/${movieId}`, {
             headers: { Authorization: `Bearer ${token}` },
           });
           return response.json();
@@ -153,7 +154,7 @@ export default function MovieDetailPage() {
       // Step 2: Create streaming link using the file id in proper format
       const cmd = `/media/file_${fileId}.mpg`;
       
-      const response = await fetch('http://localhost:3000/stalker-proxy/create-link', {
+      const response = await fetch(`${API_URL}/stalker-proxy/create-link`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

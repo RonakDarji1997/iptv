@@ -6,6 +6,7 @@ import { ArrowLeft, Volume2, VolumeX, Maximize, ChevronLeft, ChevronRight, Loade
 import toast from 'react-hot-toast';
 import { authService } from '@/services/authService';
 import { contentService } from '@/services/contentService';
+import { API_URL } from '@/config/constants';
 
 function LivePlayerContent() {
   const router = useRouter();
@@ -72,7 +73,7 @@ function LivePlayerContent() {
       
       const token = authService.getToken();
       
-      const response = await fetch(`http://localhost:3000/stalker-proxy/channel-stream?cmd=${encodeURIComponent(cmd || '')}`, {
+      const response = await fetch(`${API_URL}/stalker-proxy/channel-stream?cmd=${encodeURIComponent(cmd || '')}`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },

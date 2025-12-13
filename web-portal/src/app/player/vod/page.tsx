@@ -6,6 +6,7 @@ import { ArrowLeft, Play, Pause, Volume2, VolumeX, Maximize, Rewind, FastForward
 import toast from 'react-hot-toast';
 import { authService } from '@/services/authService';
 import { cache } from '@/utils/cache';
+import { API_URL } from '@/config/constants';
 
 function VODPlayerContent() {
   const router = useRouter();
@@ -223,7 +224,7 @@ function VODPlayerContent() {
         episodeCacheKey,
         async () => {
           const response = await fetch(
-            `http://localhost:3000/stalker-proxy/episode-info/${seriesId}/${seasonId}/${episode.id}`,
+            `${API_URL}/stalker-proxy/episode-info/${seriesId}/${seasonId}/${episode.id}`,
             { headers: { Authorization: `Bearer ${token}` } }
           );
           return response.json();
@@ -240,7 +241,7 @@ function VODPlayerContent() {
       const cmd = `/media/file_${fileId}.mpg`;
       
       // Create stream link (don't cache this as it may expire)
-      const linkResponse = await fetch('http://localhost:3000/stalker-proxy/create-link', {
+      const linkResponse = await fetch(`${API_URL}/stalker-proxy/create-link`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
