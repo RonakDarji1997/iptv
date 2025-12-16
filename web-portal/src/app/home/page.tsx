@@ -55,6 +55,7 @@ interface ChannelAnalytics {
   play_count: number
   last_watched_at: string
   cmd?: string
+  channel_cmd?: string
 }
 
 export default function HomePage() {
