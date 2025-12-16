@@ -841,24 +841,30 @@ function VODPlayerContent() {
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-screen bg-black overflow-hidden"
+      className="relative w-full h-screen bg-black"
       style={{
         position: 'fixed',
         top: 0,
         left: 0,
         right: 0,
         bottom: 0,
-        overscrollBehavior: 'none'
+        overflow: 'hidden'
       }}
       onMouseMove={handleMouseMove}
       onClick={togglePlayPause}
       onDoubleClick={handleDoubleClick}
       onTouchStart={(e) => {
-        // Show controls on touch
         handleMouseMove();
       }}
+      onTouchMove={(e) => {
+        // Only prevent scrolling if not interacting with controls
+        const target = e.target as HTMLElement;
+        const isControl = target.closest('[data-controls]');
+        if (!isControl) {
+          e.preventDefault();
+        }
+      }}
       onTouchEnd={(e) => {
-        // Handle tap for play/pause on video area only
         const target = e.target as HTMLElement;
         if (target === containerRef.current || target === videoRef.current) {
           togglePlayPause();
@@ -921,7 +927,7 @@ function VODPlayerContent() {
 
       {/* On-Screen Playback Controls */}
       {showControls && !isBuffering && (
-        <div className="absolute inset-0 flex items-center justify-center gap-12 pointer-events-none">
+        <div className="absolute inset-0 flex items-center justify-center gap-12 pointer-events-none" data-controls="true">
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -969,6 +975,7 @@ function VODPlayerContent() {
 
       {/* Top Bar */}
       <div
+        data-controls="true"
         className={`absolute top-0 left-0 right-0 bg-gradient-to-b from-black/80 to-transparent p-4 sm:p-6 transition-opacity duration-300 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
@@ -999,6 +1006,7 @@ function VODPlayerContent() {
 
       {/* Bottom Controls */}
       <div
+        data-controls="true"
         className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-6 transition-opacity duration-300 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
