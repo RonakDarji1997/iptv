@@ -93,6 +93,36 @@ print_info "🔧 Step 3: Deploying Backend API"
 print_info "=================================="
 cd "$BACKEND_DIR"
 
+# Check if Docker network exists and create if needed
+print_info "Checking Docker network connectivity..."
+if ! sudo docker network ls | grep -q "iptv_iptv-network"; then
+    print_warning "External network 'iptv_iptv-network' not found. Creating it..."
+    sudo docker network create iptv_iptv-network || print_warning "Network might already exist"
+fi
+print_success "Docker network verified"
+
+# Ensure postgres and redis containers are running
+print_info "Ensuring database and redis are running..."
+sudo docker-compose up -d postgres redis || {
+    print_error "Failed to start postgres/redis"
+    exit 1
+}
+print_success "Database and Redis are running"
+
+print_info "Waiting for database to be healthy..."
+for i in {1..30}; do
+    if sudo docker ps | grep -q "iptv-sync-postgres.*healthy" || sudo docker exec iptv-sync-postgres pg_isready -U postgres > /dev/null 2>&1; then
+        print_success "Database is healthy"
+        break
+    fi
+    if [ $i -eq 30 ]; then
+        print_error "Database failed to become healthy"
+        sudo docker-compose logs postgres
+        exit 1
+    fi
+    sleep 2
+done
+
 print_info "Building Docker image for backend API..."
 sudo docker-compose build api || {
     print_error "Docker build failed for backend"
@@ -108,15 +138,31 @@ sudo docker-compose up -d api || {
 print_success "Backend API container restarted"
 
 print_info "Waiting for backend to be ready..."
-sleep 5
+sleep 10
 
 if sudo docker ps | grep -q "iptv-sync-api"; then
     print_success "Backend API container is running"
+    
+    # Verify API is accessible
+    print_info "Testing API health endpoint..."
+    if sudo docker exec iptv-sync-api curl -f http://localhost:3000/health > /dev/null 2>&1; then
+        print_success "API health check passed"
+    else
+        print_warning "API health check failed (might still be starting up)"
+    fi
 else
     print_error "Backend API container is not running"
     print_warning "Showing last 50 lines of logs:"
     sudo docker-compose logs --tail=50 api
     exit 1
+fi
+
+# Verify network connectivity
+print_info "Verifying network connectivity..."
+if sudo docker network inspect iptv_iptv-network | grep -q "iptv-sync-api"; then
+    print_success "API is connected to iptv_iptv-network"
+else
+    print_warning "API might not be connected to iptv_iptv-network"
 fi
 echo ""
 
@@ -148,66 +194,3 @@ echo "🔧 Manage Services:"
 echo "  - PM2: sudo pm2 status | restart | stop iptv-web-portal"
 echo "  - Docker: sudo docker ps | sudo docker-compose logs api"
 echo ""
-
-    print_warning ".env.production not found, creating from example..."
-    cp .env.example .env.production
-    print_error "Please edit .env.production with your credentials before continuing!"
-    exit 1
-fi
-
-# Install dependencies
-print_info "Installing backend dependencies..."
-npm install
-
-# Build backend
-print_info "Building backend..."
-npm run build
-
-# Run migrations (safe - won't lose data)
-print_info "Running database migrations..."
-npm run db:migrate
-
-# Restart backend with PM2
-print_info "Restarting backend with PM2..."
-if pm2 list | grep -q "iptv-sync-backend"; then
-    pm2 restart iptv-sync-backend
-else
-    pm2 start ecosystem.config.js --env production
-fi
-
-# Deploy Web Portal
-print_info "=== Deploying Web Portal ==="
-cd $PROJECT_ROOT/web-portal
-
-# Install dependencies
-print_info "Installing web portal dependencies..."
-npm install
-
-# Build web portal
-print_info "Building web portal for production..."
-npm run build
-
-# Restart web portal with PM2
-print_info "Restarting web portal with PM2..."
-if pm2 list | grep -q "iptv-web-portal"; then
-    pm2 restart iptv-web-portal
-else
-    pm2 start ecosystem.config.js --env production
-fi
-
-# Save PM2 configuration
-print_info "Saving PM2 configuration..."
-pm2 save
-
-# Show PM2 status
-print_info "=== PM2 Status ==="
-pm2 list
-
-print_info "✅ Deployment completed successfully!"
-print_info ""
-print_info "Useful commands:"
-print_info "  - View logs: pm2 logs"
-print_info "  - Monitor: pm2 monit"
-print_info "  - Restart: pm2 restart all"
-print_info "  - Backend logs: pm2 logs iptv-sync-backend"
-print_info "  - Portal logs: pm2 logs iptv-web-portal"
