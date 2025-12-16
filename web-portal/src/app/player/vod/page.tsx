@@ -852,7 +852,6 @@ function VODPlayerContent() {
       }}
       onMouseMove={handleMouseMove}
       onClick={togglePlayPause}
-      onDoubleClick={handleDoubleClick}
       onTouchStart={(e) => {
         handleMouseMove();
       }}
@@ -1023,6 +1022,24 @@ function VODPlayerContent() {
         <div
           className="w-full bg-gray-600 rounded-full mb-4 cursor-pointer group relative"
           onClick={handleProgressClick}
+          onTouchStart={(e) => {
+            e.stopPropagation();
+            const touch = e.touches[0];
+            const rect = e.currentTarget.getBoundingClientRect();
+            const pos = (touch.clientX - rect.left) / rect.width;
+            if (videoRef.current) {
+              videoRef.current.currentTime = pos * duration;
+            }
+          }}
+          onTouchMove={(e) => {
+            e.stopPropagation();
+            const touch = e.touches[0];
+            const rect = e.currentTarget.getBoundingClientRect();
+            const pos = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width));
+            if (videoRef.current) {
+              videoRef.current.currentTime = pos * duration;
+            }
+          }}
           style={{ height: '8px' }}
         >
           <div
