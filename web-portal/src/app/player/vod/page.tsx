@@ -77,6 +77,7 @@ function VODPlayerContent() {
   const [transcodeUrl, setTranscodeUrl] = useState<string | null>(null);
   const [selectedQuality, setSelectedQuality] = useState<QualityOption>('original');
   const [showQualityMenu, setShowQualityMenu] = useState(false);
+  const [isDraggingProgress, setIsDraggingProgress] = useState(false);
 
   // Subtitle functions (defined before useEffect that uses them)
   const selectSubtitle = async (subtitle: Subtitle) => {
@@ -854,6 +855,17 @@ function VODPlayerContent() {
       onClick={togglePlayPause}
       onTouchStart={(e) => {
         handleMouseMove();
+        setIsDraggingProgress(false);
+      }}
+      onTouchEnd={(e) => {
+        // Only toggle play/pause if not dragging and tapping on video area
+        if (!isDraggingProgress) {
+          const target = e.target as HTMLElement;
+          if (target === containerRef.current || target === videoRef.current) {
+            togglePlayPause();
+          }
+        }
+        setIsDraggingProgress(false);
       }}
       onTouchMove={(e) => {
         // Only prevent scrolling if not interacting with controls
@@ -861,12 +873,6 @@ function VODPlayerContent() {
         const isControl = target.closest('[data-controls]');
         if (!isControl) {
           e.preventDefault();
-        }
-      }}
-      onTouchEnd={(e) => {
-        const target = e.target as HTMLElement;
-        if (target === containerRef.current || target === videoRef.current) {
-          togglePlayPause();
         }
       }}
     >
@@ -1021,9 +1027,13 @@ function VODPlayerContent() {
         {/* Progress Bar */}
         <div
           className="w-full bg-gray-600 rounded-full mb-4 cursor-pointer group relative"
-          onClick={handleProgressClick}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleProgressClick(e);
+          }}
           onTouchStart={(e) => {
             e.stopPropagation();
+            setIsDraggingProgress(true);
             const touch = e.touches[0];
             const rect = e.currentTarget.getBoundingClientRect();
             const pos = (touch.clientX - rect.left) / rect.width;
@@ -1033,12 +1043,16 @@ function VODPlayerContent() {
           }}
           onTouchMove={(e) => {
             e.stopPropagation();
+            setIsDraggingProgress(true);
             const touch = e.touches[0];
             const rect = e.currentTarget.getBoundingClientRect();
             const pos = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width));
             if (videoRef.current) {
               videoRef.current.currentTime = pos * duration;
             }
+          }}
+          onTouchEnd={(e) => {
+            e.stopPropagation();
           }}
           style={{ height: '8px' }}
         >
