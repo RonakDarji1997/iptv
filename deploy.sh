@@ -62,7 +62,7 @@ print_info "=================================="
 cd "$WEB_PORTAL_DIR"
 
 print_info "Installing dependencies..."
-sudo npm install || {
+sudo npm install --legacy-peer-deps || {
     print_error "npm install failed for web portal"
     exit 1
 }
