@@ -120,6 +120,8 @@ export default function SeriesDetailPage() {
   useEffect(() => {
     const fetchSeriesData = async () => {
       try {
+        const token = authService.getToken();
+        
         // Try to get series data from sessionStorage or localStorage cache
         const sessionData = sessionStorage.getItem(`series_${seriesId}`);
         if (sessionData) {
@@ -137,9 +139,22 @@ export default function SeriesDetailPage() {
               setSeriesInfo(series);
             }
           }
+          
+          // If still no series info, fetch from API
+          if (!seriesInfo) {
+            try {
+              const response = await fetch(`${API_URL}/stalker-proxy/vod/info/${seriesId}`, {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              const data = await response.json();
+              if (data.success && data.info) {
+                setSeriesInfo(data.info);
+              }
+            } catch (error) {
+              console.error('Failed to fetch series info from API:', error);
+            }
+          }
         }
-
-        const token = authService.getToken();
 
         // Fetch seasons with cache
         const seasonsCacheKey = `series-seasons:${seriesId}`;
