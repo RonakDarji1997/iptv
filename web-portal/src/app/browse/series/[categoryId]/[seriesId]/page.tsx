@@ -143,7 +143,7 @@ export default function SeriesDetailPage() {
           // If still no series info, fetch from API
           if (!seriesInfo) {
             try {
-              const response = await fetch(`${API_URL}/stalker-proxy/vod/info/${seriesId}`, {
+              const response = await fetch(`${API_URL}/stalker-proxy/vod-info/${seriesId}`, {
                 headers: { Authorization: `Bearer ${token}` },
               });
               const data = await response.json();

@@ -1010,7 +1010,7 @@ function VODPlayerContent() {
       {/* Bottom Controls */}
       <div
         data-controls="true"
-        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-4 sm:px-6 pt-6 pb-12 sm:pb-6 transition-opacity duration-300 ${
+        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-4 sm:px-6 pt-6 pb-16 sm:pb-10 transition-opacity duration-300 ${
           showControls ? 'opacity-100' : 'opacity-0'
         }`}
         style={{
