@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { authService } from './authService'
 import { cache } from '@/utils/cache'
+import { apiCache } from '@/utils/api-cache'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'
 
@@ -17,6 +18,18 @@ export interface ContentItem {
   number?: string
   is_series?: number
   type?: string
+  // TMDB enriched data
+  tmdb?: {
+    id: number
+    posterUrl: string | null
+    backdropUrl: string | null
+    rating: number
+    voteCount: number
+    overview: string
+    releaseDate?: string
+    genres?: string[]
+    imdbId?: string
+  }
 }
 
 export interface Category {
@@ -122,19 +135,11 @@ class ContentService {
   // Get categories by type
   async getCategories(type?: 'LIVE' | 'MOVIE' | 'SERIES'): Promise<Category[]> {
     try {
-      // Use cache for categories
-      const cacheKey = type ? `categories:${type}` : 'categories:all';
-      
-      const categories = await cache.getOrFetch(
-        cacheKey,
-        async () => {
-          const response = await axios.get(`${API_URL}/sync/pull`, {
-            headers: this.getHeaders(),
-          });
-          return response.data.data?.categories || [];
-        },
-        5 * 60 * 1000 // 5 minutes TTL for categories
-      );
+      // Use persistent cache for categories
+      const data = await apiCache.fetch(`${API_URL}/sync/pull`, {
+        headers: this.getHeaders(),
+      });
+      const categories = data.data?.categories || [];
       
       if (type) {
         return categories
@@ -159,29 +164,17 @@ class ContentService {
   // Get live TV channels for a category
   async getLiveChannels(categoryId: string, page: number = 1): Promise<PaginatedContent> {
     try {
-      // Use cache for channel pages
-      const cacheKey = `channels:${categoryId}:page:${page}`;
-      
-      return await cache.getOrFetch(
-        cacheKey,
-        async () => {
-          const response = await axios.get(
-            `${API_URL}/stalker-proxy/channels/${categoryId}`,
-            {
-              headers: this.getHeaders(),
-              params: { page }
-            }
-          );
+      const url = `${API_URL}/stalker-proxy/channels/${categoryId}?page=${page}`;
+      const response = await apiCache.fetch(url, {
+        headers: this.getHeaders(),
+      });
 
-          return {
-            items: response.data.channels || [],
-            totalItems: response.data.totalItems || 0,
-            maxPage: response.data.maxPage || 1,
-            currentPage: page
-          };
-        },
-        3 * 60 * 1000 // 3 minutes TTL for channels
-      );
+      return {
+        items: response.channels || [],
+        totalItems: response.totalItems || 0,
+        maxPage: response.maxPage || 1,
+        currentPage: page
+      };
     } catch (error) {
       console.error('Failed to fetch live channels:', error)
       return { items: [], totalItems: 0, maxPage: 1, currentPage: page }
@@ -191,29 +184,17 @@ class ContentService {
   // Get VOD content (movies/series) for a category
   async getVODContent(categoryId: string, page: number = 1): Promise<PaginatedContent> {
     try {
-      // Use cache for VOD pages
-      const cacheKey = `vod:${categoryId}:page:${page}`;
-      
-      return await cache.getOrFetch(
-        cacheKey,
-        async () => {
-          const response = await axios.get(
-            `${API_URL}/stalker-proxy/vod/${categoryId}`,
-            {
-              headers: this.getHeaders(),
-              params: { page }
-            }
-          );
+      const url = `${API_URL}/stalker-proxy/vod/${categoryId}?page=${page}`;
+      const response = await apiCache.fetch(url, {
+        headers: this.getHeaders(),
+      });
 
-          return {
-            items: response.data.items || [],
-            totalItems: response.data.totalItems || 0,
-            maxPage: response.data.maxPage || 1,
-            currentPage: page
-          };
-        },
-        3 * 60 * 1000 // 3 minutes TTL for VOD content
-      );
+      return {
+        items: response.items || [],
+        totalItems: response.totalItems || 0,
+        maxPage: response.maxPage || 1,
+        currentPage: page
+      };
     } catch (error) {
       console.error('Failed to fetch VOD content:', error)
       return { items: [], totalItems: 0, maxPage: 1, currentPage: page }
@@ -381,6 +362,209 @@ class ContentService {
       return categoriesWithContent
     } catch (error) {
       console.error('Failed to fetch live TV:', error)
+      return []
+    }
+  }
+
+  // Enrich content with TMDB data
+  async enrichWithTMDB(item: ContentItem, type: 'movie' | 'tv'): Promise<ContentItem> {
+    try {
+      const title = item.name || item.title || '';
+      if (!title) return item;
+
+      // Check if already enriched (cache)
+      if (item.tmdb) return item;
+
+      console.log(`[TMDB] Enriching ${type}: "${title}"`);
+
+      // Fetch TMDB data
+      const response = await fetch(
+        `/api/tmdb?action=smart-search&title=${encodeURIComponent(title)}&type=${type}`
+      );
+      
+      if (!response.ok) {
+        console.log(`[TMDB] Failed to fetch for "${title}": ${response.status}`);
+        return item;
+      }
+
+      const data = await response.json();
+      if (!data.success || !data.details) {
+        console.log(`[TMDB] No match found for "${title}"`);
+        return item;
+      }
+
+      const details = data.details;
+      console.log(`[TMDB] Match found for "${title}":`, {
+        tmdbId: details.id,
+        title: details.title || details.name,
+        rating: details.vote_average,
+        year: details.release_date || details.first_air_date,
+      });
+
+      // Add TMDB data to item
+      return {
+        ...item,
+        tmdb: {
+          id: details.id,
+          posterUrl: details.poster_path 
+            ? `https://image.tmdb.org/t/p/w500${details.poster_path}`
+            : null,
+          backdropUrl: details.backdrop_path
+            ? `https://image.tmdb.org/t/p/w1280${details.backdrop_path}`
+            : null,
+          rating: details.vote_average || 0,
+          voteCount: details.vote_count || 0,
+          overview: details.overview || '',
+          releaseDate: details.release_date || details.first_air_date,
+          genres: details.genres?.map((g: any) => g.name) || [],
+          imdbId: details.imdb_id,
+        },
+      };
+    } catch (error) {
+      console.error(`[TMDB] Error enriching "${item.name || item.title}":`, error);
+      return item;
+    }
+  }
+
+  // Batch enrich multiple items
+  async enrichBatchWithTMDB(items: ContentItem[], type: 'movie' | 'tv'): Promise<ContentItem[]> {
+    try {
+      console.log(`[TMDB] Batch enriching ${items.length} ${type}s (processing first 10)`);
+      
+      // Enrich up to 10 items at a time to avoid rate limits
+      const enrichPromises = items.slice(0, 10).map(item => this.enrichWithTMDB(item, type));
+      const enriched = await Promise.all(enrichPromises);
+      
+      const successCount = enriched.filter(item => item.tmdb).length;
+      console.log(`[TMDB] Batch complete: ${successCount}/10 enriched`);
+      
+      // Return enriched items plus remaining items
+      return [...enriched, ...items.slice(10)];
+    } catch (error) {
+      console.error('[TMDB] Batch enrichment failed:', error);
+      return items;
+    }
+  }
+
+  // Get continue watching (recent watch progress)
+  async getContinueWatching(limit: number = 10): Promise<any[]> {
+    try {
+      const response = await axios.get(`${API_URL}/progress`, {
+        headers: this.getHeaders(),
+      })
+      
+      if (response.data.success && response.data.progress) {
+        return response.data.progress
+          .filter((p: any) => p.current_position > 0 && p.current_position < p.duration * 0.95) // Not finished
+          .slice(0, limit)
+      }
+      
+      return []
+    } catch (error) {
+      console.error('Failed to fetch continue watching:', error)
+      return []
+    }
+  }
+
+  // Get user's favorite categories
+  async getFavoriteCategories(limit: number = 10): Promise<any[]> {
+    try {
+      const response = await axios.get(`${API_URL}/favorites`, {
+        headers: this.getHeaders(),
+      })
+      
+      if (response.data.success && response.data.favorites) {
+        // Filter for category type favorites
+        const categoryFavorites = response.data.favorites
+          .filter((f: any) => f.content_type === 'CATEGORY')
+          .slice(0, limit)
+        
+        return categoryFavorites
+      }
+      
+      return []
+    } catch (error) {
+      console.error('Failed to fetch favorite categories:', error)
+      return []
+    }
+  }
+
+  // Get user's favorite channel (single most favorite)
+  async getFavoriteChannel(): Promise<any | null> {
+    try {
+      const response = await axios.get(`${API_URL}/user-settings`, {
+        headers: this.getHeaders(),
+      })
+      
+      if (response.data.success && response.data.settings?.favorite_channel_id) {
+        const channelId = response.data.settings.favorite_channel_id
+        
+        // Fetch channel details from analytics or favorites
+        const analyticsResponse = await axios.get(`${API_URL}/channel-analytics/top?limit=100`, {
+          headers: this.getHeaders(),
+        })
+        
+        if (analyticsResponse.data.success) {
+          const channel = analyticsResponse.data.channels.find((c: any) => c.channel_id === channelId)
+          return channel || null
+        }
+      }
+      
+      return null
+    } catch (error) {
+      console.error('Failed to fetch favorite channel:', error)
+      return null
+    }
+  }
+
+  // Set user's favorite channel
+  async setFavoriteChannel(channelId: string): Promise<boolean> {
+    try {
+      const response = await axios.post(
+        `${API_URL}/user-settings/favorite-channel`,
+        { channelId },
+        { headers: this.getHeaders() }
+      )
+      
+      return response.data.success
+    } catch (error) {
+      console.error('Failed to set favorite channel:', error)
+      return false
+    }
+  }
+
+  // Get watch history
+  async getWatchHistory(limit: number = 20): Promise<any[]> {
+    try {
+      const response = await axios.get(`${API_URL}/watch-history?limit=${limit}`, {
+        headers: this.getHeaders(),
+      })
+      
+      if (response.data.success && response.data.history) {
+        return response.data.history
+      }
+      
+      return []
+    } catch (error) {
+      console.error('Failed to fetch watch history:', error)
+      return []
+    }
+  }
+
+  // Get top/favorite channels from analytics
+  async getTopChannels(limit: number = 10): Promise<any[]> {
+    try {
+      const response = await axios.get(`${API_URL}/channel-analytics/top?limit=${limit}`, {
+        headers: this.getHeaders(),
+      })
+      
+      if (response.data.success && response.data.channels) {
+        return response.data.channels
+      }
+      
+      return []
+    } catch (error) {
+      console.error('Failed to fetch top channels:', error)
       return []
     }
   }

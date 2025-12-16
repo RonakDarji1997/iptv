@@ -1,23 +1,24 @@
 'use client';
 
-import { useEffect, useState, useRef, Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, Volume2, VolumeX, Maximize, ChevronLeft, ChevronRight, Loader, Tv } from 'lucide-react';
+import { useEffect, useState, useRef, Suspense, use } from 'react';
+import { useRouter } from 'next/navigation';
+import { ArrowLeft, Volume2, VolumeX, Maximize, ChevronLeft, ChevronRight, Loader, Tv, Settings } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authService } from '@/services/authService';
 import { contentService } from '@/services/contentService';
 import { API_URL } from '@/config/constants';
+import { VideoStatsMonitor, VideoStats, getTranscodedUrl, formatBitrate, QUALITY_OPTIONS, QualityOption } from '@/utils/videoStats';
 
-function LivePlayerContent() {
+function LivePlayerContent({ searchParams }: { searchParams: Promise<{ cmd?: string; name?: string; num?: string }> }) {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const params = use(searchParams);
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   
-  const cmd = searchParams.get('cmd');
-  const channelName = searchParams.get('name');
-  const channelNum = searchParams.get('num');
+  const cmd = params.cmd;
+  const channelName = params.name;
+  const channelNum = params.num;
 
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [volume, setVolume] = useState(1);
@@ -31,6 +32,11 @@ function LivePlayerContent() {
   const [channelList, setChannelList] = useState<any[]>([]);
   const [loadingChannels, setLoadingChannels] = useState(false);
   const hasStartedPlayingRef = useRef(false);
+  const [videoStats, setVideoStats] = useState<VideoStats | null>(null);
+  const statsMonitorRef = useRef<VideoStatsMonitor | null>(null);
+  const [selectedQuality, setSelectedQuality] = useState<QualityOption>('original');
+  const [showQualityMenu, setShowQualityMenu] = useState(false);
+  const [originalStreamUrl, setOriginalStreamUrl] = useState<string | null>(null);
 
   // Load channel list on mount
   useEffect(() => {
@@ -81,7 +87,11 @@ function LivePlayerContent() {
 
       const data = await response.json();
       if (data.success && data.stream && data.stream.cmd) {
-        setStreamUrl(data.stream.cmd);
+        // Store original URL
+        setOriginalStreamUrl(data.stream.cmd);
+        
+        // Apply quality setting
+        await applyQuality(data.stream.cmd, selectedQuality);
         
         // Set 10-second timeout for loading - check ref not state
         if (loadingTimeoutRef.current) {
@@ -102,6 +112,68 @@ function LivePlayerContent() {
     }
   };
 
+  const applyQuality = async (originalUrl: string, quality: QualityOption) => {
+    console.log('[Quality] Applying quality:', quality, 'to URL:', originalUrl.substring(0, 50));
+    
+    // Always use original for live TV - transcoding not supported
+    console.log('[Quality] Using original stream (live TV)');
+    setStreamUrl(originalUrl);
+  };
+
+  const handleQualityChange = async (quality: QualityOption) => {
+    console.log('[Quality] User selected:', quality);
+    
+    // Disable transcoding for live TV - browsers don't support MPEG-TS streaming
+    if (quality !== 'original') {
+      toast.error('Quality selection not available for live TV', {
+        duration: 3000
+      });
+      return;
+    }
+    
+    setSelectedQuality(quality);
+    setShowQualityMenu(false);
+    
+    if (originalStreamUrl) {
+      setIsBuffering(true);
+      await applyQuality(originalStreamUrl, quality);
+    }
+  };
+
+  const handleVideoError = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const video = e.target as HTMLVideoElement;
+    console.error('[Video] Playback error:', {
+      error: video.error,
+      code: video.error?.code,
+      message: video.error?.message,
+      networkState: video.networkState,
+      readyState: video.readyState,
+      src: video.src?.substring(0, 100)
+    });
+    
+    console.log('[Video] Current quality:', selectedQuality);
+    console.log('[Video] Stream URL:', streamUrl?.substring(0, 100));
+    console.log('[Video] Original URL:', originalStreamUrl?.substring(0, 100));
+    
+    // If we're using transcoded stream and it fails, fall back to original
+    if (selectedQuality !== 'original' && originalStreamUrl && streamUrl !== originalStreamUrl) {
+      console.log('[Video] Falling back to original stream due to transcode error');
+      toast.error('Transcode failed, switching to original quality');
+      setSelectedQuality('original');
+      setStreamUrl(originalStreamUrl);
+      setIsBuffering(false);
+      // Don't set error state since we're recovering
+    } else {
+      console.error('[Video] Original stream also failed');
+      setError('Failed to load channel stream');
+    }
+    
+    if (loadingTimeoutRef.current) {
+      clearTimeout(loadingTimeoutRef.current);
+      loadingTimeoutRef.current = null;
+    }
+  };
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -119,6 +191,14 @@ function LivePlayerContent() {
         clearTimeout(loadingTimeoutRef.current);
         loadingTimeoutRef.current = null;
       }
+      
+      // Start bitrate monitoring
+      if (!statsMonitorRef.current) {
+        statsMonitorRef.current = new VideoStatsMonitor(video);
+        statsMonitorRef.current.start((stats) => {
+          setVideoStats(stats);
+        });
+      }
     };
     const handleCanPlay = () => {
       hasStartedPlayingRef.current = true;
@@ -129,19 +209,11 @@ function LivePlayerContent() {
         loadingTimeoutRef.current = null;
       }
     };
-    const handleError = () => {
-      setError('Failed to load channel stream');
-      if (loadingTimeoutRef.current) {
-        clearTimeout(loadingTimeoutRef.current);
-        loadingTimeoutRef.current = null;
-      }
-    };
 
     video.addEventListener('volumechange', handleVolumeChange);
     video.addEventListener('waiting', handleWaiting);
     video.addEventListener('playing', handlePlaying);
     video.addEventListener('canplay', handleCanPlay);
-    video.addEventListener('error', handleError);
 
     // Fullscreen change
     const handleFullscreenChange = () => {
@@ -154,10 +226,14 @@ function LivePlayerContent() {
       video.removeEventListener('waiting', handleWaiting);
       video.removeEventListener('playing', handlePlaying);
       video.removeEventListener('canplay', handleCanPlay);
-      video.removeEventListener('error', handleError);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       if (loadingTimeoutRef.current) {
         clearTimeout(loadingTimeoutRef.current);
+      }
+      // Stop stats monitoring
+      if (statsMonitorRef.current) {
+        statsMonitorRef.current.stop();
+        statsMonitorRef.current = null;
       }
     };
   }, [streamUrl]);
@@ -323,14 +399,13 @@ function LivePlayerContent() {
       onMouseMove={handleMouseMove}
     >
       {/* Video Element */}
-      <video
-        ref={videoRef}
-        className="w-full h-full object-contain"
-        src={streamUrl}
-        autoPlay
-      />
-
-      {/* Buffering Indicator with Timeout Fallback */}
+                <video
+                  ref={videoRef}
+                  className="w-full h-full object-contain"
+                  src={streamUrl}
+                  autoPlay
+                  onError={handleVideoError}
+                />      {/* Buffering Indicator with Timeout Fallback */}
       {isBuffering && !loadingTimeout && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <Loader className="w-16 h-16 text-white animate-spin" />
@@ -394,6 +469,11 @@ function LivePlayerContent() {
               {channelName && (
                 <p className="text-white font-medium">{decodeURIComponent(channelName)}</p>
               )}
+              {videoStats && (
+                <p className="text-gray-400 text-xs">
+                  {videoStats.resolution} • {formatBitrate(videoStats.bitrate)}
+                </p>
+              )}
             </div>
           </div>
           
@@ -450,27 +530,79 @@ function LivePlayerContent() {
             </span>
           </div>
 
-          {/* Right: Fullscreen */}
-          <button
-            onClick={toggleFullscreen}
-            className="text-white hover:text-yellow-500 transition-colors"
-          >
-            <Maximize size={28} />
-          </button>
+          {/* Right: Quality + Fullscreen */}
+          <div className="flex items-center gap-4">
+            {/* Quality Selector */}
+            <div className="relative">
+              <button
+                onClick={() => setShowQualityMenu(!showQualityMenu)}
+                className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-white px-3 py-2 rounded-lg transition-colors"
+                title="Quality Settings"
+              >
+                <Settings size={20} />
+                <span className="text-sm font-medium">{QUALITY_OPTIONS.find(q => q.value === selectedQuality)?.label}</span>
+              </button>
+              
+              {showQualityMenu && (
+                <div className="absolute bottom-full right-0 mb-2 bg-gray-900 border border-gray-700 rounded-lg shadow-xl overflow-hidden z-50 min-w-[280px]">
+                  <div className="px-3 py-2 border-b border-gray-700">
+                    <p className="text-xs text-gray-400 font-semibold">VIDEO QUALITY</p>
+                  </div>
+                  <div className="px-4 py-3 bg-yellow-900/30 border-b border-gray-700">
+                    <p className="text-xs text-yellow-300">
+                      ⚠️ Quality transcoding not available for live TV streams
+                    </p>
+                  </div>
+                  {QUALITY_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      onClick={() => handleQualityChange(option.value)}
+                      disabled={option.value !== 'original'}
+                      className={`w-full px-4 py-2 text-left transition-colors ${
+                        option.value !== 'original' 
+                          ? 'opacity-50 cursor-not-allowed text-gray-500' 
+                          : 'hover:bg-gray-800'
+                      } ${
+                        selectedQuality === option.value ? 'bg-gray-800 text-yellow-500' : 'text-white'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-8">
+                        <span className="font-medium">{option.label}</span>
+                        {selectedQuality === option.value && (
+                          <span className="text-yellow-500">✓</span>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={toggleFullscreen}
+              className="text-white hover:text-yellow-500 transition-colors"
+            >
+              <Maximize size={28} />
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-export default function LivePlayerPage() {
+export default async function LivePlayerPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ cmd?: string; name?: string; num?: string }>;
+}) {
   return (
     <Suspense fallback={
       <div className="min-h-screen bg-black flex items-center justify-center">
         <Loader className="w-12 h-12 text-yellow-500 animate-spin" />
       </div>
     }>
-      <LivePlayerContent />
+      <LivePlayerContent searchParams={searchParams} />
     </Suspense>
   );
 }

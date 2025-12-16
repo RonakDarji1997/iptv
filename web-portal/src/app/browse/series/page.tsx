@@ -7,7 +7,7 @@ import { ContentRow } from '@/components/ContentCard'
 import { authService } from '@/services/authService'
 import { contentService, Category, ContentItem } from '@/services/contentService'
 import toast from 'react-hot-toast'
-import { Loader } from 'lucide-react'
+import { Loader, Heart, Clock } from 'lucide-react'
 
 interface CategoryWithContent extends Category {
   items: ContentItem[]
@@ -152,69 +152,95 @@ export default function SeriesPage() {
       <Navbar />
       
       <div>
-        <div className="sticky top-14 z-10 bg-black pt-4">
+        <div className="sticky top-14 z-10 bg-black pt-4 pb-3">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
               <div>
                 <h1 className="text-3xl font-bold text-white">TV Series</h1>
-                <p className="text-gray-400 mt-1 text-sm">Binge-worthy shows just for you</p>
+                <p className="text-gray-400 mt-1 text-sm">Binge your favorite shows</p>
               </div>
-              <div className="relative w-full sm:w-64">
-                <input
-                  type="text"
-                  placeholder="Search categories..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="bg-gray-800 text-white px-4 py-2 pr-10 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-full"
-                />
-                {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
-                  >
-                    ✕
-                  </button>
-                )}
+              
+              {/* Quick Actions */}
+              <div className="flex gap-3">
+                <button
+                  onClick={() => router.push('/favorites')}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                >
+                  <Heart className="w-4 h-4" />
+                  <span className="hidden sm:inline">My Favorites</span>
+                </button>
+                <button
+                  onClick={() => router.push('/continue-watching')}
+                  className="flex items-center gap-2 px-4 py-2 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg transition-colors"
+                >
+                  <Clock className="w-4 h-4" />
+                  <span className="hidden sm:inline">Continue Watching</span>
+                </button>
               </div>
+            </div>
+            
+            <div className="relative w-full sm:w-64 mt-4">
+              <input
+                type="text"
+                placeholder="Search categories..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="bg-gray-800 text-white px-4 py-2 pr-10 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-full"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
+                >
+                  ✕
+                </button>
+              )}
             </div>
           </div>
         </div>
 
         <div className="space-y-8 mt-20">
-          {filteredCategories.map(category => (
-            <div key={category.id} ref={setObserverRef(category.id)}>
-              {category.loaded ? (
-                <ContentRow
-                  title={category.name}
-                  items={category.items}
-                  type="series"
-                  onItemClick={(series) => handleItemClick(category.category_id, series)}
-                  showViewAll={category.hasMore}
-                  onViewAll={() => handleViewAll(category.category_id)}
-                />
-              ) : category.loading ? (
-                <div className="mb-12">
-                  <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <h2 className="text-white text-xl font-bold mb-4">{category.name}</h2>
-                    <div className="flex items-center justify-center py-12">
-                      <Loader className="w-8 h-8 text-blue-500 animate-spin" />
+          {filteredCategories.map(category => {
+            // Don't show category if it's loaded but has no items
+            if (category.loaded && category.items.length === 0) {
+              return null;
+            }
+            
+            return (
+              <div key={category.id} ref={setObserverRef(category.id)}>
+                {category.loaded ? (
+                  <ContentRow
+                    title={category.name}
+                    items={category.items}
+                    type="series"
+                    onItemClick={(series) => handleItemClick(category.category_id, series)}
+                    showViewAll={category.hasMore}
+                    onViewAll={() => handleViewAll(category.category_id)}
+                  />
+                ) : category.loading ? (
+                  <div className="mb-12">
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                      <h2 className="text-white text-xl font-bold mb-4">{category.name}</h2>
+                      <div className="flex items-center justify-center py-12">
+                        <Loader className="w-8 h-8 text-blue-500 animate-spin" />
+                      </div>
                     </div>
                   </div>
-                </div>
-              ) : (
-                <div className="mb-12">
-                  <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <h2 className="text-white text-xl font-bold mb-4">{category.name}</h2>
-                    <div className="flex space-x-4 overflow-x-auto pb-4 scrollbar-hide -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8">
-                      {[...Array(6)].map((_, i) => (
-                        <div key={i} className="flex-none w-40 sm:w-48 aspect-[2/3] bg-gray-800 rounded-lg animate-pulse" />
-                      ))}
+                ) : (
+                  <div className="mb-12">
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                      <h2 className="text-white text-xl font-bold mb-4">{category.name}</h2>
+                      <div className="flex space-x-4 overflow-x-auto pb-4 scrollbar-hide -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8">
+                        {[...Array(6)].map((_, i) => (
+                          <div key={i} className="flex-none w-40 sm:w-48 aspect-[2/3] bg-gray-800 rounded-lg animate-pulse" />
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
-            </div>
-          ))}
+                )}
+              </div>
+            );
+          })}
         </div>
 
         {filteredCategories.length === 0 && (

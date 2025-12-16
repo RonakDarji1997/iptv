@@ -40,7 +40,7 @@ export default function RegisterPage() {
       } else {
         toast.success('Welcome back!')
       }
-      router.push('/dashboard')
+      router.push('/home')
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Registration failed')
     } finally {

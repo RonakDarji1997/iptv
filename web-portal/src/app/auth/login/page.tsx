@@ -39,8 +39,8 @@ export default function LoginPage() {
       toast.success('Welcome back!')
       
       if (hasActiveProvider) {
-        // User has provider, go to live TV
-        router.push('/browse/live')
+        // User has provider, go to home
+        router.push('/home')
       } else {
         // No provider, go to settings with providers tab
         router.push('/settings?tab=providers')

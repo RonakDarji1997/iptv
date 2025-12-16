@@ -17,6 +17,11 @@ interface ContentCardProps {
   type: 'movie' | 'series' | 'live'
   subtitle?: string
   onClick?: () => void
+  tmdb?: {
+    posterUrl: string | null
+    rating: number
+    voteCount: number
+  }
 }
 
 // Cache provider URL in localStorage
@@ -72,13 +77,19 @@ async function getProviderUrl(): Promise<string | null> {
   return providerUrlPromise
 }
 
-export function ContentCard({ id, title, imageUrl, logo, screenshot, type, subtitle, onClick }: ContentCardProps) {
+export function ContentCard({ id, title, imageUrl, logo, screenshot, type, subtitle, onClick, tmdb }: ContentCardProps) {
   const [imageError, setImageError] = useState(false)
   const [isHovered, setIsHovered] = useState(false)
   const [finalImageUrl, setFinalImageUrl] = useState<string | undefined>()
 
   useEffect(() => {
     const buildImageUrl = async () => {
+      // Prioritize TMDB poster if available
+      if (tmdb?.posterUrl) {
+        setFinalImageUrl(tmdb.posterUrl)
+        return
+      }
+      
       const path = logo || screenshot || imageUrl
       if (!path) return
       
@@ -95,7 +106,7 @@ export function ContentCard({ id, title, imageUrl, logo, screenshot, type, subti
     }
 
     buildImageUrl()
-  }, [logo, screenshot, imageUrl])
+  }, [logo, screenshot, imageUrl, tmdb])
 
   const placeholderGradients = [
     'from-purple-600 to-pink-600',
@@ -116,6 +127,15 @@ export function ContentCard({ id, title, imageUrl, logo, screenshot, type, subti
       onClick={onClick}
     >
       <div className="relative aspect-[2/3] rounded-lg overflow-hidden bg-gray-800 shadow-lg">
+        
+        {/* Rating Badge */}
+        {tmdb && tmdb.rating > 0 && (
+          <div className="absolute top-2 right-2 z-10 bg-black/80 backdrop-blur-sm px-2 py-1 rounded-full flex items-center gap-1">
+            <span className="text-yellow-500 text-sm">⭐</span>
+            <span className="text-white text-xs font-bold">{tmdb.rating.toFixed(1)}</span>
+          </div>
+        )}
+        
         {finalImageUrl && !imageError ? (
           <img
             src={finalImageUrl}
@@ -134,10 +154,6 @@ export function ContentCard({ id, title, imageUrl, logo, screenshot, type, subti
         {/* Hover Overlay */}
         {isHovered && (
           <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center space-y-3 transition-opacity duration-300">
-            <button className="flex items-center space-x-2 px-6 py-3 bg-white text-black rounded-full hover:bg-gray-200 transition-colors">
-              <Play className="w-5 h-5 fill-current" />
-              <span className="font-semibold">Play</span>
-            </button>
             <button className="flex items-center space-x-2 px-6 py-3 bg-gray-800/80 text-white rounded-full hover:bg-gray-700 transition-colors">
               <Info className="w-5 h-5" />
               <span className="font-semibold">Info</span>
@@ -167,6 +183,11 @@ interface ContentRowProps {
     screenshot_uri?: string
     imageUrl?: string
     subtitle?: string
+    tmdb?: {
+      posterUrl: string | null
+      rating: number
+      voteCount: number
+    }
   }>
   type: 'movie' | 'series' | 'live'
   onItemClick?: (item: any) => void
@@ -201,6 +222,7 @@ export function ContentRow({ title, items, type, onItemClick, showViewAll, onVie
                 imageUrl={item.imageUrl}
                 type={type}
                 subtitle={item.subtitle}
+                tmdb={item.tmdb}
                 onClick={() => onItemClick?.(item)}
               />
             </div>

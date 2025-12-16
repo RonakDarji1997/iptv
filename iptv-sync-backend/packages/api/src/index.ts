@@ -82,6 +82,11 @@ import { createDevicesRouter } from './routes/devices';
 import { createStreamRouter } from './routes/stream';
 import { createProgressRouter } from './routes/progress';
 import { createStalkerProxyRouter } from './routes/stalker-proxy';
+import favoritesRouter from './routes/favorites';
+import watchHistoryRouter from './routes/watch-history';
+import parentalControlRouter from './routes/parental-control';
+import channelAnalyticsRouter from './routes/channel-analytics';
+import userSettingsRouter from './routes/user-settings';
 import { authMiddleware } from './middleware/auth';
 
 // Conditional auth middleware that skips certain endpoints
@@ -103,6 +108,14 @@ app.use('/devices', authMiddleware, createDevicesRouter(pool));
 app.use('/stream', authMiddleware, createStreamRouter(pool));
 app.use('/progress', authMiddleware, createProgressRouter(pool));
 app.use('/stalker-proxy', conditionalAuth, createStalkerProxyRouter(pool));
+
+// New routes
+app.locals.db = pool; // Make pool available to new route handlers
+app.use('/favorites', authMiddleware, favoritesRouter);
+app.use('/watch-history', authMiddleware, watchHistoryRouter);
+app.use('/parental-control', authMiddleware, parentalControlRouter);
+app.use('/channel-analytics', authMiddleware, channelAnalyticsRouter);
+app.use('/user-settings', authMiddleware, userSettingsRouter);
 
 // 404 handler
 app.use((req: Request, res: Response) => {

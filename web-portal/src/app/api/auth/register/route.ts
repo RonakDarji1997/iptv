@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const BACKEND_URL = 'http://api.iptv.ronika.co/api'
+const BACKEND_URL = 'http://localhost:3000'
 
 export async function POST(request: NextRequest) {
   try {

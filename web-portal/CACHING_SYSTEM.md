@@ -1,17 +1,62 @@
 # Caching System Implementation
 
 ## Overview
-A simple in-memory caching system has been implemented to reduce backend API calls and improve application performance. The cache uses TTL (Time To Live) to automatically expire stale data.
+A comprehensive **1-hour caching system** has been implemented across the web portal to eliminate redundant API calls and enable instant navigation. The system includes both **client-side** and **server-side** caching with automatic cleanup.
 
-## Cache Manager (`/web-portal/src/utils/cache.ts`)
+## 🆕 New API Cache (`/web-portal/src/utils/api-cache.ts`)
+
+### Features
+- **1-hour TTL**: All cached data persists for 60 minutes
+- **✨ localStorage Persistence**: Cache survives page refreshes!
+- **Smart cache keys**: Generated from URL + HTTP method + body
+- **Automatic fetch**: Drop-in replacement for `fetch()`
+- **Cache statistics**: Debug and monitor cache performance
+- **Auto-cleanup**: Expired entries removed every 10 minutes
+- **Browser debugging**: Exposed to `window.__apiCache`
+- **Storage management**: Handles quota limits gracefully
+
+### API Methods
+
+#### `fetch<T>(url: string, options?: RequestInit): Promise<T>`
+Fetch with automatic caching (replaces standard fetch)
+
+```typescript
+import { apiCache } from '@/utils/api-cache';
+
+// Automatically caches for 1 hour
+const data = await apiCache.fetch('/api/subtitles?action=search&imdbId=123');
+```
+
+#### `invalidate(url: string, options?: RequestInit): void`
+Remove specific cache entry
+
+```typescript
+apiCache.invalidate('/api/favorites');
+```
+
+#### `invalidatePattern(pattern: string | RegExp): void`
+Remove all entries matching pattern
+
+```typescript
+apiCache.invalidatePattern('/subtitles');
+apiCache.invalidatePattern(/^\/api\/progress/);
+```
+
+#### `getStats()`
+Get cache statistics
+
+```typescript
+const stats = apiCache.getStats();
+// { size: 42, entries: [...] }
+```
+
+## Original Cache Manager (`/web-portal/src/utils/cache.ts`)
 
 ### Features
 - **In-memory storage**: Fast access with Map data structure
-- **TTL support**: Automatic expiration of cached entries
+- **TTL support**: Automatic expiration of cached entries (default: 5 minutes)
 - **Auto-cleanup**: Expired entries are cleared every 5 minutes
 - **Helper methods**: Convenient `getOrFetch()` pattern for API calls
-
-### API Methods
 
 #### `set<T>(key: string, data: T, ttl?: number): void`
 Store data in cache with optional TTL (default: 5 minutes)
@@ -187,22 +232,29 @@ const data = await cache.getOrFetch(
 | Series Episodes | `series-episodes:{seriesId}:{seasonId}` | 10 min | Series detail page |
 | Episode Info | `episode-info:{seriesId}:{seasonId}:{episodeId}` | 10 min | Series detail, VOD player |
 | VOD Info | `vod-info:{movieId}` | 10 min | Movie detail page |
+| **Subtitle Search** | `search:{imdbId}:{languages}` | **1 hour** | **Subtitle API** |
+| **Subtitle Download** | `download:{fileId}` | **1 hour** | **Subtitle API** |
+| **Progress List** | `/progress` | **1 hour** | **Continue Watching** |
+| **Favorites** | `/favorites` + filters | **1 hour** | **Favorites Page** |
 
 ## Performance Benefits
 
-### Before Caching
+### Before Enhanced Caching (Original)
 - **Browse pages**: Every visit = API call for categories + API calls for each category content
 - **View all pages**: Every page scroll = new API call
 - **Episode navigation**: 2 API calls per episode (episode-info + create-link)
 - **Series page**: 1 API call for seasons + 1 per season expanded
 - **Movie playback**: 1 API call every time play button clicked
 
-### After Caching
+### After Enhanced Caching (1-Hour System)
 - **Browse pages**: First visit = API calls, revisits within 3-5 min = 0 calls ⚡
 - **View all pages**: Scrolled pages cached for 3 min = instant back/forward navigation ⚡
 - **Episode navigation**: First episode = 2 calls, subsequent = 1 call (50% reduction) ⚡
 - **Series page**: First load = API calls, revisits within 10 min = 0 calls ⚡
 - **Movie playback**: First play = 1 call, subsequent within 10 min = 0 calls ⚡
+- **🆕 Subtitles**: First download = 1 call, re-select within 1 hour = **0 calls** ⚡
+- **🆕 Continue Watching**: Reload/tab switch within 1 hour = **0 calls** ⚡
+- **🆕 Favorites**: View within 1 hour = **0 calls** ⚡
 
 ### Real-World Impact
 - **User browses Movies page**: 
@@ -218,21 +270,63 @@ const data = await cache.getOrFetch(
   - Episodes 2-10: 1 call each (50% reduction)
   - Rewatch within 10 min: **0 calls per episode**
 
+- **🆕 User selects subtitles**:
+  - First search: 1 API call (OpenSubtitles)
+  - First download: 1 API call
+  - Re-open menu: **0 calls** (cached for 1 hour)
+  - Re-select same subtitle: **0 calls** (VTT cached)
+
+- **🆕 User checks Continue Watching**:
+  - First load: 1 API call
+  - Refresh page: **0 calls** (cached for 1 hour)
+
+## Debugging
+
+### Browser Console
+```javascript
+// Check API cache stats
+window.__apiCache.getStats()
+
+// View cache entries
+window.__apiCache.getStats().entries
+
+// Clear all API cache
+window.__apiCache.clear()
+
+// Invalidate specific pattern
+window.__apiCache.invalidatePattern('/subtitles')
+```
+
+### Console Logs
+- `[Cache] 🎯 HIT:` - Data served from cache
+- `[Cache] 📡 MISS:` - Data fetched from API
+- `[Cache] 🗑️ INVALIDATED:` - Cache entry removed
+- `[Cache] 🧹 CLEARED` - Cache cleaned
+- `[Cache] 💾 Restored X entries from storage` - Cache loaded from localStorage on page load
+- `[Subtitles Cache] 🎯 HIT:` - Server-side subtitle cache hit
+
 ## Important Notes
 
 1. **Stream Links Not Cached**: The `/create-link` endpoint is intentionally NOT cached as these URLs may expire or have session-based restrictions.
 
-2. **Client-Side Only**: This is an in-memory cache that exists only in the browser. It will be cleared on page refresh.
+2. **✨ Persistent Cache**: The API cache now persists to localStorage and survives page refreshes! Cache is automatically restored on page load.
 
-3. **Memory Management**: The auto-cleanup mechanism runs every 5 minutes to remove expired entries and prevent memory bloat.
+3. **Memory Management**: The auto-cleanup mechanism runs every 5-10 minutes to remove expired entries and prevent memory bloat.
 
-4. **Concurrent Requests**: Multiple simultaneous requests for the same uncached key will each trigger a fetch. Consider implementing request deduplication if needed.
+4. **Smart Invalidation**: Favorites cache is automatically invalidated when items are deleted.
+
+5. **Silent Error Handling**: 406 errors (quota exceeded) for subtitles are handled silently with user-friendly messages.
+
+6. **Storage Quota**: If localStorage quota is exceeded, the cache gracefully degrades to memory-only mode.
 
 ## Future Improvements
 
+- [x] ~~Implement persistent cache using IndexedDB for cross-session caching~~ ✅ **DONE with localStorage**
 - [ ] Add request deduplication for concurrent cache misses
-- [ ] Implement persistent cache using IndexedDB for longer TTL
-- [ ] Add cache statistics/monitoring
+- [ ] Add cache statistics dashboard
 - [ ] Implement cache warming strategies
-- [ ] Add selective cache invalidation on user actions
-- [ ] Consider LRU (Least Recently Used) eviction policy
+- [ ] Add configurable TTL per endpoint
+- [ ] Consider LRU (Least Recently Used) eviction policy with size limits
+- [ ] Add cache versioning for API changes
+- [ ] Migrate to IndexedDB for larger storage capacity
+

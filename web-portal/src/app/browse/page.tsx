@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Navbar from '@/components/Navbar'
 import HeroCarousel from '@/components/HeroCarousel'
 import { ContentRow } from '@/components/ContentCard'
+import ContentInfoModal from '@/components/ContentInfoModal'
 import { authService } from '@/services/authService'
 import { contentService, ContentItem, ContentCategory } from '@/services/contentService'
 import toast from 'react-hot-toast'
@@ -16,6 +17,8 @@ export default function BrowsePage() {
   const [movies, setMovies] = useState<ContentCategory[]>([])
   const [series, setSeries] = useState<ContentCategory[]>([])
   const [liveTV, setLiveTV] = useState<ContentCategory[]>([])
+  const [selectedContent, setSelectedContent] = useState<ContentItem | null>(null)
+  const [modalType, setModalType] = useState<'movie' | 'series' | 'live'>('movie')
 
   useEffect(() => {
     if (!authService.isAuthenticated()) {
@@ -36,10 +39,29 @@ export default function BrowsePage() {
         contentService.getLiveTV(),
       ])
 
+      // Enrich first few items of each movie category with TMDB data
+      const enrichedMovies = await Promise.all(
+        moviesData.map(async (category) => {
+          const items = category.items || []
+          // Enrich first 10 visible items
+          const enrichedItems = await contentService.enrichBatchWithTMDB(items, 'movie')
+          return { ...category, items: enrichedItems }
+        })
+      )
+
+      // Enrich series categories
+      const enrichedSeries = await Promise.all(
+        seriesData.map(async (category) => {
+          const items = category.items || []
+          const enrichedItems = await contentService.enrichBatchWithTMDB(items, 'tv')
+          return { ...category, items: enrichedItems }
+        })
+      )
+
       setFeaturedContent(featured)
-      setMovies(moviesData)
-      setSeries(seriesData)
-      setLiveTV(liveData)
+      setMovies(enrichedMovies)
+      setSeries(enrichedSeries)
+      setLiveTV(liveData) // Live TV doesn't need TMDB enrichment
     } catch (error: any) {
       toast.error('Failed to load content')
       console.error(error)
@@ -53,9 +75,13 @@ export default function BrowsePage() {
     // Implement play functionality
   }
 
-  const handleInfoClick = (id: string) => {
-    toast.success(`Showing info for: ${id}`)
-    // Implement info modal
+  const handleInfoClick = (item: ContentItem, type: 'movie' | 'series' | 'live') => {
+    setSelectedContent(item)
+    setModalType(type)
+  }
+
+  const closeModal = () => {
+    setSelectedContent(null)
   }
 
   if (loading) {
@@ -73,10 +99,9 @@ export default function BrowsePage() {
     id: item.id,
     title: item.title || item.name || 'Untitled',
     description: item.description || '',
-    imageUrl: item.imageUrl || '',
-    type: (item.type as 'movie' | 'series' | 'live') || 'movie',
-  }))
-
+    imageUrl: item.tmdb?.backdropUrl || (item as any).screenshot || '/placeholder.jpg',
+  }));
+  
   return (
     <div className="min-h-screen bg-black pb-20">
       <Navbar />
@@ -98,7 +123,7 @@ export default function BrowsePage() {
               title={category.name}
               items={category.items || []}
               type="movie"
-              onItemClick={handleInfoClick}
+              onItemClick={(item) => handleInfoClick(item, 'movie')}
             />
           ))}
 
@@ -109,7 +134,7 @@ export default function BrowsePage() {
               title={category.name}
               items={category.items || []}
               type="series"
-              onItemClick={handleInfoClick}
+              onItemClick={(item) => handleInfoClick(item, 'series')}
             />
           ))}
 
@@ -120,7 +145,7 @@ export default function BrowsePage() {
               title={category.name}
               items={category.items || []}
               type="live"
-              onItemClick={handleInfoClick}
+              onItemClick={(item) => handleInfoClick(item, 'live')}
             />
           ))}
 
@@ -131,11 +156,21 @@ export default function BrowsePage() {
               title={category.name}
               items={category.items || []}
               type="movie"
-              onItemClick={handleInfoClick}
+              onItemClick={(item) => handleInfoClick(item, 'movie')}
             />
           ))}
         </div>
       </div>
+
+      {/* Content Info Modal */}
+      {selectedContent && (
+        <ContentInfoModal
+          isOpen={!!selectedContent}
+          onClose={closeModal}
+          content={selectedContent}
+          type={modalType}
+        />
+      )}
     </div>
   )
 }

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { Film, Tv, Radio, Search, User, LogOut, Settings } from 'lucide-react'
+import { Film, Tv, Radio, Search, User, LogOut, Settings, Home } from 'lucide-react'
 import { authService } from '@/services/authService'
 
 export default function Navbar() {
@@ -19,7 +19,7 @@ export default function Navbar() {
   }, [])
 
   const navItems = [
-    { name: 'SEARCH', href: '/search', icon: Search },
+    { name: 'HOME', href: '/home', icon: Home },
     { name: 'LIVE TV', href: '/browse/live', icon: Radio },
     { name: 'MOVIES', href: '/browse/movies', icon: Film },
     { name: 'SERIES', href: '/browse/series', icon: Tv },
@@ -36,11 +36,11 @@ export default function Navbar() {
     return (
       <>
         {/* Top Logo Bar - Desktop only */}
-        <div className="fixed top-0 left-0 right-0 z-50 bg-black/95 backdrop-blur-sm border-b border-gray-800 hidden md:block">
+        <div className="fixed top-0 left-0 right-0 z-50 bg-black/30 backdrop-blur-2xl border-b border-white/10 hidden md:block">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex items-center justify-between h-16">
               {/* Logo */}
-              <Link href="/dashboard" className="flex items-center space-x-2">
+              <Link href="/home" className="flex items-center space-x-2">
                 <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
                   <span className="text-white font-bold text-xl">S</span>
                 </div>
@@ -59,7 +59,7 @@ export default function Navbar() {
 
         {/* Bottom Floating Navigation */}
         <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 z-50">
-          <nav className="bg-gray-900/95 backdrop-blur-xl border border-white/10 rounded-full px-6 py-3 shadow-2xl">
+          <nav className="bg-gray-900/40 backdrop-blur-2xl border border-white/20 rounded-full px-6 py-3 shadow-2xl">
             <div className="flex items-center space-x-1">
               {navItems.map((item) => {
                 const Icon = item.icon
@@ -91,11 +91,11 @@ export default function Navbar() {
   return (
     <>
       {/* Top Logo Bar - All screens */}
-      <div className="fixed top-0 left-0 right-0 z-50 bg-black/95 backdrop-blur-sm border-b border-gray-800">
+      <div className="fixed top-0 left-0 right-0 z-50 bg-black/30 backdrop-blur-2xl border-b border-white/10">
         <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-8">
           <div className="flex items-center justify-between h-14 sm:h-14 md:h-16">
             {/* Logo */}
-            <Link href="/dashboard" className="flex items-center space-x-1.5 sm:space-x-2">
+            <Link href="/home" className="flex items-center space-x-1.5 sm:space-x-2">
               <div className="w-7 h-7 sm:w-7 sm:h-7 md:w-8 md:h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
                 <span className="text-white font-bold text-base sm:text-lg md:text-xl">S</span>
               </div>
@@ -108,6 +108,15 @@ export default function Navbar() {
             <div className="flex items-center space-x-3 sm:space-x-4">
               {isAuthenticated ? (
                 <>
+                  {/* Search Button */}
+                  <Link
+                    href="/search"
+                    className="flex items-center space-x-2 text-gray-400 hover:text-white transition-colors"
+                  >
+                    <Search className="w-4 h-4 sm:w-5 sm:h-5" />
+                  </Link>
+
+                  {/* User Menu */}
                   <div className="relative">
                     <button
                       onClick={() => setShowUserMenu(!showUserMenu)}
@@ -145,7 +154,7 @@ export default function Navbar() {
       {/* Bottom Navigation Bar - Floating with rounded corners */}
       {isAuthenticated && (
         <div className="fixed bottom-3 sm:bottom-4 left-3 right-3 sm:left-4 sm:right-4 z-50 flex justify-center">
-          <nav className="bg-gray-900/95 backdrop-blur-xl rounded-full border border-gray-800 shadow-2xl px-3 sm:px-4 py-2.5 sm:py-2.5">
+          <nav className="bg-gray-900/40 backdrop-blur-2xl rounded-full border border-white/20 shadow-2xl px-3 sm:px-4 py-2.5 sm:py-2.5">
             <div className="flex items-center space-x-1 sm:space-x-1">
               {navItems.map((item) => {
                 const Icon = item.icon
