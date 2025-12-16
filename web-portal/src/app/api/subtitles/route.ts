@@ -57,6 +57,8 @@ export async function GET(request: NextRequest) {
       case 'search': {
         const imdbId = searchParams.get('imdbId');
         const languages = searchParams.get('languages') || 'en,es,fr';
+        const seasonNumber = searchParams.get('seasonNumber');
+        const episodeNumber = searchParams.get('episodeNumber');
 
         if (!imdbId) {
           return NextResponse.json(
@@ -69,7 +71,7 @@ export async function GET(request: NextRequest) {
         const cleanImdbId = imdbId.startsWith('tt') ? imdbId.replace('tt', '') : imdbId;
 
         // Check cache first
-        const cacheKey = `search:${cleanImdbId}:${languages}`;
+        const cacheKey = `search:${cleanImdbId}:${languages}:${seasonNumber || ''}:${episodeNumber || ''}`;
         const cached = getCached(cacheKey);
         if (cached) {
           return NextResponse.json(cached);
@@ -79,6 +81,14 @@ export async function GET(request: NextRequest) {
           imdb_id: cleanImdbId,
           languages: languages,
         });
+        
+        // Add season and episode for TV series
+        if (seasonNumber) {
+          params.append('season_number', seasonNumber);
+        }
+        if (episodeNumber) {
+          params.append('episode_number', episodeNumber);
+        }
 
         console.log('[Subtitles API] Fetching from:', `${OPENSUBTITLES_API_BASE}/subtitles?${params}`);
         console.log('[Subtitles API] User-Agent:', USER_AGENT);

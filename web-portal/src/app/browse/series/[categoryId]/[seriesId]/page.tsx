@@ -436,10 +436,13 @@ export default function SeriesDetailPage() {
           poster,
           seriesId,
           seasonNumber: currentSeason?.season_number,
-          episodeNumber: currentEpisode?.episode_num
+          episodeNumber: currentEpisode?.episode_num,
+          imdbId: seriesImdbId
         });
         
-        router.push(`/player/vod?url=${streamUrl}&title=${title}&isSeries=true&contentId=${episodeId}&contentType=episode&seriesId=${seriesId}&seasonNumber=${currentSeason?.season_number || ''}&episodeNumber=${currentEpisode?.episode_num || ''}&poster=${encodeURIComponent(poster)}`);
+        // Build URL with optional IMDb ID parameter
+        const playerUrl = `/player/vod?url=${streamUrl}&title=${title}&isSeries=true&contentId=${episodeId}&contentType=episode&seriesId=${seriesId}&seasonNumber=${currentSeason?.season_number || ''}&episodeNumber=${currentEpisode?.episode_num || ''}&poster=${encodeURIComponent(poster)}${seriesImdbId ? `&imdbId=${seriesImdbId}` : ''}`;
+        router.push(playerUrl);
       } else {
         toast.error('Failed to create stream link');
       }

@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState, useRef, Suspense, use } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useState, useRef, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Play, Pause, Volume2, VolumeX, Maximize, Rewind, FastForward, Loader, SkipBack, SkipForward, Subtitles, Settings } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authService } from '@/services/authService';
@@ -23,33 +23,22 @@ interface Subtitle {
   fileId: number;
 }
 
-function VODPlayerContent({ searchParams }: { 
-  searchParams: Promise<{ 
-    url?: string; 
-    title?: string; 
-    isSeries?: string; 
-    contentId?: string; 
-    contentType?: string; 
-    seriesId?: string; 
-    seasonNumber?: string; 
-    episodeNumber?: string;
-    poster?: string;
-  }> 
-}) {
+function VODPlayerContent() {
   const router = useRouter();
-  const params = use(searchParams);
+  const searchParams = useSearchParams();
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   
-  const streamUrl = params.url;
-  const title = params.title;
-  const isSeries = params.isSeries === 'true';
-  const contentId = params.contentId;
-  const contentType = params.contentType; // 'movie' or 'episode'
-  const seriesId = params.seriesId;
-  const seasonNumber = params.seasonNumber;
-  const episodeNumber = params.episodeNumber;
+  const streamUrl = searchParams.get('url');
+  const title = searchParams.get('title');
+  const isSeries = searchParams.get('isSeries') === 'true';
+  const contentId = searchParams.get('contentId');
+  const contentType = searchParams.get('contentType'); // 'movie' or 'episode'
+  const seriesId = searchParams.get('seriesId');
+  const seasonNumber = searchParams.get('seasonNumber');
+  const episodeNumber = searchParams.get('episodeNumber');
+  const imdbId = searchParams.get('imdbId');
 
   console.log('[VODPlayer] URL Params:', {
     contentId,
@@ -57,7 +46,8 @@ function VODPlayerContent({ searchParams }: {
     seriesId,
     seasonNumber,
     episodeNumber,
-    isSeries
+    isSeries,
+    imdbId: imdbId
   });
 
   const [isPlaying, setIsPlaying] = useState(false);
@@ -78,6 +68,7 @@ function VODPlayerContent({ searchParams }: {
   const progressSaveIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const lastProgressSaveRef = useRef<number>(0);
   const durationRef = useRef<number>(0);
+  const isMountedRef = useRef<boolean>(true);
   
   // Subtitle state
   const [availableSubtitles, setAvailableSubtitles] = useState<Subtitle[]>([]);
@@ -209,7 +200,7 @@ function VODPlayerContent({ searchParams }: {
         contentId,
         contentType: contentType || 'movie',
         contentName: title ? decodeURIComponent(title) : undefined,
-        contentPoster: params.poster || undefined,
+        contentPoster: searchParams.get('poster') || undefined,
         seriesId: seriesId || undefined,
         seasonNumber: seasonNumber || undefined,
         episodeNumber: episodeNumber || undefined,
@@ -331,18 +322,31 @@ function VODPlayerContent({ searchParams }: {
       try {
         setLoadingSubtitles(true);
         
-        // Try to get IMDb ID from session storage (set from movie/series detail page)
-        const imdbId = sessionStorage.getItem('current_imdb_id');
+        // Try to get IMDb ID from URL params first, then fall back to session storage
+        const imdbId = searchParams.get('imdbId') || sessionStorage.getItem('current_imdb_id');
         
         if (!imdbId) {
           console.log('[Subtitles] No IMDb ID available');
           return;
         }
         
-        console.log('[Subtitles] Searching by IMDb ID:', imdbId);
+        console.log('[Subtitles] Searching by IMDb ID:', imdbId, '(source:', searchParams.get('imdbId') ? 'URL' : 'sessionStorage', ')');
+        console.log('[Subtitles] Content info - isSeries:', isSeries, 'Season:', seasonNumber, 'Episode:', episodeNumber);
+        
+        // Build API URL with optional season/episode for TV series
+        let apiUrl = `/api/subtitles?action=search&imdbId=${imdbId}&languages=en,es,fr`;
+        if (isSeries && seasonNumber) {
+          apiUrl += `&seasonNumber=${seasonNumber}`;
+          if (episodeNumber) {
+            apiUrl += `&episodeNumber=${episodeNumber}`;
+          }
+          console.log('[Subtitles] Searching for TV episode S' + seasonNumber + 'E' + episodeNumber);
+        }
+        
+        console.log('[Subtitles] API URL:', apiUrl);
         
         // Call our API route with caching
-        const data = await apiCache.fetch(`/api/subtitles?action=search&imdbId=${imdbId}&languages=en,es,fr`);
+        const data = await apiCache.fetch(apiUrl);
         const subtitles: Subtitle[] = data.subtitles || [];
         
         console.log('[Subtitles] Found', subtitles.length, 'subtitles');
@@ -355,7 +359,7 @@ function VODPlayerContent({ searchParams }: {
     };
 
     loadSubtitles();
-  }, [title]);
+  }, [title, imdbId, isSeries, seasonNumber, episodeNumber]);
 
   // Load saved progress and start periodic saving
   useEffect(() => {
@@ -416,6 +420,7 @@ function VODPlayerContent({ searchParams }: {
 
     return () => {
       console.log('[Progress] 🔚 Component unmounting - saving final progress');
+      isMountedRef.current = false;
       if (progressSaveIntervalRef.current) {
         clearInterval(progressSaveIntervalRef.current);
       }
@@ -588,7 +593,15 @@ function VODPlayerContent({ searchParams }: {
     if (isPlaying) {
       video.pause();
     } else {
-      video.play();
+      const playPromise = video.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(error => {
+          // Ignore AbortError when component unmounts
+          if (error.name !== 'AbortError') {
+            console.error('[Player] Play error:', error);
+          }
+        });
+      }
     }
   };
 
@@ -1110,28 +1123,14 @@ function VODPlayerContent({ searchParams }: {
   );
 }
 
-export default async function VODPlayerPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ 
-    url?: string; 
-    title?: string; 
-    isSeries?: string; 
-    contentId?: string; 
-    contentType?: string; 
-    seriesId?: string; 
-    seasonNumber?: string; 
-    episodeNumber?: string;
-    poster?: string;
-  }>;
-}) {
+export default function VODPlayerPage() {
   return (
     <Suspense fallback={
       <div className="min-h-screen bg-black flex items-center justify-center">
         <Loader className="w-12 h-12 text-yellow-500 animate-spin" />
       </div>
     }>
-      <VODPlayerContent searchParams={searchParams} />
+      <VODPlayerContent />
     </Suspense>
   );
 }
