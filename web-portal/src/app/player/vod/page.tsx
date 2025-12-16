@@ -1021,13 +1021,13 @@ function VODPlayerContent() {
       >
         {/* Progress Bar */}
         <div
-          className="w-full h-2 sm:h-1 bg-gray-600 rounded-full mb-4 cursor-pointer group relative"
+          className="w-full bg-gray-600 rounded-full mb-4 cursor-pointer group relative"
           onClick={handleProgressClick}
-          style={{ padding: '8px 0' }}
+          style={{ height: '8px' }}
         >
           <div
-            className="h-full bg-yellow-500 rounded-full relative"
-            style={{ width: `${(currentTime / duration) * 100}%` }}
+            className="bg-yellow-500 rounded-full relative"
+            style={{ width: `${(currentTime / duration) * 100}%`, height: '8px' }}
           >
             {/* Always visible draggable handle on touch devices */}
             <div className="absolute right-0 top-1/2 -translate-y-1/2 w-4 h-4 sm:w-3 sm:h-3 bg-yellow-500 rounded-full border-2 border-white shadow-lg sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" />
