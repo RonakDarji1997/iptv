@@ -102,20 +102,26 @@ const conditionalAuth = (req: Request, res: Response, next: NextFunction) => {
   return authMiddleware(req, res, next);
 };
 
-app.use('/auth', createAuthRouter(pool));
-app.use('/sync', authMiddleware, createSyncRouter(pool));
-app.use('/devices', authMiddleware, createDevicesRouter(pool));
-app.use('/stream', authMiddleware, createStreamRouter(pool));
-app.use('/progress', authMiddleware, createProgressRouter(pool));
-app.use('/stalker-proxy', conditionalAuth, createStalkerProxyRouter(pool));
+// Mount all routes under /api prefix for nginx compatibility
+const apiRouter = express.Router();
+
+apiRouter.use('/auth', createAuthRouter(pool));
+apiRouter.use('/sync', authMiddleware, createSyncRouter(pool));
+apiRouter.use('/devices', authMiddleware, createDevicesRouter(pool));
+apiRouter.use('/stream', authMiddleware, createStreamRouter(pool));
+apiRouter.use('/progress', authMiddleware, createProgressRouter(pool));
+apiRouter.use('/stalker-proxy', conditionalAuth, createStalkerProxyRouter(pool));
 
 // New routes
 app.locals.db = pool; // Make pool available to new route handlers
-app.use('/favorites', authMiddleware, favoritesRouter);
-app.use('/watch-history', authMiddleware, watchHistoryRouter);
-app.use('/parental-control', authMiddleware, parentalControlRouter);
-app.use('/channel-analytics', authMiddleware, channelAnalyticsRouter);
-app.use('/user-settings', authMiddleware, userSettingsRouter);
+apiRouter.use('/favorites', authMiddleware, favoritesRouter);
+apiRouter.use('/watch-history', authMiddleware, watchHistoryRouter);
+apiRouter.use('/parental-control', authMiddleware, parentalControlRouter);
+apiRouter.use('/channel-analytics', authMiddleware, channelAnalyticsRouter);
+apiRouter.use('/user-settings', authMiddleware, userSettingsRouter);
+
+// Mount all API routes under /api
+app.use('/api', apiRouter);
 
 // 404 handler
 app.use((req: Request, res: Response) => {
