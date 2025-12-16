@@ -977,8 +977,11 @@ function VODPlayerContent() {
       <div
         data-controls="true"
         className={`absolute top-0 left-0 right-0 bg-gradient-to-b from-black/80 to-transparent p-4 sm:p-6 transition-opacity duration-300 ${
-          showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          showControls ? 'opacity-100' : 'opacity-0'
         }`}
+        style={{
+          pointerEvents: showControls ? 'auto' : 'none'
+        }}
         onClick={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
       >
@@ -1007,22 +1010,27 @@ function VODPlayerContent() {
       {/* Bottom Controls */}
       <div
         data-controls="true"
-        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-6 transition-opacity duration-300 ${
-          showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-4 sm:px-6 pt-6 pb-8 sm:pb-6 transition-opacity duration-300 ${
+          showControls ? 'opacity-100' : 'opacity-0'
         }`}
+        style={{
+          pointerEvents: showControls ? 'auto' : 'none'
+        }}
         onClick={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
       >
         {/* Progress Bar */}
         <div
-          className="w-full h-1 bg-gray-600 rounded-full mb-4 cursor-pointer group"
+          className="w-full h-2 sm:h-1 bg-gray-600 rounded-full mb-4 cursor-pointer group relative"
           onClick={handleProgressClick}
+          style={{ padding: '8px 0' }}
         >
           <div
-            className="h-full bg-yellow-500 rounded-full relative group-hover:h-1.5 transition-all"
+            className="h-full bg-yellow-500 rounded-full relative"
             style={{ width: `${(currentTime / duration) * 100}%` }}
           >
-            <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-yellow-500 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+            {/* Always visible draggable handle on touch devices */}
+            <div className="absolute right-0 top-1/2 -translate-y-1/2 w-4 h-4 sm:w-3 sm:h-3 bg-yellow-500 rounded-full border-2 border-white shadow-lg sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" />
           </div>
         </div>
 
