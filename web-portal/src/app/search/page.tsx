@@ -114,19 +114,19 @@ export default function SearchPage() {
   }
 
   return (
-    <div className="min-h-screen bg-black pb-24">
+    <div className="min-h-screen bg-black">
       <Navbar />
 
-      <div className="pt-8 md:pt-24 pb-12">
+      <div className="mt-20 md:mt-24 pb-24">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           {/* Header */}
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold text-white mb-2">Search</h1>
-            <p className="text-gray-400">Search for movies and series</p>
+          <div className="mb-6 mt-4">
+            <h1 className="text-2xl md:text-3xl font-bold text-white mb-2">Search</h1>
+            <p className="text-gray-400 text-sm md:text-base">Search for movies and series</p>
           </div>
 
           {/* Search Input */}
-          <div className="mb-8">
+          <div className="mb-8 sticky top-16 md:top-20 z-30 bg-black pb-4">
             <div className="relative">
               <SearchIcon className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
               <input
@@ -135,7 +135,7 @@ export default function SearchPage() {
                 onChange={(e) => handleTextChange(e.target.value)}
                 placeholder="Search movies, series..."
                 autoFocus
-                className="w-full bg-gray-900 text-white pl-12 pr-4 py-4 rounded-lg border border-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full bg-gray-900 text-white pl-12 pr-4 py-3 md:py-4 rounded-lg border border-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm md:text-base"
               />
             </div>
           </div>

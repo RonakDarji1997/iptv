@@ -506,22 +506,17 @@ export default function LiveTVPage() {
     ))
 
     try {
-      // Load first 2 pages instantly
-      const [page1, page2] = await Promise.all([
-        contentService.getLiveChannels(category.category_id, 1),
-        contentService.getLiveChannels(category.category_id, 2)
-      ])
-
-      const allChannels = [...page1.items, ...page2.items]
+      // Load only first page initially
+      const page1 = await contentService.getLiveChannels(category.category_id, 1)
 
       setCategories(prev => prev.map(cat => {
         if (cat.id === categoryId) {
           return {
             ...cat,
-            channels: allChannels,
-            currentPage: 2,
+            channels: page1.items,
+            currentPage: 1,
             maxPage: page1.maxPage,
-            totalItems: page1.totalItems || allChannels.length,
+            totalItems: page1.totalItems || page1.items.length,
             loading: false,
             loaded: true
           }
@@ -668,10 +663,10 @@ export default function LiveTVPage() {
                         return 0
                       })
                       .map(category => (
-                      <button
+                      <div
                         key={category.id}
+                        className="w-full text-left px-4 py-3 rounded-lg transition-colors bg-gray-800 text-gray-300 hover:bg-gray-700 flex items-center justify-between group cursor-pointer"
                         onClick={() => handleCategoryChange(category.id)}
-                        className="w-full text-left px-4 py-3 rounded-lg transition-colors bg-gray-800 text-gray-300 hover:bg-gray-700 flex items-center justify-between group"
                       >
                         <div className="flex-1">
                           <div className="font-medium">{category.name}</div>
@@ -693,7 +688,7 @@ export default function LiveTVPage() {
                             className={`w-5 h-5 ${favoriteCategories.has(category.id) ? 'text-yellow-500 fill-yellow-500' : 'text-gray-400'}`}
                           />
                         </button>
-                      </button>
+                      </div>
                     ))}
                   </div>
                 </div>

@@ -122,20 +122,9 @@ export default function HomePage() {
       setWatchHistory(historyData)
       setFavoriteChannels(topChannelsData)
       
-      // Load favorite channel and get its cmd
+      // Set favorite channel directly - we'll load the stream when needed
       if (favoriteChannelData) {
-        // Get all channels to find the cmd
-        const allChannels = await contentService.getAllChannels()
-        const channelWithCmd = allChannels.find((c: any) => c.id === favoriteChannelData.channel_id)
-        
-        if (channelWithCmd) {
-          setFavoriteChannel({
-            ...favoriteChannelData,
-            cmd: channelWithCmd.cmd || channelWithCmd.id
-          })
-        } else {
-          setFavoriteChannel(favoriteChannelData)
-        }
+        setFavoriteChannel(favoriteChannelData)
       }
     } catch (error) {
       console.error('Failed to load home data:', error)
@@ -147,8 +136,12 @@ export default function HomePage() {
 
   // Load stream when favorite channel is available
   useEffect(() => {
-    if (favoriteChannel?.cmd) {
-      loadChannelStream(favoriteChannel.cmd)
+    if (favoriteChannel) {
+      // Analytics data uses channel_cmd field
+      const cmd = favoriteChannel.channel_cmd || favoriteChannel.cmd || favoriteChannel.channel_id
+      if (cmd) {
+        loadChannelStream(cmd)
+      }
     }
   }, [favoriteChannel])
 
@@ -246,10 +239,14 @@ export default function HomePage() {
   }
 
   return (
-    <div className="min-h-screen bg-black pb-24">
+    <div className="h-screen bg-black overflow-y-auto overflow-x-hidden">
       <Navbar />
       
-      <div className="container mx-auto px-4 pt-20 md:pt-20 space-y-8">
+      <div className="container mx-auto px-4 pt-20 md:pt-20 pb-24 space-y-8"
+        style={{ 
+          WebkitOverflowScrolling: 'touch'
+        }}
+      >
         {/* Favorite Channel Live Preview */}
         {favoriteChannel && (
           <section className="space-y-3">
@@ -366,7 +363,10 @@ export default function HomePage() {
             </div>
 
             <div className="relative overflow-hidden">
-              <div className="flex space-x-3 overflow-x-auto scrollbar-hide pb-2 snap-x snap-mandatory">
+              <div 
+                className="flex space-x-3 overflow-x-auto scrollbar-hide pb-2 snap-x snap-mandatory"
+                style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' }}
+              >
                 {continueWatching.map((item) => (
                   <div
                     key={item.id}
@@ -433,7 +433,10 @@ export default function HomePage() {
             </div>
 
             <div className="relative overflow-hidden">
-              <div className="flex space-x-3 overflow-x-auto scrollbar-hide pb-2 snap-x snap-mandatory">
+              <div 
+                className="flex space-x-3 overflow-x-auto scrollbar-hide pb-2 snap-x snap-mandatory"
+                style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' }}
+              >
                 {favoriteVOD.map((item) => (
                   <div
                     key={item.id}
@@ -480,7 +483,10 @@ export default function HomePage() {
             </div>
 
             <div className="relative overflow-hidden">
-              <div className="flex space-x-3 overflow-x-auto scrollbar-hide pb-2 snap-x snap-mandatory">
+              <div 
+                className="flex space-x-3 overflow-x-auto scrollbar-hide pb-2 snap-x snap-mandatory"
+                style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' }}
+              >
                 {watchHistory.map((item) => (
                   <div
                     key={item.id}

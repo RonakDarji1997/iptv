@@ -406,6 +406,9 @@ export default function SeriesDetailPage() {
         const currentEpisode = episodeList?.[currentIndex || 0];
         const currentSeason = seasons.find(s => s.id === seasonId);
         
+        // Extract episode number - use currentIndex + 1 as fallback if episode_num doesn't exist
+        const episodeNumber = currentEpisode?.episode_num || (currentIndex !== undefined ? currentIndex + 1 : 1);
+        
         // Pass episode navigation data via sessionStorage
         if (episodeList && currentIndex !== undefined && currentEpisode) {
           sessionStorage.setItem('episode_playlist', JSON.stringify({
@@ -436,12 +439,12 @@ export default function SeriesDetailPage() {
           poster,
           seriesId,
           seasonNumber: currentSeason?.season_number,
-          episodeNumber: currentEpisode?.episode_num,
+          episodeNumber: episodeNumber,
           imdbId: seriesImdbId
         });
         
         // Build URL with optional IMDb ID parameter
-        const playerUrl = `/player/vod?url=${streamUrl}&title=${title}&isSeries=true&contentId=${episodeId}&contentType=episode&seriesId=${seriesId}&seasonNumber=${currentSeason?.season_number || ''}&episodeNumber=${currentEpisode?.episode_num || ''}&poster=${encodeURIComponent(poster)}${seriesImdbId ? `&imdbId=${seriesImdbId}` : ''}`;
+        const playerUrl = `/player/vod?url=${streamUrl}&title=${title}&isSeries=true&contentId=${episodeId}&contentType=episode&seriesId=${seriesId}&seasonNumber=${currentSeason?.season_number || ''}&episodeNumber=${episodeNumber}&poster=${encodeURIComponent(poster)}${seriesImdbId ? `&imdbId=${seriesImdbId}` : ''}`;
         router.push(playerUrl);
       } else {
         toast.error('Failed to create stream link');

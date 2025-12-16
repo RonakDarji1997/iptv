@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const BACKEND_URL = 'http://api.iptv.ronika.co/api'
+const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'
 
 function getAuthHeader(request: NextRequest): Record<string, string> {
   const headers: Record<string, string> = {

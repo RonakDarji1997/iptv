@@ -21,6 +21,10 @@ interface Subtitle {
   uploader: string;
   releaseInfo?: string;
   fileId: number;
+  isCustom?: boolean;
+  customUrl?: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
 }
 
 function VODPlayerContent() {
@@ -29,6 +33,7 @@ function VODPlayerContent() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const streamUrl = searchParams.get('url');
   const title = searchParams.get('title');
@@ -39,16 +44,6 @@ function VODPlayerContent() {
   const seasonNumber = searchParams.get('seasonNumber');
   const episodeNumber = searchParams.get('episodeNumber');
   const imdbId = searchParams.get('imdbId');
-
-  console.log('[VODPlayer] URL Params:', {
-    contentId,
-    contentType,
-    seriesId,
-    seasonNumber,
-    episodeNumber,
-    isSeries,
-    imdbId: imdbId
-  });
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -74,6 +69,7 @@ function VODPlayerContent() {
   const [availableSubtitles, setAvailableSubtitles] = useState<Subtitle[]>([]);
   const [selectedSubtitle, setSelectedSubtitle] = useState<Subtitle | null>(null);
   const [showSubtitleMenu, setShowSubtitleMenu] = useState(false);
+  const [subtitleSearch, setSubtitleSearch] = useState('');
   const [loadingSubtitles, setLoadingSubtitles] = useState(false);
   const [subtitleTrack, setSubtitleTrack] = useState<string | null>(null);
   const [videoStats, setVideoStats] = useState<VideoStats | null>(null);
@@ -85,6 +81,42 @@ function VODPlayerContent() {
   // Subtitle functions (defined before useEffect that uses them)
   const selectSubtitle = async (subtitle: Subtitle) => {
     try {
+      // Handle custom uploaded subtitles differently
+      if (subtitle.isCustom && subtitle.customUrl) {
+        console.log('[Subtitles] Loading custom subtitle:', subtitle.fileName);
+        
+        // Disable existing track first
+        const video = videoRef.current;
+        if (video && video.textTracks.length > 0) {
+          for (let i = 0; i < video.textTracks.length; i++) {
+            video.textTracks[i].mode = 'hidden';
+          }
+        }
+        
+        setSubtitleTrack(subtitle.customUrl);
+        setSelectedSubtitle(subtitle);
+        setShowSubtitleMenu(false);
+        
+        // Wait for track to be added and enable it
+        setTimeout(() => {
+          const video = videoRef.current;
+          if (video && video.textTracks.length > 0) {
+            for (let i = 0; i < video.textTracks.length; i++) {
+              const track = video.textTracks[i];
+              if (track.kind === 'subtitles') {
+                track.mode = 'showing';
+                console.log('[Subtitles] Custom subtitle enabled');
+                toast.success(`Custom subtitle loaded: ${subtitle.fileName}`);
+                break;
+              }
+            }
+          }
+        }, 300);
+        
+        return;
+      }
+      
+      // Regular OpenSubtitles download flow
       console.log('[Subtitles] Downloading:', subtitle.fileName, 'fileId:', subtitle.fileId);
       
       // Call API route to download subtitle with caching
@@ -530,6 +562,9 @@ function VODPlayerContent() {
       clearTimeout(controlsTimeoutRef.current);
     }
 
+    // Don't hide controls if subtitle menu is open
+    if (showSubtitleMenu) return;
+
     controlsTimeoutRef.current = setTimeout(() => {
       if (isPlaying) {
         setShowControls(false);
@@ -541,7 +576,7 @@ function VODPlayerContent() {
         clearTimeout(controlsTimeoutRef.current);
       }
     };
-  }, [showControls, isPlaying]);
+  }, [showControls, isPlaying, showSubtitleMenu]);
 
   // Keyboard controls
   useEffect(() => {
@@ -754,8 +789,14 @@ function VODPlayerContent() {
         // Update state immediately before navigation
         setEpisodePlaylist(updatedPlaylist);
         
+        // Reset subtitles when switching episodes
+        setSelectedSubtitle(null);
+        setAvailableSubtitles([]);
+        
         // Include contentId and tracking params for next episode
-        router.replace(`/player/vod?url=${streamUrl}&title=${title}&isSeries=true&contentId=${episode.id}&contentType=episode&seriesId=${seriesId}&seasonNumber=${episode.season || 1}&episodeNumber=${episode.episode_num}`);
+        // Use index + 1 as fallback if episode_num is not available
+        const episodeNumber = episode.episode_num || (index + 1);
+        router.replace(`/player/vod?url=${streamUrl}&title=${title}&isSeries=true&contentId=${episode.id}&contentType=episode&seriesId=${seriesId}&seasonNumber=${episode.season || 1}&episodeNumber=${episodeNumber}`);
       }
     } catch (error) {
       console.error('Failed to load episode:', error);
@@ -801,9 +842,26 @@ function VODPlayerContent() {
     <div
       ref={containerRef}
       className="relative w-full h-screen bg-black overflow-hidden"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        touchAction: 'none',
+        WebkitUserSelect: 'none',
+        userSelect: 'none',
+        overscrollBehavior: 'none'
+      }}
       onMouseMove={handleMouseMove}
       onClick={togglePlayPause}
       onDoubleClick={handleDoubleClick}
+      onTouchStart={(e) => {
+        // Prevent default touch behavior to stop scrolling
+        if (e.target === containerRef.current || e.target === videoRef.current) {
+          handleMouseMove();
+        }
+      }}
     >
       {/* Subtitle styling */}
       <style jsx global>{`
@@ -820,9 +878,15 @@ function VODPlayerContent() {
       <video
         ref={videoRef}
         className="w-full h-full object-contain"
+        style={{ 
+          touchAction: 'none',
+          pointerEvents: 'auto'
+        }}
         src={transcodeUrl || decodeURIComponent(streamUrl)}
         autoPlay
         crossOrigin="anonymous"
+        playsInline
+        disablePictureInPicture
       >
         {/* Subtitle track */}
         {subtitleTrack && (
@@ -907,6 +971,7 @@ function VODPlayerContent() {
         className={`absolute top-0 left-0 right-0 bg-gradient-to-b from-black/80 to-transparent p-4 sm:p-6 transition-opacity duration-300 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
+        style={{ touchAction: 'none' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between gap-2 sm:gap-4">
@@ -936,6 +1001,7 @@ function VODPlayerContent() {
         className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-6 transition-opacity duration-300 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
+        style={{ touchAction: 'none' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Progress Bar */}
@@ -1058,6 +1124,7 @@ function VODPlayerContent() {
                   e.stopPropagation();
                   setShowSubtitleMenu(!showSubtitleMenu);
                 }}
+                onMouseEnter={() => setShowSubtitleMenu(true)}
                 className={`flex items-center justify-center transition-colors ${selectedSubtitle && subtitleTrack ? 'text-yellow-500 hover:text-yellow-400' : 'text-white hover:text-yellow-500'}`}
                 title="Subtitles"
               >
@@ -1066,44 +1133,199 @@ function VODPlayerContent() {
 
               {/* Subtitle Selection Menu */}
               {showSubtitleMenu && (
-                <div className="absolute bottom-full right-0 mb-2 bg-black/95 rounded-lg shadow-xl border border-gray-700 min-w-[200px] max-h-[300px] overflow-y-auto">
-                  <div className="p-2">
-                    <div className="text-xs text-gray-400 px-2 py-1 font-semibold uppercase">
+                <div 
+                  className="absolute bottom-full right-0 mb-2 bg-black/95 rounded-lg shadow-xl border border-gray-700 w-[280px] max-h-[400px] overflow-hidden flex flex-col"
+                  onMouseEnter={() => setShowSubtitleMenu(true)}
+                  onMouseLeave={() => setShowSubtitleMenu(false)}
+                >
+                  <div className="p-2 border-b border-gray-700">
+                    <div className="text-xs text-gray-400 px-1 mb-2 font-semibold uppercase">
                       Subtitles {loadingSubtitles && '(Loading...)'}
                     </div>
                     
+                    {/* Search Input */}
+                    <input
+                      type="text"
+                      placeholder="Search..."
+                      value={subtitleSearch}
+                      onChange={(e) => setSubtitleSearch(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-gray-800 text-white text-sm rounded border border-gray-600 focus:border-yellow-500 focus:outline-none"
+                    />
+                  </div>
+                  
+                  <div className="overflow-y-auto flex-1 p-1">
                     {/* Off option */}
                     <button
                       onClick={disableSubtitles}
-                      className={`w-full text-left px-3 py-2 rounded hover:bg-gray-800 transition-colors ${
+                      className={`w-full text-left px-2 py-1.5 rounded text-sm hover:bg-gray-800 transition-colors ${
                         !selectedSubtitle ? 'bg-yellow-500/20 text-yellow-500' : 'text-white'
                       }`}
                     >
                       Off
                     </button>
+                    
+                    {/* Upload custom subtitle */}
+                    <div className="w-full">
+                      <input
+                        ref={(el) => {
+                          fileInputRef.current = el;
+                          if (el && !el.dataset.listenerAdded) {
+                            console.log('[Upload] Setting up native event listener');
+                            el.dataset.listenerAdded = 'true';
+                            el.addEventListener('change', (e) => {
+                              console.log('[Upload] Native change event fired');
+                              const target = e.target as HTMLInputElement;
+                              const file = target.files?.[0];
+                              console.log('[Upload] Selected file:', file?.name, file?.type, file?.size);
+                              
+                              if (file) {
+                                const reader = new FileReader();
+                                reader.onload = (event) => {
+                                  try {
+                                    console.log('[Upload] File read complete');
+                                    const content = event.target?.result as string;
+                                    console.log('[Upload] Content length:', content?.length, 'First 100 chars:', content?.substring(0, 100));
+                                    let vttContent = content;
+                                    
+                                    // Convert SRT to VTT if needed
+                                    if (file.name.endsWith('.srt')) {
+                                      console.log('[Upload] Converting SRT to VTT');
+                                      // Remove sequence numbers and convert time format
+                                      const lines = content.replace(/\r\n/g, '\n').split('\n');
+                                      const vttLines = ['WEBVTT', ''];
+                                      
+                                      for (let i = 0; i < lines.length; i++) {
+                                        const line = lines[i].trim();
+                                        
+                                        // Skip sequence numbers (standalone numbers)
+                                        if (/^\d+$/.test(line)) {
+                                          continue;
+                                        }
+                                        
+                                        // Convert SRT timestamp to VTT (comma to dot)
+                                        if (line.includes('-->')) {
+                                          vttLines.push(line.replace(/,/g, '.'));
+                                        } else if (line) {
+                                          vttLines.push(line);
+                                        } else {
+                                          vttLines.push('');
+                                        }
+                                      }
+                                      
+                                      vttContent = vttLines.join('\n');
+                                      console.log('[Upload] VTT content created, length:', vttContent.length);
+                                    } else if (!content.trim().startsWith('WEBVTT')) {
+                                      console.log('[Upload] Adding WEBVTT header');
+                                      vttContent = 'WEBVTT\n\n' + content;
+                                    }
+                                    
+                                    console.log('[Upload] Creating blob and URL');
+                                    const blob = new Blob([vttContent], { type: 'text/vtt' });
+                                    const url = URL.createObjectURL(blob);
+                                    console.log('[Upload] Blob URL created:', url);
+                                    
+                                    const customSubtitle: Subtitle = {
+                                      id: `custom-${Date.now()}`,
+                                      language: 'custom',
+                                      languageName: 'Custom Upload',
+                                      fileName: file.name,
+                                      downloadCount: 0,
+                                      rating: 0,
+                                      uploader: 'You',
+                                      fileId: 0,
+                                      isCustom: true,
+                                      customUrl: url
+                                    };
+                                    
+                                    console.log('[Upload] Custom subtitle object:', customSubtitle);
+                                    
+                                    // Add to available subtitles list
+                                    setAvailableSubtitles(prev => {
+                                      console.log('[Upload] Previous subtitles:', prev.length);
+                                      const updated = [customSubtitle, ...prev];
+                                      console.log('[Upload] Updated subtitles:', updated.length);
+                                      return updated;
+                                    });
+                                    
+                                    console.log('[Upload] Calling selectSubtitle');
+                                    selectSubtitle(customSubtitle);
+                                    toast.success('Subtitle uploaded successfully');
+                                  } catch (error) {
+                                    console.error('[Upload] Error processing subtitle:', error);
+                                    toast.error('Failed to process subtitle file');
+                                  }
+                                };
+                                reader.onerror = (error) => {
+                                  console.error('[Upload] Failed to read file:', error);
+                                  toast.error('Failed to read subtitle file');
+                                };
+                                console.log('[Upload] Starting to read file as text');
+                                reader.readAsText(file);
+                              } else {
+                                console.log('[Upload] No file selected');
+                              }
+                              target.value = ''; // Reset input
+                            });
+                          }
+                        }}
+                        type="file"
+                        accept=".srt,.vtt"
+                        style={{ display: 'none' }}
+                      />
+                      <button
+                        onClick={() => {
+                          console.log('[Upload] Button clicked');
+                          if (fileInputRef.current) {
+                            console.log('[Upload] Triggering file input click');
+                            fileInputRef.current.click();
+                          } else {
+                            console.error('[Upload] File input ref is null');
+                          }
+                        }}
+                        className="w-full text-left px-2 py-1.5 rounded text-sm hover:bg-gray-800 transition-colors text-white cursor-pointer flex items-center gap-2"
+                      >
+                        <span>📤</span>
+                        <span>Upload Subtitle</span>
+                      </button>
+                    </div>
 
                     {/* Available subtitles */}
                     {availableSubtitles.length === 0 && !loadingSubtitles ? (
-                      <div className="px-3 py-2 text-sm text-gray-500">
+                      <div className="px-2 py-2 text-xs text-gray-500">
                         No subtitles available
                       </div>
                     ) : (
-                      availableSubtitles.slice(0, 10).map((subtitle) => (
-                        <button
-                          key={subtitle.id}
-                          onClick={() => selectSubtitle(subtitle)}
-                          className={`w-full text-left px-3 py-2 rounded hover:bg-gray-800 transition-colors ${
-                            selectedSubtitle?.id === subtitle.id ? 'bg-yellow-500/20 text-yellow-500' : 'text-white'
-                          }`}
-                        >
-                          <div className="text-sm font-medium">{subtitle.languageName}</div>
-                          <div className="text-xs text-gray-400 truncate">{subtitle.fileName}</div>
-                          <div className="text-xs text-gray-500 flex items-center gap-2 mt-1">
-                            <span>⭐ {subtitle.rating.toFixed(1)}</span>
-                            <span>↓ {subtitle.downloadCount}</span>
-                          </div>
-                        </button>
-                      ))
+                      availableSubtitles
+                        .filter((subtitle) => {
+                          if (!subtitleSearch) return true;
+                          const search = subtitleSearch.toLowerCase();
+                          return (
+                            subtitle.languageName.toLowerCase().includes(search) ||
+                            subtitle.fileName.toLowerCase().includes(search) ||
+                            subtitle.releaseInfo?.toLowerCase().includes(search)
+                          );
+                        })
+                        .map((subtitle) => (
+                          <button
+                            key={subtitle.id}
+                            onClick={() => selectSubtitle(subtitle)}
+                            className={`w-full text-left px-2 py-1.5 rounded hover:bg-gray-800 transition-colors ${
+                              selectedSubtitle?.id === subtitle.id ? 'bg-yellow-500/20 text-yellow-500' : 'text-white'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2 mb-0.5">
+                              <div className="text-xs font-medium">
+                                {subtitle.isCustom && '📤 '}{subtitle.languageName}
+                              </div>
+                              {subtitle.episodeNumber && (
+                                <div className="text-[10px] bg-gray-700 px-1.5 py-0.5 rounded">
+                                  S{subtitle.seasonNumber}E{subtitle.episodeNumber}
+                                </div>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-gray-400 truncate">{subtitle.fileName}</div>
+                          </button>
+                        ))
                     )}
                   </div>
                 </div>

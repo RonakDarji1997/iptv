@@ -107,6 +107,16 @@ class ApiCache {
    * Fetch with automatic caching
    */
   async fetch<T = any>(url: string, options?: RequestInit): Promise<T> {
+    // Skip caching for subtitle endpoints
+    if (url.includes('/api/subtitles')) {
+      console.log('[Cache] ⏭️  SKIP (subtitles):', url);
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      return await response.json();
+    }
+
     const key = this.generateKey(url, options);
     
     // Check cache first
