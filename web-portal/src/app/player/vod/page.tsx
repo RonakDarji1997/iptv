@@ -848,18 +848,20 @@ function VODPlayerContent() {
         left: 0,
         right: 0,
         bottom: 0,
-        touchAction: 'none',
-        WebkitUserSelect: 'none',
-        userSelect: 'none',
         overscrollBehavior: 'none'
       }}
       onMouseMove={handleMouseMove}
       onClick={togglePlayPause}
       onDoubleClick={handleDoubleClick}
       onTouchStart={(e) => {
-        // Prevent default touch behavior to stop scrolling
-        if (e.target === containerRef.current || e.target === videoRef.current) {
-          handleMouseMove();
+        // Show controls on touch
+        handleMouseMove();
+      }}
+      onTouchEnd={(e) => {
+        // Handle tap for play/pause on video area only
+        const target = e.target as HTMLElement;
+        if (target === containerRef.current || target === videoRef.current) {
+          togglePlayPause();
         }
       }}
     >
@@ -879,7 +881,6 @@ function VODPlayerContent() {
         ref={videoRef}
         className="w-full h-full object-contain"
         style={{ 
-          touchAction: 'none',
           pointerEvents: 'auto'
         }}
         src={transcodeUrl || decodeURIComponent(streamUrl)}
@@ -971,8 +972,8 @@ function VODPlayerContent() {
         className={`absolute top-0 left-0 right-0 bg-gradient-to-b from-black/80 to-transparent p-4 sm:p-6 transition-opacity duration-300 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
-        style={{ touchAction: 'none' }}
         onClick={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between gap-2 sm:gap-4">
           <button
@@ -1001,8 +1002,8 @@ function VODPlayerContent() {
         className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-6 transition-opacity duration-300 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
-        style={{ touchAction: 'none' }}
         onClick={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
       >
         {/* Progress Bar */}
         <div
