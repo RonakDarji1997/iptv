@@ -158,7 +158,9 @@ function VODPlayerContent({ searchParams }: {
       // Handle 406 (Not Acceptable) silently - usually quota/limit issues
       if (error.message?.includes('406')) {
         console.log('[Subtitles] Subtitle not available (406)');
-        toast.info('Subtitles could not be loaded at this time');
+        toast('Subtitles could not be loaded at this time', {
+          icon: 'ℹ️',
+        });
       } else {
         console.error('[Subtitles] Download error:', error);
         toast.error('Failed to load subtitle');

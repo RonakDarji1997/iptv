@@ -75,6 +75,14 @@ export default function BrowsePage() {
     // Implement play functionality
   }
 
+  const handleHeroInfoClick = (id: string) => {
+    const item = featuredContent.find(c => c.id === id)
+    if (item) {
+      const type = item.type === 'MOVIE' ? 'movie' : item.type === 'SERIES' ? 'series' : 'live'
+      handleInfoClick(item, type as 'movie' | 'series' | 'live')
+    }
+  }
+
   const handleInfoClick = (item: ContentItem, type: 'movie' | 'series' | 'live') => {
     setSelectedContent(item)
     setModalType(type)
@@ -100,6 +108,7 @@ export default function BrowsePage() {
     title: item.title || item.name || 'Untitled',
     description: item.description || '',
     imageUrl: item.tmdb?.backdropUrl || (item as any).screenshot || '/placeholder.jpg',
+    type: (item.type === 'MOVIE' ? 'movie' : item.type === 'SERIES' ? 'series' : 'live') as 'movie' | 'series' | 'live',
   }));
   
   return (
@@ -111,7 +120,7 @@ export default function BrowsePage() {
         <HeroCarousel
           slides={heroSlides}
           onPlayClick={handlePlayClick}
-          onInfoClick={handleInfoClick}
+          onInfoClick={handleHeroInfoClick}
         />
 
         {/* Content Sections */}

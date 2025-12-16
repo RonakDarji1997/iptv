@@ -271,7 +271,7 @@ export default function MovieDetailPage() {
         const streamUrl = encodeURIComponent(data.link.cmd);
         const poster = tmdbData?.poster_path 
           ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}`
-          : movieInfo.screenshot || '';
+          : '';
         router.push(`/player/vod?url=${streamUrl}&title=${encodeURIComponent(movieInfo.name)}&contentId=${movieId}&contentType=movie&poster=${encodeURIComponent(poster)}`);
       } else {
         toast.error('Failed to create stream link');

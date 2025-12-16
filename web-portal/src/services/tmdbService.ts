@@ -282,7 +282,7 @@ export class TMDBService {
       }
 
       if (results.length > 0) {
-        console.log('[TMDB Smart Search] First result:', results[0].name || results[0].title);
+        console.log('[TMDB Smart Search] First result:', ('name' in results[0] ? results[0].name : results[0].title));
       }
 
       if (results.length === 0) return null;

@@ -173,7 +173,7 @@ export default function FavoritesPage() {
                     />
                   ) : (
                     <div className="w-full h-full bg-gray-700 flex items-center justify-center">
-                      {favorite.content_type === 'MOVIE' ? (
+                      {favorite.content_type === 'movie' ? (
                         <Film className="w-12 h-12 text-gray-500" />
                       ) : (
                         <Tv className="w-12 h-12 text-gray-500" />

@@ -328,8 +328,7 @@ export default function LiveTVPage() {
         setFavoriteChannels(newFavorites)
         toast.success('Removed from favorites')
       } else {
-        const baseUrl = await getProviderUrl()
-        const logoUrl = buildLogoUrl((channel as any).logo || '', baseUrl)
+        const logoUrl = await buildLogoUrl((channel as any).logo || '')
         const metadata = {
           logo: logoUrl,
           cmd: channel.cmd,
@@ -411,7 +410,7 @@ export default function LiveTVPage() {
           contentType: 'CATEGORY',
           contentId: categoryId,
           contentName: category.name,
-          metadata: { alias: category.alias }
+          metadata: { category_id: category.category_id }
         }, {
           headers: authService.getAuthHeader(),
         })
@@ -428,8 +427,7 @@ export default function LiveTVPage() {
 
   const updateChannelStats = async (channel: ContentItem) => {
     try {
-      const baseUrl = await getProviderUrl()
-      const logoUrl = buildLogoUrl((channel as any).logo || '', baseUrl)
+      const logoUrl = await buildLogoUrl((channel as any).logo || '')
       
       await axios.post(`${API_URL}/channel-analytics/track`, {
         channelId: channel.id,
@@ -478,6 +476,7 @@ export default function LiveTVPage() {
         channels: [],
         currentPage: 0,
         maxPage: 10,
+        totalItems: 0,
         loading: false,
         loaded: false
       }))
