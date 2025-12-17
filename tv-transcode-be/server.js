@@ -2,9 +2,21 @@ const express = require('express');
 const morgan = require('morgan');
 const { spawn, execSync } = require('child_process');
 const url = require('url');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+
+// Create temp directory for HLS segments
+const HLS_DIR = path.join(__dirname, 'hls_temp');
+if (!fs.existsSync(HLS_DIR)) {
+  fs.mkdirSync(HLS_DIR, { recursive: true });
+}
+
+// Track active transcoding sessions
+const sessions = new Map();
 
 // Enable CORS for all routes
 app.use((req, res, next) => {
@@ -55,7 +67,14 @@ app.get('/transcode', (req, res) => {
     return res.status(501).json({ error: 'ffmpeg not available on server' });
   }
 
-  // Determine target resolution (support 720, 1080 and 2160)
+  // Create unique session ID for this transcode
+  const sessionId = crypto.randomBytes(16).toString('hex');
+  const sessionDir = path.join(HLS_DIR, sessionId);
+  fs.mkdirSync(sessionDir, { recursive: true });
+
+  console.log(`[Transcode] Starting session ${sessionId} for ${target}p ${mode}`);
+
+  // Determine target resolution
   const targetParam = parseInt(req.query.target || '1080', 10);
   let targetW = 1920, targetH = 1080;
   if (targetParam === 2160) {
@@ -66,37 +85,35 @@ app.get('/transcode', (req, res) => {
     targetH = 720;
   }
 
-  // Determine scale args:
-  // - For upscale: force width to targetW and keep aspect (-2 sets height automatically)
-  // - For downscale: only reduce if input width > targetW, otherwise keep original resolution
+  // Determine scale args
   let scaleArg = '';
   if (mode === 'upscale') {
     scaleArg = `scale=${targetW}:-2:flags=lanczos`;
   } else {
-    // if input width greater than targetW, set width to targetW, else keep input width
     scaleArg = `scale='if(gt(iw,${targetW}),${targetW},iw)':'-2'`;
   }
 
-  // Use libx264 + aac for broad compatibility, output MPEG-TS stream
   // Adjust bitrate based on target resolution
   let videoBitrate = '5000k';
   let maxRate = '6000k';
   let bufSize = '12000k';
   
   if (targetParam === 2160) {
-    // 4K requires much higher bitrate
-    videoBitrate = '20000k';  // 20 Mbps for 4K
-    maxRate = '25000k';       // 25 Mbps max
-    bufSize = '50000k';       // 50 MB buffer
+    videoBitrate = '20000k';
+    maxRate = '25000k';
+    bufSize = '50000k';
   } else if (targetParam === 1080) {
-    videoBitrate = '8000k';   // 8 Mbps for 1080p
-    maxRate = '10000k';       // 10 Mbps max
-    bufSize = '20000k';       // 20 MB buffer
+    videoBitrate = '8000k';
+    maxRate = '10000k';
+    bufSize = '20000k';
   } else if (targetParam === 720) {
-    videoBitrate = '4000k';   // 4 Mbps for 720p
-    maxRate = '5000k';        // 5 Mbps max
-    bufSize = '10000k';       // 10 MB buffer
+    videoBitrate = '4000k';
+    maxRate = '5000k';
+    bufSize = '10000k';
   }
+  
+  const playlistPath = path.join(sessionDir, 'playlist.m3u8');
+  const segmentPattern = path.join(sessionDir, 'segment%d.ts');
   
   const ffArgs = [
     '-hide_banner',
@@ -110,49 +127,112 @@ app.get('/transcode', (req, res) => {
     '-bufsize', bufSize,
     '-c:a', 'aac',
     '-ac', '2',
-    '-f', 'mpegts',
-    'pipe:1'
+    '-f', 'hls',
+    '-hls_time', '2',
+    '-hls_list_size', '0', // 0 = keep all segments for full seeking support
+    '-hls_segment_filename', segmentPattern,
+    playlistPath
   ];
 
-  res.setHeader('Content-Type', 'video/MP2T');
-  res.setHeader('Cache-Control', 'no-cache');
-
-  // Spawn ffmpeg and pipe output to response
   const ff = spawn('ffmpeg', ffArgs);
 
-  ff.stdout.pipe(res);
-
   ff.stderr.on('data', (d) => {
-    // Log ffmpeg messages
     console.log('[ffmpeg]', d.toString());
   });
 
   ff.on('error', (err) => {
     console.error('[ffmpeg] Process error:', err);
-    try { 
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'FFmpeg process error' });
-      }
-      res.end(); 
-    } catch (e) {
-      console.error('[ffmpeg] Error ending response:', e);
-    }
+    cleanupSession(sessionId);
   });
 
   ff.on('exit', (code, signal) => {
     console.log('[ffmpeg] Process exited with code:', code, 'signal:', signal);
+    setTimeout(() => cleanupSession(sessionId), 60000); // Clean up after 1 minute
   });
 
-  // When client disconnects, kill ffmpeg
-  req.on('close', () => {
-    console.log('[ffmpeg] Client disconnected, killing process');
-    try {
-      ff.kill('SIGKILL');
-    } catch (e) {
-      console.error('[ffmpeg] Error killing process:', e);
-    }
+  // Store session info
+  sessions.set(sessionId, {
+    process: ff,
+    dir: sessionDir,
+    createdAt: Date.now()
   });
+
+  // Wait a bit for playlist to be created, then return URL
+  const checkInterval = setInterval(() => {
+    if (fs.existsSync(playlistPath)) {
+      clearInterval(checkInterval);
+      const playlistUrl = `http://localhost:${PORT}/hls/${sessionId}/playlist.m3u8`;
+      res.json({ 
+        success: true, 
+        playlistUrl,
+        sessionId,
+        message: 'HLS stream ready'
+      });
+    }
+  }, 200);
+
+  // Timeout after 30 seconds
+  setTimeout(() => {
+    clearInterval(checkInterval);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Timeout waiting for transcode to start' });
+      cleanupSession(sessionId);
+    }
+  }, 30000);
 });
+
+// Serve HLS playlists and segments
+app.use('/hls', express.static(HLS_DIR, {
+  setHeaders: (res, filepath) => {
+    if (filepath.endsWith('.m3u8')) {
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    } else if (filepath.endsWith('.ts')) {
+      res.setHeader('Content-Type', 'video/mp2t');
+    }
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'no-cache');
+  }
+}));
+
+// Cleanup endpoint - allow clients to trigger cleanup when stopping playback
+app.post('/cleanup/:sessionId', (req, res) => {
+  const { sessionId } = req.params;
+  
+  if (!sessionId) {
+    return res.status(400).json({ error: 'sessionId required' });
+  }
+  
+  const session = sessions.get(sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+  
+  console.log(`[Cleanup] Manual cleanup requested for session ${sessionId}`);
+  cleanupSession(sessionId);
+  res.json({ success: true, message: 'Session cleaned up' });
+});
+
+function cleanupSession(sessionId) {
+  const session = sessions.get(sessionId);
+  if (session) {
+    try {
+      session.process.kill('SIGKILL');
+    } catch (e) {
+      console.error('[Cleanup] Error killing process:', e);
+    }
+    
+    try {
+      if (fs.existsSync(session.dir)) {
+        fs.rmSync(session.dir, { recursive: true, force: true });
+      }
+    } catch (e) {
+      console.error('[Cleanup] Error removing directory:', e);
+    }
+    
+    sessions.delete(sessionId);
+    console.log(`[Cleanup] Session ${sessionId} cleaned up`);
+  }
+}
 
 app.listen(PORT, () => {
   console.log(`tv-transcode-be listening on ${PORT}`);

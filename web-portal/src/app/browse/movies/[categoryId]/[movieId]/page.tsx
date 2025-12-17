@@ -10,6 +10,7 @@ import FavoriteButton from '@/components/FavoriteButton';
 import ProgressBar from '@/components/ProgressBar';
 import { cache } from '@/utils/cache';
 import { API_URL } from '@/config/constants';
+import { isMobileApp, playVideoNative } from '@/utils/mobileDetection';
 
 interface MovieInfo {
   id: string;
@@ -268,11 +269,59 @@ export default function MovieDetailPage() {
         }
         
         // Navigate to player with stream URL and poster
-        const streamUrl = encodeURIComponent(data.link.cmd);
+        const streamUrl = data.link.cmd;
         const poster = tmdbData?.poster_path 
           ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}`
-          : '';
-        router.push(`/player/vod?url=${streamUrl}&title=${encodeURIComponent(movieInfo.name)}&contentId=${movieId}&contentType=movie&poster=${encodeURIComponent(poster)}`);
+          : (providerUrl && movieInfo.cover_big 
+            ? `${providerUrl}${movieInfo.cover_big}`
+            : '');
+        
+        // On mobile, open native player directly without navigating
+        if (isMobileApp()) {
+          console.log('[Movie] Opening native VOD player - loading progress first');
+          
+          let savedPosition = 0;
+          try {
+            console.log('[Movie] Loading progress for:', movieId);
+            
+            const progressResponse = await fetch(`${API_URL}/progress/${movieId}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            
+            if (progressResponse.ok) {
+              const progressData = await progressResponse.json();
+              if (progressData.success && progressData.progress) {
+                savedPosition = progressData.progress.current_position;
+                const percentage = (savedPosition / progressData.progress.duration) * 100;
+                console.log(`[Movie] ✅ Found saved position: ${savedPosition}s (${percentage.toFixed(1)}%)`);
+              } else {
+                console.log('[Movie] No saved progress found');
+              }
+            }
+          } catch (error) {
+            console.error('[Movie] Failed to load progress:', error);
+          }
+          
+          console.log('[Movie] Playing with savedPosition:', savedPosition);
+          playVideoNative('vod', {
+            url: streamUrl,
+            title: movieInfo.name,
+            contentId: movieId,
+            contentType: 'movie',
+            savedPosition: savedPosition,
+            subtitles: [],
+            selectedSubtitle: null,
+            isSeries: false,
+            seriesId: null,
+            seasonNumber: null,
+            episodeNumber: null,
+            imdbId: movieImdbId,
+            poster: poster || undefined,
+          });
+        } else {
+          // On web, navigate to player page
+          router.push(`/player/vod?url=${encodeURIComponent(streamUrl)}&title=${encodeURIComponent(movieInfo.name)}&contentId=${movieId}&contentType=movie&poster=${encodeURIComponent(poster)}`);
+        }
       } else {
         toast.error('Failed to create stream link');
       }

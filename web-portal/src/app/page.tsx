@@ -1,10 +1,55 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Film, Tv, Radio, Download, LogIn, Smartphone, Globe, Zap } from 'lucide-react'
+import { isMobileApp } from '@/utils/mobileDetection'
+import { authService } from '@/services/authService'
 
 export default function LandingPage() {
   const router = useRouter()
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true)
+  const [mounted, setMounted] = useState(false)
+
+  // Wait for client-side hydration
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  // Redirect on mobile: to /home if authenticated, to /auth/login if not
+  useEffect(() => {
+    if (!mounted) return
+
+    if (isMobileApp()) {
+      // Small delay to let storage bridge initialize
+      setTimeout(() => {
+        const isAuth = authService.isAuthenticated()
+        console.log('[Landing] Mobile app - Auth check:', isAuth)
+        if (isAuth) {
+          router.push('/home')
+        } else {
+          router.push('/auth/login')
+        }
+        setIsCheckingAuth(false)
+      }, 500) // 500ms delay for storage bridge initialization
+    } else {
+      setIsCheckingAuth(false)
+    }
+  }, [router, mounted])
+
+  // Show loading while mounting or checking auth on mobile
+  if (!mounted || (isMobileApp() && isCheckingAuth)) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center mb-4 mx-auto animate-pulse">
+            <span className="text-white font-bold text-3xl">S</span>
+          </div>
+          <p className="text-gray-400">Loading...</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-black">

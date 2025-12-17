@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { LogIn, Tv2, Mail, Lock, ArrowLeft } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { authService } from '@/services/authService'
+import { isMobileApp } from '@/utils/mobileDetection'
 import axios from 'axios'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'
@@ -55,14 +56,16 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-black flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        {/* Back Button */}
-        <button
-          onClick={() => router.push('/')}
-          className="flex items-center space-x-2 text-gray-400 hover:text-white mb-8 transition-colors"
-        >
-          <ArrowLeft className="w-5 h-5" />
-          <span>Back to Home</span>
-        </button>
+        {/* Back Button - Hide on mobile */}
+        {!isMobileApp() && (
+          <button
+            onClick={() => router.push('/')}
+            className="flex items-center space-x-2 text-gray-400 hover:text-white mb-8 transition-colors"
+          >
+            <ArrowLeft className="w-5 h-5" />
+            <span>Back to Home</span>
+          </button>
+        )}
 
         {/* Card */}
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl">

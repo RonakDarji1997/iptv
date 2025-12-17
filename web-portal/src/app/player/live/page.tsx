@@ -1,24 +1,25 @@
 'use client';
 
-import { useEffect, useState, useRef, Suspense, use } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useState, useRef, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Volume2, VolumeX, Maximize, ChevronLeft, ChevronRight, Loader, Tv, Settings } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authService } from '@/services/authService';
 import { contentService } from '@/services/contentService';
 import { API_URL } from '@/config/constants';
 import { VideoStatsMonitor, VideoStats, getTranscodedUrl, formatBitrate, QUALITY_OPTIONS, QualityOption } from '@/utils/videoStats';
+import { isMobileApp, playVideoNative, listenToNative } from '@/utils/mobileDetection';
 
-function LivePlayerContent({ searchParams }: { searchParams: Promise<{ cmd?: string; name?: string; num?: string }> }) {
+function LivePlayerContent() {
   const router = useRouter();
-  const params = use(searchParams);
+  const searchParams = useSearchParams();
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   
-  const cmd = params.cmd;
-  const channelName = params.name;
-  const channelNum = params.num;
+  const cmd = searchParams.get('cmd');
+  const channelName = searchParams.get('name');
+  const channelNum = searchParams.get('num');
 
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [volume, setVolume] = useState(1);
@@ -63,8 +64,15 @@ function LivePlayerContent({ searchParams }: { searchParams: Promise<{ cmd?: str
   };
 
   useEffect(() => {
-    if (!cmd) {
+    if (!cmd || cmd === '') {
       setError('No channel command provided');
+      return;
+    }
+
+    // If mobile app, redirect immediately - don't render web player
+    if (isMobileApp()) {
+      console.log('[LiveTV] Mobile app detected - will use native player');
+      createStreamLink();
       return;
     }
 
@@ -114,6 +122,18 @@ function LivePlayerContent({ searchParams }: { searchParams: Promise<{ cmd?: str
 
   const applyQuality = async (originalUrl: string, quality: QualityOption) => {
     console.log('[Quality] Applying quality:', quality, 'to URL:', originalUrl.substring(0, 50));
+    
+    // CHECK: If running in mobile app, delegate to native player
+    if (isMobileApp()) {
+      console.log('[LiveTV] Mobile app detected - delegating to native player');
+      playVideoNative('live', {
+        url: originalUrl,
+        title: channelName || 'Live TV',
+        channelNum: channelNum,
+        cmd: cmd,
+      });
+      return; // Don't set streamUrl - native player will handle it
+    }
     
     // Always use original for live TV - transcoding not supported
     console.log('[Quality] Using original stream (live TV)');
@@ -381,6 +401,18 @@ function LivePlayerContent({ searchParams }: { searchParams: Promise<{ cmd?: str
     );
   }
 
+  // On mobile app, don't render web player - native player handles it
+  if (isMobileApp()) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="text-center">
+          <Tv className="w-16 h-16 text-yellow-500 mb-4 mx-auto" />
+          <p className="text-white text-lg">Opening in native player...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!streamUrl) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
@@ -591,18 +623,14 @@ function LivePlayerContent({ searchParams }: { searchParams: Promise<{ cmd?: str
   );
 }
 
-export default async function LivePlayerPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ cmd?: string; name?: string; num?: string }>;
-}) {
+export default function LivePlayerPage() {
   return (
     <Suspense fallback={
       <div className="min-h-screen bg-black flex items-center justify-center">
         <Loader className="w-12 h-12 text-yellow-500 animate-spin" />
       </div>
     }>
-      <LivePlayerContent searchParams={searchParams} />
+      <LivePlayerContent />
     </Suspense>
   );
 }

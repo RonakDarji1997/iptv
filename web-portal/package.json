@@ -4,9 +4,9 @@
   "description": "StreamHub - Your Entertainment Hub",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3001",
+    "dev": "next dev -p 3001 -H 0.0.0.0",
     "build": "next build",
-    "start": "next start -p 8082 -H 127.0.0.1",
+    "start": "next start -p 8082 -H 0.0.0.0",
     "lint": "next lint",
     "type-check": "tsc --noEmit"
   },
@@ -14,6 +14,7 @@
     "@types/pako": "^2.0.4",
     "axios": "^1.6.0",
     "framer-motion": "^11.0.0",
+    "hls.js": "^1.6.15",
     "jszip": "^3.10.1",
     "jwt-decode": "^4.0.0",
     "lucide-react": "^0.344.0",

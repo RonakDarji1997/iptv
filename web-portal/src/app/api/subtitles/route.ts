@@ -220,6 +220,73 @@ export async function GET(request: NextRequest) {
         return NextResponse.json(result);
       }
 
+      case 'convert': {
+        // Convert and return VTT file directly for react-native-video
+        const fileId = searchParams.get('fileId');
+
+        if (!fileId) {
+          return NextResponse.json(
+            { error: 'Missing fileId parameter' },
+            { status: 400 }
+          );
+        }
+
+        console.log('[Subtitles API] Converting file to VTT:', fileId);
+        const response = await fetch(`${OPENSUBTITLES_API_BASE}/download`, {
+          method: 'POST',
+          headers: {
+            'Api-Key': API_KEY,
+            'User-Agent': USER_AGENT,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ file_id: parseInt(fileId) }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          if (response.status === 406) {
+            console.log('[Subtitles API] Download not available (406):', errorText);
+            return new NextResponse('WEBVTT\n\n', {
+              status: 200,
+              headers: { 'Content-Type': 'text/vtt' },
+            });
+          }
+          console.error('[Subtitles API] Download error:', response.status, errorText);
+          return new NextResponse('WEBVTT\n\n', {
+            status: 200,
+            headers: { 'Content-Type': 'text/vtt' },
+          });
+        }
+
+        const data = await response.json();
+        const downloadUrl = data.link;
+
+        if (!downloadUrl) {
+          return new NextResponse('WEBVTT\n\n', {
+            status: 200,
+            headers: { 'Content-Type': 'text/vtt' },
+          });
+        }
+
+        // Fetch the actual subtitle file
+        const subtitleResponse = await fetch(downloadUrl);
+        const srtContent = await subtitleResponse.text();
+        
+        // Convert SRT to VTT format
+        const vttContent = srtToVtt(srtContent);
+        
+        console.log('[Subtitles API] Returning VTT file');
+
+        // Return as VTT file
+        return new NextResponse(vttContent, {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/vtt',
+            'Cache-Control': 'public, max-age=3600',
+          },
+        });
+      }
+
       default:
         return NextResponse.json(
           { error: 'Invalid action parameter' },

@@ -10,6 +10,7 @@ import FavoriteButton from '@/components/FavoriteButton';
 import ProgressBar from '@/components/ProgressBar';
 import { cache } from '@/utils/cache';
 import { API_URL } from '@/config/constants';
+import { isMobileApp, playVideoNative, listenToNative } from '@/utils/mobileDetection';
 
 interface SeriesInfo {
   id: string;
@@ -74,6 +75,58 @@ export default function SeriesDetailPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc'); // desc = newest first
   const [showSeasonDropdown, setShowSeasonDropdown] = useState(false);
   const [seriesImdbId, setSeriesImdbId] = useState<string | null>(null);
+
+  // Listen for NEXT_EPISODE message from mobile app
+  useEffect(() => {
+    console.log('[Series] useEffect for NEXT_EPISODE listener, isMobileApp():', isMobileApp());
+    if (!isMobileApp()) return;
+
+    console.log('[Series] Setting up NEXT_EPISODE listener');
+    const cleanup = listenToNative((type, data) => {
+      console.log('[Series] listenToNative callback fired, type:', type, 'data:', data);
+      if (type === 'NEXT_EPISODE') {
+        console.log('[Series] Received NEXT_EPISODE message from mobile');
+        
+        // Get the stored episode playlist
+        const playlistData = sessionStorage.getItem('episode_playlist');
+        if (!playlistData) {
+          console.warn('[Series] No episode playlist found in sessionStorage');
+          toast.error('Unable to play next episode');
+          return;
+        }
+
+        try {
+          const playlist = JSON.parse(playlistData);
+          const { episodes, currentIndex, seasonId } = playlist;
+          
+          if (!episodes || currentIndex === undefined) {
+            console.warn('[Series] Invalid playlist data');
+            toast.error('Unable to play next episode');
+            return;
+          }
+
+          const nextIndex = currentIndex + 1;
+          if (nextIndex >= episodes.length) {
+            console.log('[Series] No more episodes in this season');
+            toast('No more episodes in this season');
+            return;
+          }
+
+          const nextEpisode = episodes[nextIndex];
+          console.log('[Series] Playing next episode:', nextEpisode);
+          
+          // Call the playEpisode function with the next episode
+          // handlePlayEpisode signature: (seasonId, episodeId, episodeName, episodeList?, currentIndex?)
+          handlePlayEpisode(seasonId, nextEpisode.id, nextEpisode.name, episodes, nextIndex);
+        } catch (error) {
+          console.error('[Series] Error playing next episode:', error);
+          toast.error('Failed to play next episode');
+        }
+      }
+    });
+
+    return cleanup;
+  }, [episodes, seasons, seriesInfo, seriesImdbId]);
 
   useEffect(() => {
     const fetchProviderUrl = async () => {
@@ -414,8 +467,8 @@ export default function SeriesDetailPage() {
       const linkData = await linkResponse.json();
       
       if (linkData.success && linkData.link && linkData.link.cmd) {
-        const streamUrl = encodeURIComponent(linkData.link.cmd);
-        const title = encodeURIComponent(`${seriesInfo?.name} - ${episodeName}`);
+        const streamUrl = linkData.link.cmd; // This is the actual stream URL
+        const title = `${seriesInfo?.name} - ${episodeName}`;
         
         // Get current episode data from the list
         const currentEpisode = episodeList?.[currentIndex || 0];
@@ -437,7 +490,11 @@ export default function SeriesDetailPage() {
         }
         
         // Get poster from TMDB data or series info
-        const poster = posterUrl || ''; // Use the computed posterUrl from above
+        const poster = tmdbData?.poster_path
+          ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}`
+          : (providerUrl && (seriesInfo?.cover_big || seriesInfo?.screenshot_uri)
+            ? `${providerUrl}${seriesInfo.cover_big || seriesInfo.screenshot_uri}`
+            : '');
         
         // Store IMDb ID for subtitle fetching in player
         if (seriesImdbId) {
@@ -450,7 +507,8 @@ export default function SeriesDetailPage() {
         }
         
         console.log('[Episode Play] Passing metadata:', {
-          title: `${seriesInfo?.name} - ${episodeName}`,
+          title,
+          streamUrl,
           poster,
           seriesId,
           seasonNumber: currentSeason?.season_number,
@@ -458,9 +516,50 @@ export default function SeriesDetailPage() {
           imdbId: seriesImdbId
         });
         
-        // Build URL with optional IMDb ID parameter
-        const playerUrl = `/player/vod?url=${streamUrl}&title=${title}&isSeries=true&contentId=${episodeId}&contentType=episode&seriesId=${seriesId}&seasonNumber=${currentSeason?.season_number || ''}&episodeNumber=${episodeNumber}&poster=${encodeURIComponent(poster)}${seriesImdbId ? `&imdbId=${seriesImdbId}` : ''}`;
-        router.push(playerUrl);
+        // Fetch saved position for this episode
+        let savedPosition = 0;
+        try {
+          const progressResponse = await fetch(`${API_URL}/progress/${episodeId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          
+          if (progressResponse.ok) {
+            const progressData = await progressResponse.json();
+            if (progressData.success && progressData.progress) {
+              savedPosition = progressData.progress.current_position;
+              console.log('[Episode Play] Found saved position:', savedPosition);
+            }
+          }
+        } catch (error) {
+          console.error('[Episode Play] Failed to fetch saved position:', error);
+        }
+        
+        // On mobile, open native player directly without navigating
+        if (isMobileApp()) {
+          console.log('[Series] Opening native VOD player with URL:', streamUrl);
+          playVideoNative('vod', {
+            url: streamUrl,
+            title: title,
+            contentId: episodeId,
+            contentType: 'episode',
+            savedPosition: savedPosition,
+            subtitles: [],
+            selectedSubtitle: null,
+            isSeries: true,
+            seriesId: seriesId,
+            seasonNumber: currentSeason?.season_number || null,
+            episodeNumber: episodeNumber,
+            totalEpisodes: episodeList?.length || 0,
+            imdbId: seriesImdbId,
+            poster: poster || undefined,
+          });
+        } else {
+          // On web, navigate to player page
+          const encodedUrl = encodeURIComponent(streamUrl);
+          const encodedTitle = encodeURIComponent(title);
+          const playerUrl = `/player/vod?url=${encodedUrl}&title=${encodedTitle}&isSeries=true&contentId=${episodeId}&contentType=episode&seriesId=${seriesId}&seasonNumber=${currentSeason?.season_number || ''}&episodeNumber=${episodeNumber}&poster=${encodeURIComponent(poster)}${seriesImdbId ? `&imdbId=${seriesImdbId}` : ''}`;
+          router.push(playerUrl);
+        }
       } else {
         toast.error('Failed to create stream link');
       }

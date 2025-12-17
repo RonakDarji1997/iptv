@@ -8,6 +8,7 @@ import { authService } from '@/services/authService'
 import { contentService } from '@/services/contentService'
 import Image from 'next/image'
 import toast from 'react-hot-toast'
+import { isMobileApp, listenToNative } from '@/utils/mobileDetection'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'
 
@@ -72,6 +73,13 @@ export default function HomePage() {
   const [isMuted, setIsMuted] = useState(true)
 
   useEffect(() => {
+    // Skip auth check on mobile - native app handles session
+    if (isMobileApp()) {
+      console.log('[Home] Mobile app detected, skipping auth check')
+      loadHomeData()
+      return
+    }
+
     if (!authService.isAuthenticated()) {
       router.push('/auth/login')
       return
@@ -79,6 +87,25 @@ export default function HomePage() {
 
     loadHomeData()
   }, [router])
+
+  // Listen for native player close events on mobile
+  useEffect(() => {
+    if (!isMobileApp()) {
+      console.log('[Home] Not mobile, skipping native listener')
+      return
+    }
+
+    console.log('[Home] Setting up VIDEO_CLOSED listener')
+    const cleanup = listenToNative((type, data) => {
+      console.log('[Home] Received native message:', type, data)
+      if (type === 'VIDEO_CLOSED') {
+        // Player closed - just stay on home page, don't navigate
+        console.log('[Home] VIDEO_CLOSED received - staying on home page')
+      }
+    })
+
+    return cleanup
+  }, [])
 
   const loadHomeData = async () => {
     try {
@@ -160,8 +187,10 @@ export default function HomePage() {
 
       const data = await response.json()
       if (data.success && data.stream && data.stream.cmd) {
-        // Use original stream - no transcode for live TV
-        setStreamUrl(data.stream.cmd)
+        // Use original stream - show in preview only
+        const streamUrl = data.stream.cmd
+        setStreamUrl(streamUrl)
+        // Don't auto-play in native player - only play in WebView preview
       }
     } catch (error) {
       console.error('Failed to load channel stream:', error)
@@ -257,8 +286,33 @@ export default function HomePage() {
             </div>
 
             <div 
-              onClick={() => {
-                if (favoriteChannel.cmd) {
+              onClick={async () => {
+                // Only navigate/play on explicit click, not auto-load
+                if (isMobileApp() && favoriteChannel) {
+                  // On mobile, open native player
+                  const cmd = favoriteChannel.channel_cmd || favoriteChannel.cmd || favoriteChannel.channel_id
+                  if (cmd) {
+                    try {
+                      const token = authService.getToken()
+                      const response = await fetch(`${API_URL}/stalker-proxy/channel-stream?cmd=${encodeURIComponent(cmd)}`, {
+                        headers: { Authorization: `Bearer ${token}` },
+                      })
+                      const data = await response.json()
+                      if (data.success && data.stream && data.stream.cmd) {
+                        const { playVideoNative } = await import('@/utils/mobileDetection')
+                        playVideoNative('live', {
+                          url: data.stream.cmd,
+                          channelName: favoriteChannel.channel_name,
+                          channelLogo: favoriteChannel.channel_logo,
+                          channelNumber: favoriteChannel.channel_number,
+                        })
+                      }
+                    } catch (error) {
+                      console.error('Failed to load channel stream:', error)
+                    }
+                  }
+                } else if (favoriteChannel.cmd) {
+                  // On web, navigate to full player page
                   const params = new URLSearchParams({
                     cmd: favoriteChannel.cmd,
                     name: favoriteChannel.channel_name,
@@ -271,6 +325,7 @@ export default function HomePage() {
               }}
               className="relative aspect-video rounded-xl overflow-hidden bg-gray-900 border border-gray-800 cursor-pointer group"
             >
+              {/* Show video preview on both web and mobile */}
               {streamUrl && (
                 <video
                   ref={videoRef}
@@ -289,8 +344,8 @@ export default function HomePage() {
                 </div>
               )}
               
-              {/* Mute/Unmute Button */}
-              {streamUrl && (
+              {/* Mute/Unmute Button - Web only */}
+              {!isMobileApp() && streamUrl && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
@@ -331,9 +386,22 @@ export default function HomePage() {
                     </div>
                   </div>
                   <button
-                    onClick={(e) => {
+                    onClick={async (e) => {
                       e.stopPropagation()
-                      if (favoriteChannel.cmd) {
+                      if (isMobileApp() && favoriteChannel) {
+                        // Mobile: Open native player
+                        const cmd = favoriteChannel.channel_cmd || favoriteChannel.cmd || favoriteChannel.channel_id
+                        if (cmd && streamUrl) {
+                          const { playVideoNative } = await import('@/utils/mobileDetection')
+                          playVideoNative('live', {
+                            url: streamUrl,
+                            channelName: favoriteChannel.channel_name,
+                            channelLogo: favoriteChannel.channel_logo,
+                            channelNumber: favoriteChannel.channel_number,
+                          })
+                        }
+                      } else if (favoriteChannel.cmd) {
+                        // Web: Navigate to fullscreen page
                         const params = new URLSearchParams({
                           cmd: favoriteChannel.cmd,
                           name: favoriteChannel.channel_name,

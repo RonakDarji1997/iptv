@@ -188,6 +188,34 @@ export async function getTranscodedUrl(
   return transcodeUrl
 }
 
+/**
+ * Fetch the HLS playlist URL from transcode server
+ * The transcode server returns JSON with the playlist URL once it's ready
+ */
+export async function fetchTranscodePlaylist(transcodeUrl: string): Promise<string> {
+  console.log('[Transcode] Fetching playlist from:', transcodeUrl.substring(0, 150));
+  
+  try {
+    const response = await fetch(transcodeUrl);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    
+    if (!data.success || !data.playlistUrl) {
+      throw new Error(data.error || 'Failed to get HLS playlist URL');
+    }
+    
+    console.log('[Transcode] ✅ Got playlist URL:', data.playlistUrl);
+    return data.playlistUrl;
+  } catch (error) {
+    console.error('[Transcode] ❌ Failed to fetch playlist:', error);
+    throw error;
+  }
+}
+
 export type QualityOption = 'original' | '720' | '1080' | '2160'
 
 export interface QualitySettings {

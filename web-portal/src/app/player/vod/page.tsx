@@ -4,11 +4,13 @@ import { useEffect, useState, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Play, Pause, Volume2, VolumeX, Maximize, Rewind, FastForward, Loader, SkipBack, SkipForward, Subtitles, Settings } from 'lucide-react';
 import toast from 'react-hot-toast';
+import Hls from 'hls.js';
 import { authService } from '@/services/authService';
 import { cache } from '@/utils/cache';
 import { apiCache } from '@/utils/api-cache';
 import { API_URL } from '@/config/constants';
-import { VideoStatsMonitor, VideoStats, getTranscodedUrl, formatBitrate, QUALITY_OPTIONS, QualityOption } from '@/utils/videoStats';
+import { VideoStatsMonitor, VideoStats, getTranscodedUrl, fetchTranscodePlaylist, formatBitrate, QUALITY_OPTIONS, QualityOption } from '@/utils/videoStats';
+import { isMobileApp, playVideoNative, listenToNative } from '@/utils/mobileDetection';
 
 // Subtitle type definition
 interface Subtitle {
@@ -30,7 +32,17 @@ interface Subtitle {
 function VODPlayerContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  
+  // CRITICAL: Prevent VOD player page from loading on mobile
+  // Mobile apps should never navigate to /player/vod - they use native player directly
+  if (isMobileApp()) {
+    console.log('[VOD] Mobile app detected - not rendering player page');
+    // Don't render anything on mobile - native player handles playback
+    return null;
+  }
+  
   const videoRef = useRef<HTMLVideoElement>(null);
+  const hlsRef = useRef<Hls | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -44,6 +56,7 @@ function VODPlayerContent() {
   const seasonNumber = searchParams.get('seasonNumber');
   const episodeNumber = searchParams.get('episodeNumber');
   const imdbId = searchParams.get('imdbId');
+  const poster = searchParams.get('poster');
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -59,11 +72,50 @@ function VODPlayerContent() {
   const [showSeekFeedback, setShowSeekFeedback] = useState<'forward' | 'backward' | null>(null);
   const seekFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   
+  // Track if native player was already opened to prevent auto-play on return
+  const nativePlayerOpenedRef = useRef<boolean>(false);
+  
   // Progress tracking
   const progressSaveIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const lastProgressSaveRef = useRef<number>(0);
   const durationRef = useRef<number>(0);
   const isMountedRef = useRef<boolean>(true);
+  
+  // Listen for messages from native mobile app
+  useEffect(() => {
+    if (!isMobileApp()) return;
+
+    console.log('[VOD] Setting up native message listener');
+    const cleanup = listenToNative((type, data) => {
+      switch (type) {
+        case 'VIDEO_PROGRESS':
+          // Native player sending progress updates
+          if (data.contentId === contentId && data.duration > 0) {
+            saveWatchProgress(data.currentTime, data.duration);
+          }
+          break;
+        
+        case 'VIDEO_ENDED':
+          // Native player finished video
+          if (data.contentId === contentId) {
+            saveWatchProgress(data.duration, data.duration);
+            saveToWatchHistory();
+          }
+          break;
+        
+        case 'VIDEO_CLOSED':
+          // User closed native player - don't navigate, just log
+          // The WebView navigation will be handled by the native app
+          console.log('[VOD] Native player closed');
+          break;
+        
+        default:
+          console.log('[VOD] Unhandled native message:', type, data);
+      }
+    });
+
+    return cleanup;
+  }, [contentId, router]);
   
   // Subtitle state
   const [availableSubtitles, setAvailableSubtitles] = useState<Subtitle[]>([]);
@@ -78,6 +130,24 @@ function VODPlayerContent() {
   const [selectedQuality, setSelectedQuality] = useState<QualityOption>('original');
   const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [isDraggingProgress, setIsDraggingProgress] = useState(false);
+  const [savedPosition, setSavedPosition] = useState<number>(0);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [progressLoaded, setProgressLoaded] = useState(false);
+
+  // Cleanup transcode session
+  const cleanupTranscodeSession = async (sessionId: string) => {
+    if (!sessionId) return;
+    
+    try {
+      console.log('[Transcode] Cleaning up session:', sessionId);
+      await fetch(`http://localhost:4000/cleanup/${sessionId}`, {
+        method: 'POST',
+      });
+      console.log('[Transcode] ✅ Session cleaned up');
+    } catch (error) {
+      console.error('[Transcode] ❌ Cleanup failed:', error);
+    }
+  };
 
   // Subtitle functions (defined before useEffect that uses them)
   const selectSubtitle = async (subtitle: Subtitle) => {
@@ -217,6 +287,11 @@ function VODPlayerContent() {
       return;
     }
     
+    if (!contentId) {
+      console.warn('[Progress] ⏭️ No contentId, skipping save');
+      return;
+    }
+    
     if (!totalDuration || totalDuration <= 0) {
       console.warn('[Progress] ⚠️ Invalid duration:', totalDuration, 'skipping save');
       return;
@@ -271,6 +346,11 @@ function VODPlayerContent() {
       const currentPosition = video.currentTime;
       console.log('[Progress] 📍 Position at back:', currentPosition, '/', durationRef.current);
       await saveWatchProgress(currentPosition, durationRef.current);
+    }
+    
+    // Cleanup transcode session before navigating away
+    if (currentSessionId) {
+      await cleanupTranscodeSession(currentSessionId);
     }
     
     router.back();
@@ -329,19 +409,205 @@ function VODPlayerContent() {
       if (!qualityConfig || selectedQuality === 'original') {
         setTranscodeUrl(decoded);
       } else if (qualityConfig.target && qualityConfig.mode) {
-        const transcoded = await getTranscodedUrl(
-          decoded,
-          qualityConfig.target,
-          qualityConfig.mode
-        );
-        setTranscodeUrl(transcoded);
+        try {
+          // First, get the transcode endpoint URL
+          const transcodeEndpoint = await getTranscodedUrl(
+            decoded,
+            qualityConfig.target,
+            qualityConfig.mode
+          );
+          
+          console.log('[Quality] Got transcode endpoint:', transcodeEndpoint.substring(0, 100));
+          
+          // If it's a transcode URL (not original), fetch the HLS playlist URL
+          if (transcodeEndpoint.includes('/transcode?')) {
+            console.log('[Quality] Fetching HLS playlist URL...');
+            const playlistUrl = await fetchTranscodePlaylist(transcodeEndpoint);
+            console.log('[Quality] Setting HLS playlist:', playlistUrl);
+            setTranscodeUrl(playlistUrl);
+          } else {
+            setTranscodeUrl(transcodeEndpoint);
+          }
+        } catch (error) {
+          console.error('[Quality] Failed to get transcoded URL, using original:', error);
+          setTranscodeUrl(decoded);
+          // Don't change quality back to original - let error handler deal with it
+        }
       }
     };
     
     loadTranscodeUrl();
   }, [streamUrl, selectedQuality]);
 
+  // Load watch progress on mount
+  useEffect(() => {
+    const loadProgress = async () => {
+      if (!contentId) {
+        console.log('[Progress] No contentId, skipping progress load');
+        setProgressLoaded(true);
+        return;
+      }
+
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+        console.log('[Progress] 📥 Loading progress for:', contentId);
+        
+        const response = await fetch(`${apiUrl}/progress/${contentId}`, {
+          headers: authService.getAuthHeader(),
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.progress) {
+            const position = data.progress.current_position;
+            const percentage = (position / data.progress.duration) * 100;
+            console.log(`[Progress] ✅ Found saved position: ${position}s (${percentage.toFixed(1)}%)`);
+            
+            // Only resume if not near the end (< 95% watched)
+            if (position > 0 && position < data.progress.duration * 0.95) {
+              setSavedPosition(position);
+              console.log('[Progress] Will resume from:', position);
+            } else {
+              console.log('[Progress] Skipping resume (video completed or at start)');
+              setSavedPosition(0);
+            }
+          } else {
+            console.log('[Progress] No saved progress found');
+            setSavedPosition(0);
+          }
+        } else {
+          console.log('[Progress] API returned:', response.status);
+          setSavedPosition(0);
+        }
+      } catch (error) {
+        console.error('[Progress] Failed to load:', error);
+        setSavedPosition(0);
+      } finally {
+        setProgressLoaded(true);
+      }
+    };
+
+    loadProgress();
+  }, [contentId]);
+
+  // Initialize HLS.js for HLS streams
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !transcodeUrl || !progressLoaded) return;
+
+    const isHLS = transcodeUrl.includes('.m3u8');
+    
+    console.log('[HLS] Video source:', transcodeUrl.substring(0, 100), 'isHLS:', isHLS);
+
+    // CHECK: If running in mobile app, delegate to native player with loaded progress
+    if (isMobileApp()) {
+      console.log('[VOD Mobile] Opening native player with savedPosition:', savedPosition);
+      playVideoNative('vod', {
+        url: transcodeUrl,
+        title: title || 'Video',
+        contentId: contentId || '',
+        contentType: contentType,
+        savedPosition: savedPosition,
+        subtitles: availableSubtitles,
+        selectedSubtitle: selectedSubtitle,
+        isSeries: isSeries,
+        seriesId: seriesId,
+        seasonNumber: seasonNumber,
+        episodeNumber: episodeNumber,
+        imdbId: imdbId,
+        poster: poster || undefined,
+      });
+      return; // Don't initialize HLS.js - native player will handle it
+    }
+
+    // Extract session ID from HLS URL for cleanup later
+    if (isHLS && transcodeUrl.includes('/hls/')) {
+      const sessionMatch = transcodeUrl.match(/\/hls\/([^/]+)\//);
+      if (sessionMatch) {
+        setCurrentSessionId(sessionMatch[1]);
+        console.log('[HLS] Tracking session:', sessionMatch[1]);
+      }
+    }
+
+    // Clean up existing HLS instance
+    if (hlsRef.current) {
+      console.log('[HLS] Destroying existing instance');
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+
+    if (isHLS && Hls.isSupported()) {
+      console.log('[HLS] Initializing hls.js');
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+        backBufferLength: 90,
+      });
+
+      hls.loadSource(transcodeUrl);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        console.log('[HLS] Manifest parsed, ready to play');
+        if (savedPosition > 0) {
+          console.log('[HLS] Restoring position:', savedPosition);
+          video.currentTime = savedPosition;
+          setSavedPosition(0);
+        }
+      });
+
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        console.error('[HLS] Error:', data);
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.log('[HLS] Fatal network error, trying to recover');
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.log('[HLS] Fatal media error, trying to recover');
+              hls.recoverMediaError();
+              break;
+            default:
+              console.log('[HLS] Fatal error, destroying');
+              hls.destroy();
+              setError('Failed to load video stream');
+              break;
+          }
+        }
+      });
+
+      hlsRef.current = hls;
+    } else if (isHLS && video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Safari native HLS support
+      console.log('[HLS] Using native HLS support (Safari)');
+      video.src = transcodeUrl;
+    } else {
+      // Regular video file
+      console.log('[HLS] Using regular video source');
+      video.src = transcodeUrl;
+    }
+
+    return () => {
+      if (hlsRef.current) {
+        console.log('[HLS] Cleanup - destroying instance');
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+      
+      // Cleanup transcode session when switching quality or unmounting
+      if (currentSessionId) {
+        cleanupTranscodeSession(currentSessionId);
+      }
+    };
+  }, [transcodeUrl, savedPosition]);
+
   const handleQualityChange = (quality: QualityOption) => {
+    // Save current position before changing quality
+    if (videoRef.current) {
+      setSavedPosition(videoRef.current.currentTime);
+      console.log('[Quality] Saving position:', videoRef.current.currentTime);
+    }
     setSelectedQuality(quality);
     setShowQualityMenu(false);
     // Reload will happen via useEffect above
@@ -495,6 +761,13 @@ function VODPlayerContent() {
     const handleCanPlay = () => {
       setIsBuffering(false);
       
+      // Restore saved position after quality change
+      if (savedPosition > 0 && video.currentTime === 0) {
+        console.log('[Quality] Restoring position:', savedPosition);
+        video.currentTime = savedPosition;
+        setSavedPosition(0);
+      }
+      
       // Start bitrate monitoring
       if (!statsMonitorRef.current) {
         statsMonitorRef.current = new VideoStatsMonitor(video);
@@ -503,7 +776,26 @@ function VODPlayerContent() {
         });
       }
     };
-    const handleError = () => setError('Failed to load video stream');
+    const handleError = (e: Event) => {
+      const video = e.target as HTMLVideoElement;
+      const error = video.error;
+      console.error('[Video Error]', {
+        code: error?.code,
+        message: error?.message,
+        src: video.src,
+        networkState: video.networkState,
+        readyState: video.readyState
+      });
+      
+      // If transcoded stream fails, try falling back to original
+      if (transcodeUrl && selectedQuality !== 'original') {
+        console.log('[Video Error] Transcode failed, falling back to original');
+        setSelectedQuality('original');
+        toast.error('Transcode failed, switching to original quality');
+      } else {
+        setError('Failed to load video stream');
+      }
+    };
     const handleEnded = async () => {
       // Save to watch history when video completes
       await saveToWatchHistory();
@@ -894,7 +1186,6 @@ function VODPlayerContent() {
         style={{ 
           pointerEvents: 'auto'
         }}
-        src={transcodeUrl || decodeURIComponent(streamUrl)}
         autoPlay
         crossOrigin="anonymous"
         playsInline
