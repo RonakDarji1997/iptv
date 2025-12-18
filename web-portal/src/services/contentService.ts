@@ -568,6 +568,24 @@ class ContentService {
       return []
     }
   }
+
+  // Get recently watched channels from analytics (without duplicates)
+  async getRecentChannels(limit: number = 10): Promise<any[]> {
+    try {
+      const response = await axios.get(`${API_URL}/channel-analytics/recent?limit=${limit}`, {
+        headers: this.getHeaders(),
+      })
+      
+      if (response.data.success && response.data.channels) {
+        return response.data.channels
+      }
+      
+      return []
+    } catch (error) {
+      console.error('Failed to fetch recent channels:', error)
+      return []
+    }
+  }
 }
 
 export const contentService = new ContentService()

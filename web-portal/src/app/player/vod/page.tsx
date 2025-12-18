@@ -72,6 +72,7 @@ function VODPlayerContent() {
   const lastProgressSaveRef = useRef<number>(0);
   const durationRef = useRef<number>(0);
   const isMountedRef = useRef<boolean>(true);
+  const posterUrlRef = useRef<string | null>(poster); // Store poster URL for progress saving
   
   // Listen for messages from native mobile app
   useEffect(() => {
@@ -279,7 +280,7 @@ function VODPlayerContent() {
         contentId,
         contentType: contentType || 'movie',
         contentName: title ? decodeURIComponent(title) : undefined,
-        contentPoster: searchParams.get('poster') || undefined,
+        contentPoster: posterUrlRef.current || undefined,
         seriesId: seriesId || undefined,
         seasonNumber: seasonNumber || undefined,
         episodeNumber: episodeNumber || undefined,
@@ -364,7 +365,55 @@ function VODPlayerContent() {
     }
   }, [isSeries]);
 
+  // Fetch poster if not provided in URL params
+  useEffect(() => {
+    const fetchPoster = async () => {
+      if (posterUrlRef.current || !contentId || contentType === 'episode') {
+        // Already have poster, or no contentId, or is episode (episodes use series poster)
+        return;
+      }
 
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+        console.log('[Poster] Fetching poster for contentId:', contentId);
+        
+        // Fetch movie info from stalker-proxy
+        const response = await fetch(`${apiUrl}/stalker-proxy/vod-info/${contentId}`, {
+          headers: authService.getAuthHeader(),
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.info) {
+            const movieInfo = data.info;
+            
+            // Try TMDB first if we have TMDB data in the response
+            if (data.tmdb?.poster_path) {
+              const tmdbPoster = `https://image.tmdb.org/t/p/w500${data.tmdb.poster_path}`;
+              posterUrlRef.current = tmdbPoster;
+              console.log('[Poster] ✅ Using TMDB poster:', tmdbPoster);
+            }
+            // Fall back to provider poster
+            else if (movieInfo.cover_big) {
+              // Get provider URL from localStorage cache
+              const PROVIDER_URL_KEY = 'stalker_provider_url';
+              const cachedProviderUrl = localStorage.getItem(PROVIDER_URL_KEY);
+              
+              if (cachedProviderUrl) {
+                const providerPoster = `${cachedProviderUrl}${movieInfo.cover_big}`;
+                posterUrlRef.current = providerPoster;
+                console.log('[Poster] ✅ Using provider poster:', providerPoster);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[Poster] Failed to fetch:', error);
+      }
+    };
+
+    fetchPoster();
+  }, [contentId, contentType]);
 
   // Load watch progress on mount
   useEffect(() => {

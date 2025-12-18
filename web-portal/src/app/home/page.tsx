@@ -26,18 +26,6 @@ interface WatchProgress {
   episode_number?: number
 }
 
-interface WatchHistoryItem {
-  id: string
-  content_id: string
-  content_name: string
-  content_type: string
-  content_poster?: string
-  watched_at: string
-  series_name?: string
-  season_number?: number
-  episode_number?: number
-}
-
 interface FavoriteItem {
   id: string
   content_id: string
@@ -49,6 +37,7 @@ interface FavoriteItem {
 }
 
 interface ChannelAnalytics {
+  id?: string
   channel_id: string
   channel_name: string
   channel_logo?: string
@@ -57,6 +46,8 @@ interface ChannelAnalytics {
   last_watched_at: string
   cmd?: string
   channel_cmd?: string
+  total_watch_time?: number
+  provider_id?: string
 }
 
 export default function HomePage() {
@@ -64,7 +55,7 @@ export default function HomePage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [continueWatching, setContinueWatching] = useState<WatchProgress[]>([])
   const [favoriteVOD, setFavoriteVOD] = useState<FavoriteItem[]>([])
-  const [watchHistory, setWatchHistory] = useState<WatchHistoryItem[]>([])
+  const [recentChannels, setRecentChannels] = useState<ChannelAnalytics[]>([])
   const [favoriteChannels, setFavoriteChannels] = useState<ChannelAnalytics[]>([])
   const [favoriteChannel, setFavoriteChannel] = useState<ChannelAnalytics | null>(null)
   const [streamUrl, setStreamUrl] = useState<string | null>(null)
@@ -111,10 +102,10 @@ export default function HomePage() {
     try {
       setLoading(true)
       
-      const [continueWatchingData, favoritesData, historyData, topChannelsData, favoriteChannelData] = await Promise.all([
+      const [continueWatchingData, favoritesData, recentChannelsData, topChannelsData, favoriteChannelData] = await Promise.all([
         contentService.getContinueWatching(50), // Get more to deduplicate
         contentService.getFavoriteCategories(10), // Get all favorites, we'll filter VOD
-        contentService.getWatchHistory(10),
+        contentService.getRecentChannels(10), // Recently watched channels (no duplicates)
         contentService.getTopChannels(8),
         contentService.getFavoriteChannel(),
       ])
@@ -147,7 +138,7 @@ export default function HomePage() {
       )
       setFavoriteVOD(vodFavorites)
       
-      setWatchHistory(historyData)
+      setRecentChannels(recentChannelsData)
       setFavoriteChannels(topChannelsData)
       
       // Set favorite channel directly - we'll load the stream when needed
@@ -237,14 +228,13 @@ export default function HomePage() {
     }
   }
 
-  const handleHistoryClick = (item: WatchHistoryItem) => {
-    if (item.content_type === 'MOVIE') {
-      router.push(`/browse/movies/category/${item.content_id}`)
-    } else if (item.content_type === 'SERIES') {
-      // Use 0 as category ID for history
-      router.push(`/browse/series/0/${item.content_id}`)
-    } else if (item.content_type === 'LIVE') {
-      router.push(`/browse/live`)
+  const handleRecentChannelClick = (channel: ChannelAnalytics) => {
+    // Navigate to live TV player with the channel
+    const cmd = channel.channel_cmd || channel.cmd
+    if (cmd) {
+      router.push(`/player/live?cmd=${encodeURIComponent(cmd)}&name=${encodeURIComponent(channel.channel_name)}&num=${channel.channel_number || ''}`)
+    } else {
+      router.push('/browse/live')
     }
   }
 
@@ -543,12 +533,12 @@ export default function HomePage() {
           </section>
         )}
 
-        {/* Watch History Section */}
-        {watchHistory.length > 0 && (
+        {/* Recently Watched Channels Section */}
+        {recentChannels.length > 0 && (
           <section className="space-y-3">
             <div className="flex items-center space-x-2">
-              <History className="w-4 h-4 text-gray-400" />
-              <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">WATCH HISTORY</h2>
+              <Clock className="w-4 h-4 text-gray-400" />
+              <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">RECENTLY WATCHED</h2>
             </div>
 
             <div className="relative overflow-hidden">
@@ -556,26 +546,31 @@ export default function HomePage() {
                 className="flex space-x-3 overflow-x-auto scrollbar-hide pb-2 snap-x snap-mandatory"
                 style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' }}
               >
-                {watchHistory.map((item) => (
+                {recentChannels.map((channel, index) => (
                   <div
-                    key={item.id}
-                    onClick={() => handleHistoryClick(item)}
+                    key={channel.id || `${channel.provider_id}-${channel.channel_id}` || `channel-${index}`}
+                    onClick={() => handleRecentChannelClick(channel)}
                     className="group cursor-pointer flex-shrink-0 w-32 sm:w-36 md:w-40 snap-start"
                   >
                     <div className="relative aspect-[2/3] rounded-lg overflow-hidden bg-gray-800 mb-2">
-                      {item.content_poster ? (
+                      {channel.channel_logo ? (
                         <Image
-                          src={item.content_poster}
-                          alt={item.content_name}
+                          src={channel.channel_logo}
+                          alt={channel.channel_name}
                           fill
                           className="object-cover group-hover:scale-105 transition-transform duration-300"
                           unoptimized
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-700 to-gray-900">
-                          <History className="w-8 h-8 text-gray-500" />
+                          <Clock className="w-8 h-8 text-gray-500" />
                         </div>
                       )}
+
+                      {/* Play count badge */}
+                      <div className="absolute top-2 right-2 bg-yellow-600/90 backdrop-blur-sm px-2 py-0.5 rounded-full">
+                        <span className="text-[10px] font-bold text-white">{channel.play_count}× played</span>
+                      </div>
 
                       {/* Play Overlay */}
                       <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
@@ -584,11 +579,11 @@ export default function HomePage() {
                     </div>
 
                     <h3 className="text-xs font-medium text-white line-clamp-1">
-                      {item.series_name || item.content_name}
+                      {channel.channel_name}
                     </h3>
-                    {item.season_number && item.episode_number && (
+                    {channel.channel_number && (
                       <p className="text-[10px] text-gray-500">
-                        S{item.season_number} E{item.episode_number}
+                        Ch {channel.channel_number}
                       </p>
                     )}
                   </div>
@@ -648,7 +643,7 @@ export default function HomePage() {
         )}
 
         {/* Empty State */}
-        {continueWatching.length === 0 && favoriteVOD.length === 0 && watchHistory.length === 0 && favoriteChannels.length === 0 && (
+        {continueWatching.length === 0 && favoriteVOD.length === 0 && recentChannels.length === 0 && favoriteChannels.length === 0 && (
           <div className="text-center py-20">
             <div className="w-24 h-24 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center mx-auto mb-6">
               <Play className="w-12 h-12 text-white" />

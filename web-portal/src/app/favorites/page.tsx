@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Heart, Trash2, Film, Tv } from 'lucide-react';
+import { ArrowLeft, Heart, Trash2, Film, Tv, Play } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authService } from '@/services/authService';
 import Image from 'next/image';
@@ -157,12 +157,10 @@ export default function FavoritesPage() {
             {filteredFavorites.map((favorite) => (
               <div
                 key={favorite.id}
+                onClick={() => openContent(favorite)}
                 className="group relative bg-gray-800/50 rounded-lg overflow-hidden hover:ring-2 hover:ring-red-500 transition-all cursor-pointer"
               >
-                <div
-                  onClick={() => openContent(favorite)}
-                  className="aspect-[2/3] relative"
-                >
+                <div className="aspect-[2/3] relative">
                   {favorite.content_poster ? (
                     <Image
                       src={favorite.content_poster}
@@ -181,24 +179,30 @@ export default function FavoritesPage() {
                     </div>
                   )}
                   
+                  {/* Delete button - top right */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeFavorite(favorite.id);
+                    }}
+                    className="absolute top-2 right-2 p-2 bg-red-600 hover:bg-red-700 rounded-full transition-colors z-10 opacity-0 group-hover:opacity-100"
+                    title="Remove from favorites"
+                  >
+                    <Trash2 className="w-4 h-4 text-white" />
+                  </button>
+                  
                   {/* Content type badge */}
-                  <div className="absolute top-2 right-2 bg-black/80 backdrop-blur-sm px-2 py-1 rounded-md">
+                  <div className="absolute top-2 left-2 bg-black/80 backdrop-blur-sm px-2 py-1 rounded-md">
                     <span className="text-white text-xs font-semibold uppercase">
                       {favorite.content_type}
                     </span>
                   </div>
                   
-                  {/* Overlay on hover */}
+                  {/* Play overlay on hover */}
                   <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeFavorite(favorite.id);
-                      }}
-                      className="p-3 bg-red-600 hover:bg-red-700 rounded-full transition-colors"
-                    >
-                      <Trash2 className="w-5 h-5 text-white" />
-                    </button>
+                    <div className="p-4 bg-red-600 rounded-full">
+                      <Play className="w-8 h-8 text-white fill-white" />
+                    </div>
                   </div>
                 </div>
 

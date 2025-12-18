@@ -14,9 +14,45 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'
 // Cache provider URL in localStorage
 const PROVIDER_URL_KEY = 'provider_url'
 const PROVIDER_URL_TIMESTAMP_KEY = 'provider_url_timestamp'
+const PROVIDER_ID_KEY = 'active_provider_id'
 const CACHE_DURATION = 24 * 60 * 60 * 1000 // 24 hours
 
 let providerUrlPromise: Promise<string | null> | null = null
+let providerDataPromise: Promise<{ url: string; id: string } | null> | null = null
+
+async function getProviderData(): Promise<{ url: string; id: string } | null> {
+  // If already fetching, wait for that promise
+  if (providerDataPromise) return providerDataPromise
+
+  providerDataPromise = (async () => {
+    try {
+      const response = await axios.get(`${API_URL}/sync/pull`, {
+        headers: authService.getAuthHeader(),
+      })
+      const providers = response.data.data?.providers || []
+      const activeProvider = providers.find((p: any) => p.is_active)
+      
+      if (activeProvider?.server_url && activeProvider?.id) {
+        const data = { url: activeProvider.server_url, id: activeProvider.id }
+        // Store in localStorage
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(PROVIDER_URL_KEY, data.url)
+          localStorage.setItem(PROVIDER_ID_KEY, data.id)
+          localStorage.setItem(PROVIDER_URL_TIMESTAMP_KEY, Date.now().toString())
+        }
+        return data
+      }
+      return null
+    } catch (error) {
+      console.error('Failed to fetch provider data:', error)
+      return null
+    } finally {
+      providerDataPromise = null
+    }
+  })()
+
+  return providerDataPromise
+}
 
 async function getProviderUrl(): Promise<string | null> {
   // Check localStorage first
@@ -32,36 +68,9 @@ async function getProviderUrl(): Promise<string | null> {
     }
   }
 
-  // If already fetching, wait for that promise
-  if (providerUrlPromise) return providerUrlPromise
-
-  providerUrlPromise = (async () => {
-    try {
-      const response = await axios.get(`${API_URL}/sync/pull`, {
-        headers: authService.getAuthHeader(),
-      })
-      const providers = response.data.data?.providers || []
-      const activeProvider = providers.find((p: any) => p.is_active)
-      
-      if (activeProvider?.server_url) {
-        const url = activeProvider.server_url
-        // Store in localStorage
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(PROVIDER_URL_KEY, url)
-          localStorage.setItem(PROVIDER_URL_TIMESTAMP_KEY, Date.now().toString())
-        }
-        return url
-      }
-      return null
-    } catch (error) {
-      console.error('Failed to fetch provider URL:', error)
-      return null
-    } finally {
-      providerUrlPromise = null
-    }
-  })()
-
-  return providerUrlPromise
+  // Fetch fresh data
+  const data = await getProviderData()
+  return data?.url || null
 }
 
 // Helper function to build logo URL
@@ -361,10 +370,11 @@ export default function LiveTVPage() {
     
     try {
       // First track the channel in analytics to have the data
-      const baseUrl = await getProviderUrl()
+      const providerData = await getProviderData()
       const logoUrl = await buildLogoUrl((channel as any).logo || '')
       
       await axios.post(`${API_URL}/channel-analytics/track`, {
+        providerId: providerData?.id,
         channelId,
         channelName: channel.name || channel.title,
         channelLogo: logoUrl,
@@ -427,9 +437,11 @@ export default function LiveTVPage() {
 
   const updateChannelStats = async (channel: ContentItem) => {
     try {
+      const providerData = await getProviderData()
       const logoUrl = await buildLogoUrl((channel as any).logo || '')
       
       await axios.post(`${API_URL}/channel-analytics/track`, {
+        providerId: providerData?.id,
         channelId: channel.id,
         channelName: channel.name || channel.title,
         channelLogo: logoUrl,

@@ -107,10 +107,38 @@ export default function ContinueWatchingPage() {
     }
   };
 
-  const resumeContent = (item: WatchProgress) => {
+  const resumeContent = async (item: WatchProgress) => {
     const contentType = item.content_type?.toUpperCase();
     if (contentType === 'MOVIE') {
-      router.push(`/browse/movies/1/${item.content_id}`);
+      try {
+        // First verify the movie exists by fetching its info
+        const token = authService.getToken();
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+        const response = await fetch(`${apiUrl}/stalker-proxy/vod-info/${item.content_id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.info) {
+            // Movie exists, use its category_id from the response
+            const categoryId = data.info.category_id || '1';
+            console.log('[Continue Watching] Navigating to movie:', {
+              movieId: item.content_id,
+              categoryId,
+              url: `/browse/movies/${categoryId}/${item.content_id}`
+            });
+            router.push(`/browse/movies/${categoryId}/${item.content_id}`);
+          } else {
+            toast.error('Movie no longer available');
+          }
+        } else {
+          toast.error('Failed to load movie');
+        }
+      } catch (error) {
+        console.error('Failed to verify movie:', error);
+        toast.error('Failed to load movie');
+      }
     } else if (contentType === 'EPISODE') {
       // For episodes, always navigate to series page
       const seriesId = (item as any).series_id || (item as any).display_id;

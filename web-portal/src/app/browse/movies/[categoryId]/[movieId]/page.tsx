@@ -343,8 +343,15 @@ export default function MovieDetailPage() {
 
   if (!movieInfo) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <div className="text-white text-xl">Movie not found</div>
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center">
+        <div className="text-white text-xl mb-6">Movie not found</div>
+        <button
+          onClick={() => router.back()}
+          className="flex items-center gap-2 bg-yellow-500 hover:bg-yellow-600 text-black px-6 py-3 rounded-lg font-semibold transition-colors"
+        >
+          <ArrowLeft size={20} />
+          Go Back
+        </button>
       </div>
     );
   }
