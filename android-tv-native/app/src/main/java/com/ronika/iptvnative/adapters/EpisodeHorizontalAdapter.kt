@@ -5,6 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.cardview.widget.CardView
 import androidx.recyclerview.widget.RecyclerView
@@ -22,7 +23,9 @@ class EpisodeHorizontalAdapter(
     private val seriesId: String,
     private val providerId: String,
     private val seriesPosterUrl: String?,
-    private val onEpisodeClick: (Episode) -> Unit
+    private val seasonNumber: String = "1",
+    private val onEpisodeClick: (Episode) -> Unit,
+    private val onEpisodeFocused: ((Episode) -> Unit)? = null
 ) : RecyclerView.Adapter<EpisodeHorizontalAdapter.EpisodeViewHolder>() {
     
     init {
@@ -36,32 +39,35 @@ class EpisodeHorizontalAdapter(
     }
 
     inner class EpisodeViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        val card: CardView = view as CardView
+        val container: FrameLayout = view.findViewById(R.id.episode_container)
+        val card: CardView = view.findViewById(R.id.episode_card)
         val thumbnail: ImageView = view.findViewById(R.id.episode_thumbnail)
         val name: TextView = view.findViewById(R.id.episode_name)
+        val title: TextView = view.findViewById(R.id.episode_title)
         val duration: TextView = view.findViewById(R.id.episode_duration)
+        val infoBelow: View = view.findViewById(R.id.episode_info_below)
         val progressContainer: FrameLayout = view.findViewById(R.id.episode_progress_container)
         val progressBar: View = view.findViewById(R.id.episode_progress_bar)
 
         init {
-            // Set foreground drawable for focus border
-            card.foreground = androidx.core.content.ContextCompat.getDrawable(
-                card.context,
-                R.drawable.episode_card_bg
-            )
-            
-            card.setOnClickListener {
+            container.setOnClickListener {
                 val position = bindingAdapterPosition
                 if (position != RecyclerView.NO_POSITION) {
                     onEpisodeClick(episodes[position])
                 }
             }
             
-            card.setOnFocusChangeListener { _, hasFocus ->
+            container.setOnFocusChangeListener { _, hasFocus ->
                 if (hasFocus) {
                     card.cardElevation = 16f
                     card.scaleX = 1.05f
                     card.scaleY = 1.05f
+                    
+                    // Notify parent component about focused episode
+                    val position = bindingAdapterPosition
+                    if (position != RecyclerView.NO_POSITION) {
+                        onEpisodeFocused?.invoke(episodes[position])
+                    }
                 } else {
                     card.cardElevation = 4f
                     card.scaleX = 1.0f
@@ -80,11 +86,13 @@ class EpisodeHorizontalAdapter(
     override fun onBindViewHolder(holder: EpisodeViewHolder, position: Int) {
         val episode = episodes[position]
         
-        holder.name.text = "E${episode.episodeNumber}. ${episode.name}"
+        // Use season number passed to adapter
+        holder.name.text = "S${seasonNumber} E${episode.episodeNumber}"
+        holder.title.text = episode.name ?: "Episode ${episode.episodeNumber}"
         holder.duration.text = episode.duration
         
-        // Load thumbnail - use series poster
-        val imageUrl = seriesPosterUrl
+        // Load thumbnail - prioritize TMDB image if available, fallback to series poster
+        val imageUrl = episode.tmdbImageUrl ?: seriesPosterUrl
         if (!imageUrl.isNullOrEmpty()) {
             val fullUrl = if (imageUrl.startsWith("http")) {
                 imageUrl

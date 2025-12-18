@@ -13,5 +13,7 @@ data class Episode(
     val duration: String,
     val thumbnailUrl: String?,
     val seasonId: String,
-    val cmd: String?
+    val cmd: String?,
+    var tmdbImageUrl: String? = null,
+    var tmdbDescription: String? = null
 )

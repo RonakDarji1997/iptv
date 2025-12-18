@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Focused state - white background with black text -->
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#FFFFFF" />
+            <corners android:radius="8dp" />
+            <stroke android:width="2dp" android:color="#FFFFFF" />
+        </shape>
+    </item>
+    
+    <!-- Default state - semi-transparent with white text -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#50000000" />
+            <corners android:radius="8dp" />
+            <stroke android:width="1dp" android:color="#666666" />
+        </shape>
+    </item>
+</selector>

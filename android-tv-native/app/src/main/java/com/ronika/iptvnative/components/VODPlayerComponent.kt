@@ -22,7 +22,9 @@ import androidx.media3.ui.PlayerView
 import com.ronika.iptvnative.R
 import com.ronika.iptvnative.repository.WatchProgressRepository
 import com.ronika.iptvnative.services.SubtitleService
+import com.ronika.iptvnative.services.OpenSubtitlesService
 import com.ronika.iptvnative.utils.AppPreferences
+import com.ronika.iptvnative.utils.SRTParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -52,6 +54,7 @@ class VODPlayerComponent @JvmOverloads constructor(
     private lateinit var aspectRatioButton: ImageButton
     private lateinit var subtitleText: TextView
     private lateinit var bitrateInfo: TextView
+    private lateinit var subtitleSideNav: SubtitleSideNavComponent
     private var timeBar: androidx.media3.ui.DefaultTimeBar? = null
     private var exoPositionView: TextView? = null
     private var exoDurationView: TextView? = null
@@ -63,7 +66,13 @@ class VODPlayerComponent @JvmOverloads constructor(
     
     // Subtitle service
     private val subtitleService = SubtitleService()
+    private val openSubtitlesService = OpenSubtitlesService()
     private var subtitleStreamId: String? = null
+    private var currentSubtitleSource: SubtitleSource = SubtitleSource.Off
+    
+    enum class SubtitleSource {
+        Off, WhisperGenerated, OpenSubtitles, Uploaded
+    }
     
     // Aspect ratio modes - using real aspect ratios
     data class AspectRatioOption(
@@ -150,6 +159,7 @@ class VODPlayerComponent @JvmOverloads constructor(
         nextButton = playerView.findViewById(R.id.next_button)
         aspectRatioButton = playerView.findViewById(R.id.aspect_ratio_button)
         bitrateInfo = playerView.findViewById(R.id.bitrate_info)
+        subtitleSideNav = findViewById(R.id.subtitle_sidenav)
         
         // Style the seek bar and keep references so we can explicitly show/hide them in sync
         timeBar = playerView.findViewById<androidx.media3.ui.DefaultTimeBar>(R.id.exo_progress)
@@ -441,16 +451,16 @@ class VODPlayerComponent @JvmOverloads constructor(
             Log.d(TAG, "Restarted playback")
         }
         
-        // Subtitle button
+        // Subtitle button - opens side nav
         subtitleButton.setOnClickListener {
             Log.d(TAG, "SUBTITLE_CLICK Subtitle button CLICKED!")
-            toggleSubtitles()
+            openSubtitleSideNav()
         }
         subtitleButton.setOnKeyListener { _, keyCode, event ->
             if (event.action == android.view.KeyEvent.ACTION_DOWN && 
                 (keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER || keyCode == android.view.KeyEvent.KEYCODE_ENTER)) {
                 Log.d(TAG, "SUBTITLE_CLICK Subtitle button KEY pressed: $keyCode")
-                toggleSubtitles()
+                openSubtitleSideNav()
                 true
             } else {
                 false
@@ -501,6 +511,31 @@ class VODPlayerComponent @JvmOverloads constructor(
                     null -> {}
                 }
             }
+        }
+        
+        // Setup subtitle side nav callbacks
+        subtitleSideNav.onShow = {
+            // Pause player when side nav opens
+            player?.pause()
+        }
+        
+        subtitleSideNav.onSubtitleSelected = { selection ->
+            handleSubtitleSelection(selection)
+        }
+        
+        subtitleSideNav.onClose = {
+            // Resume player when side nav closes
+            player?.play()
+        }
+        
+        subtitleSideNav.onUploadRequested = {
+            // TODO: Implement file picker for Android TV
+            // For now, show a message
+            android.widget.Toast.makeText(
+                context,
+                "File upload not yet implemented on Android TV",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
         }
     }
     
@@ -580,15 +615,27 @@ class VODPlayerComponent @JvmOverloads constructor(
         subtitlePollingHandler = null
         subtitlePollingRunnable = null
         lastDisplayedCueIndex = -1
-        subtitleCues = emptyList()
+        // Don't clear subtitleCues here - they should only be cleared when disabling subtitles
         hideSubtitleText()
         Log.d(TAG, "Stopped subtitle polling")
     }
     
     private fun updateSubtitleDisplay() {
-        val currentPosition = player?.currentPosition ?: return
+        val currentPosition = player?.currentPosition
+        if (currentPosition == null) {
+            Log.w(TAG, "updateSubtitleDisplay: player currentPosition is null")
+            return
+        }
         
-        if (subtitleCues.isEmpty()) return
+        if (subtitleCues.isEmpty()) {
+            Log.w(TAG, "updateSubtitleDisplay: subtitleCues is empty")
+            return
+        }
+        
+        // Log every second to debug
+        if (currentPosition % 1000 < 100) {
+            Log.d(TAG, "🔍 Checking subtitles at ${currentPosition}ms, have ${subtitleCues.size} cues")
+        }
         
         // Match player position with received subtitle timestamps (matching mobile app logic)
         val matchingCue = subtitleCues.find { cue ->
@@ -717,41 +764,229 @@ class VODPlayerComponent @JvmOverloads constructor(
         }
     }
 
-    private fun toggleSubtitles() {
-        hasSubtitles = !hasSubtitles
-        Log.d(TAG, "🎬 CC button toggled: ${!hasSubtitles} → $hasSubtitles")
-        subtitleButton.alpha = if (hasSubtitles) 1.0f else 0.6f
+    /**
+     * Open subtitle side navigation
+     */
+    private fun openSubtitleSideNav() {
+        // Pause player while browsing subtitles
+        player?.pause()
         
-        if (hasSubtitles) {
-            // Start subtitle generation
-            val currentPosition = player?.currentPosition ?: 0L
-            val currentPositionSec = currentPosition / 1000
-            val videoId = generateVideoId()
-            
-            // Cancel previous generation if running
-            if (subtitleStreamId != null) {
-                Log.d(TAG, "🔄 Cancelling previous generation...")
-                subtitleService.stop()
-            }
-            
-            // Clear previous subtitles
-            subtitleCues = emptyList()
-            lastDisplayedCueIndex = -1
-            
-            Log.d(TAG, "  ▶️ Starting generation from: ${currentPositionSec}s")
-            subtitleStreamId = subtitleService.start(currentStreamUrl, videoId, "auto", currentPosition)
-            
-            // Start polling to display subtitles (checks player position against received subtitles)
-            startSubtitlePolling()
-            
-            android.widget.Toast.makeText(context, "Starting subtitles...", android.widget.Toast.LENGTH_SHORT).show()
+        // For series: use the series title, not episode title
+        // For movies: use the movie title
+        val searchTitle = if (currentContentType == "SERIES" && currentSeriesTitle != null) {
+            currentSeriesTitle!! // e.g., "Tyler Perry's Sistas"
         } else {
-            // Stop subtitle generation and polling
-            Log.d(TAG, "🛑 Stopping subtitle service")
+            currentMovieTitle // e.g., "The Matrix"
+        }
+        
+        Log.d(TAG, "Opening subtitle side nav - Title: $searchTitle, Season: $currentSeasonNumber, Episode: $currentEpisodeNumber")
+        
+        // Show side nav with movie/series metadata
+        subtitleSideNav.show(
+            movieTitle = searchTitle,
+            imdbId = null, // TODO: Pass IMDB ID if available from metadata
+            year = null,   // TODO: Pass year if available
+            season = currentSeasonNumber,
+            episode = currentEpisodeNumber
+        )
+    }
+    
+    /**
+     * Handle subtitle selection from side nav
+     */
+    private fun handleSubtitleSelection(selection: SubtitleSideNavComponent.SubtitleSelection) {
+        when (selection) {
+            is SubtitleSideNavComponent.SubtitleSelection.Off -> {
+                disableSubtitles()
+            }
+            is SubtitleSideNavComponent.SubtitleSelection.Upload -> {
+                loadUploadedSubtitles(selection.filePath)
+            }
+            is SubtitleSideNavComponent.SubtitleSelection.OpenSubtitle -> {
+                loadOpenSubtitle(selection.subtitle)
+            }
+        }
+    }
+    
+    /**
+     * Disable all subtitles
+     */
+    private fun disableSubtitles(silent: Boolean = false) {
+        Log.d(TAG, "🛑 Disabling subtitles")
+        
+        // Stop Whisper generation if running
+        if (currentSubtitleSource == SubtitleSource.WhisperGenerated) {
             subtitleService.stop()
             subtitleStreamId = null
-            stopSubtitlePolling()
+        }
+        
+        // Stop polling and clear cues
+        stopSubtitlePolling()
+        subtitleCues = emptyList() // Clear cues when disabling
+        currentSubtitleSource = SubtitleSource.Off
+        hasSubtitles = false
+        subtitleButton.alpha = 0.6f
+        
+        if (!silent) {
             android.widget.Toast.makeText(context, "Subtitles OFF", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+    
+    /**
+     * Load uploaded SRT file
+     */
+    private fun loadUploadedSubtitles(filePath: String) {
+        Log.d(TAG, "📂 Loading uploaded SRT file: $filePath")
+        
+        // Stop any existing subtitle source (silently)
+        disableSubtitles(silent = true)
+        
+        scope.launch(Dispatchers.IO) {
+            try {
+                val file = java.io.File(filePath)
+                if (!file.exists()) {
+                    launch(Dispatchers.Main) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "File not found",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    return@launch
+                }
+                
+                val srtContent = file.readText()
+                val parsedCues = SRTParser.parse(srtContent)
+                
+                launch(Dispatchers.Main) {
+                    if (parsedCues.isEmpty()) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "No subtitles found in file",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        // Convert to our SubtitleCue format
+                        subtitleCues = parsedCues.map { cue ->
+                            SubtitleCue(
+                                startMs = cue.startTimeMs,
+                                endMs = cue.endTimeMs,
+                                text = cue.text
+                            )
+                        }
+                        
+                        currentSubtitleSource = SubtitleSource.Uploaded
+                        hasSubtitles = true
+                        subtitleButton.alpha = 1.0f
+                        
+                        // Start polling to display subtitles
+                        startSubtitlePolling()
+                        
+                        android.widget.Toast.makeText(
+                            context,
+                            "Loaded ${parsedCues.size} subtitles from file",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                        
+                        Log.d(TAG, "✅ Loaded ${parsedCues.size} subtitles from uploaded file")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading uploaded subtitles", e)
+                launch(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Error loading subtitle file: ${e.message}",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
+    
+    /**
+     * Load subtitle from OpenSubtitles
+     */
+    private fun loadOpenSubtitle(subtitle: OpenSubtitlesService.SubtitleItem) {
+        Log.d(TAG, "🌐 Loading OpenSubtitle: ${subtitle.fileName}")
+        
+        // Stop any existing subtitle source (silently)
+        disableSubtitles(silent = true)
+        
+        // Show loading message
+        android.widget.Toast.makeText(
+            context,
+            "Downloading subtitle...",
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
+        
+        scope.launch(Dispatchers.IO) {
+            try {
+                val srtContent = openSubtitlesService.downloadSubtitle(subtitle.id)
+                
+                if (srtContent == null) {
+                    launch(Dispatchers.Main) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "Subtitle unavailable. Try another one.",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                        Log.w(TAG, "⚠️ Subtitle download returned null - may be rate limited or unavailable")
+                    }
+                    return@launch
+                }
+                
+                val parsedCues = SRTParser.parse(srtContent)
+                
+                launch(Dispatchers.Main) {
+                    if (parsedCues.isEmpty()) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "No subtitles found in downloaded file",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        // Convert to our SubtitleCue format
+                        subtitleCues = parsedCues.map { cue ->
+                            SubtitleCue(
+                                startMs = cue.startTimeMs,
+                                endMs = cue.endTimeMs,
+                                text = cue.text
+                            )
+                        }
+                        
+                        // Log first few cues for debugging
+                        Log.d(TAG, "📝 First 3 subtitle cues:")
+                        subtitleCues.take(3).forEach { cue ->
+                            Log.d(TAG, "  [${cue.startMs}ms - ${cue.endMs}ms] ${cue.text}")
+                        }
+                        
+                        currentSubtitleSource = SubtitleSource.OpenSubtitles
+                        hasSubtitles = true
+                        subtitleButton.alpha = 1.0f
+                        
+                        // Start polling to display subtitles
+                        startSubtitlePolling()
+                        
+                        android.widget.Toast.makeText(
+                            context,
+                            "Loaded ${parsedCues.size} subtitles from OpenSubtitles",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                        
+                        Log.d(TAG, "✅ Loaded ${parsedCues.size} subtitles from OpenSubtitles")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading OpenSubtitle", e)
+                launch(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Error downloading subtitle: ${e.message}",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
         }
     }
 
@@ -765,15 +1000,14 @@ class VODPlayerComponent @JvmOverloads constructor(
         currentAspectRatioIndex = 0
         applyAspectRatio()
         
-        // Stop any existing subtitles and polling
-        if (hasSubtitles || subtitleStreamId != null) {
-            Log.d(TAG, "🧹 Cleanup: Cancelling subtitle generation for new playback")
-            subtitleService.stop()
-            stopSubtitlePolling()
-            hasSubtitles = false
-            subtitleButton.alpha = 0.6f
-            subtitleStreamId = null
-        }
+        // FRESH START: Clear all subtitle state completely
+        Log.d(TAG, "🧹 Fresh playback: Clearing all subtitle state")
+        disableSubtitles(silent = true)
+        currentSubtitleSource = SubtitleSource.Off
+        hasSubtitles = false
+        subtitleButton.alpha = 0.6f
+        subtitleCues = emptyList()
+        lastDisplayedCueIndex = -1
         
         contentTitle.text = title
         nextButton.visibility = GONE // Hide next button for movies
@@ -820,15 +1054,14 @@ class VODPlayerComponent @JvmOverloads constructor(
         currentAspectRatioIndex = 0
         applyAspectRatio()
         
-        // Stop any existing subtitles and polling
-        if (hasSubtitles || subtitleStreamId != null) {
-            Log.d(TAG, "🧹 Cleanup: Cancelling subtitle generation for new playback")
-            subtitleService.stop()
-            stopSubtitlePolling()
-            hasSubtitles = false
-            subtitleButton.alpha = 0.6f
-            subtitleStreamId = null
-        }
+        // FRESH START: Clear all subtitle state completely
+        Log.d(TAG, "🧹 Fresh playback: Clearing all subtitle state")
+        disableSubtitles(silent = true)
+        currentSubtitleSource = SubtitleSource.Off
+        hasSubtitles = false
+        subtitleButton.alpha = 0.6f
+        subtitleCues = emptyList()
+        lastDisplayedCueIndex = -1
         
         // Prefer to show "Series Title — Episode X" when series title and episode number are available
         val displayTitle = if (!currentSeriesTitle.isNullOrBlank() && currentEpisodeNumber != null) {
@@ -882,12 +1115,22 @@ class VODPlayerComponent @JvmOverloads constructor(
     fun setOnNextEpisodeListener(callback: () -> Unit) {
         onNextEpisode = callback
     }
+    
+    fun getCurrentContentType(): String? = currentContentType
+    fun getCurrentContentId(): String? = currentContentId
+    fun getCurrentProviderId(): String? = currentProviderId
 
     private var seekSpeed = 10000L // Start with 10 seconds
     private var lastSeekTime = 0L
     private var seekCount = 0
     
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // If subtitle side nav is visible, don't handle ANY keys - let side nav handle everything
+        if (subtitleSideNav.visibility == VISIBLE) {
+            Log.d(TAG, "🚫 Side nav is open - forwarding key to side nav")
+            return subtitleSideNav.dispatchKeyEvent(event)
+        }
+        
         // Handle back button
         if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_BACK) {
             Log.d(TAG, "Back pressed in player - saving progress immediately")
@@ -911,9 +1154,9 @@ class VODPlayerComponent @JvmOverloads constructor(
                         Log.d(TAG, "Restarted playback from 00:00")
                         return true
                     }
-                    // If subtitle button has focus, toggle subtitles
+                    // If subtitle button has focus, open subtitle sidenav
                     if (subtitleButton.hasFocus()) {
-                        toggleSubtitles()
+                        openSubtitleSideNav()
                         return true
                     }
                     // If aspect ratio button has focus, cycle aspect ratio

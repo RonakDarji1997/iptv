@@ -44,6 +44,10 @@ import java.net.URLEncoder
  */
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        private const val REQUEST_CODE_MOVIE_DETAIL = 2001
+    }
+
     private val TAG = "RefactoredMain"
 
     // Navigation helpers
@@ -69,6 +73,22 @@ class MainActivity : ComponentActivity() {
     
     // Track if playing from series detail
     private var isPlayingFromSeries = false
+    
+    // Track movie details to return to
+    private var lastMovieDetails: MovieDetails? = null
+    
+    data class MovieDetails(
+        val id: String,
+        val name: String,
+        val posterUrl: String?,
+        val description: String?,
+        val actors: String?,
+        val director: String?,
+        val year: String?,
+        val country: String?,
+        val genres: String?,
+        val cmd: String?
+    )
     
     // Handler and runnable for managing focus enable delays
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -463,9 +483,74 @@ class MainActivity : ComponentActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         
+        android.util.Log.e("MainActivity", "==========================================")
+        android.util.Log.e("MainActivity", "onActivityResult called!")
+        android.util.Log.e("MainActivity", "RequestCode: $requestCode, ResultCode: $resultCode")
+        android.util.Log.e("MainActivity", "REQUEST_CODE_MOVIE_DETAIL: $REQUEST_CODE_MOVIE_DETAIL")
+        android.util.Log.e("MainActivity", "RESULT_OK: $RESULT_OK")
+        android.util.Log.e("MainActivity", "Data is null: ${data == null}")
+        android.util.Log.e("MainActivity", "Condition check: ${requestCode == REQUEST_CODE_MOVIE_DETAIL} && ${resultCode == RESULT_OK}")
+        android.util.Log.e("MainActivity", "==========================================")
+        
         if (requestCode == CloudSyncDialog.REQUEST_CODE_CLOUD_AUTH && resultCode == RESULT_OK) {
+            android.util.Log.e("MainActivity", "Cloud sync branch")
             // Cloud sync enabled successfully, start syncing
             syncProvidersToCloud()
+        } else if (requestCode == REQUEST_CODE_MOVIE_DETAIL && resultCode == RESULT_OK) {
+            android.util.Log.e("MainActivity", "Movie detail result received!")
+            // MovieDetailActivity returned - play the movie
+            data?.let {
+                val action = it.getStringExtra("ACTION")
+                android.util.Log.e("MainActivity", "Action: $action")
+                
+                if (action == "PLAY_MOVIE") {
+                    val movieId = it.getStringExtra("MOVIE_ID") ?: return@let
+                    val movieName = it.getStringExtra("MOVIE_NAME") ?: return@let
+                    val posterUrl = it.getStringExtra("POSTER_URL")
+                    val cmd = it.getStringExtra("CMD")
+                    
+                    android.util.Log.e("MainActivity", "Creating VODItem for: $movieName")
+                    
+                    // Hide VOD container immediately to prevent flickering before player starts
+                    val vodContainer = findViewById<FrameLayout>(R.id.vodContainer)
+                    vodContainer.visibility = android.view.View.GONE
+                    
+                    // Store movie details to return to after player
+                    lastMovieDetails = MovieDetails(
+                        id = movieId,
+                        name = movieName,
+                        posterUrl = posterUrl,
+                        description = intent.getStringExtra("DESCRIPTION"),
+                        actors = intent.getStringExtra("ACTORS"),
+                        director = intent.getStringExtra("DIRECTOR"),
+                        year = intent.getStringExtra("YEAR"),
+                        country = intent.getStringExtra("COUNTRY"),
+                        genres = intent.getStringExtra("GENRES"),
+                        cmd = cmd
+                    )
+                    
+                    // Create VODItem and play
+                    val vodItem = VODComponent.VODItem(
+                        id = movieId,
+                        name = movieName,
+                        posterUrl = posterUrl,
+                        cmd = cmd,
+                        year = null,
+                        description = null,
+                        backdropUrl = null,
+                        director = null,
+                        actors = null
+                    )
+                    
+                    android.util.Log.e("MainActivity", "Calling playMovie with VODItem")
+                    playMovie(vodItem)
+                }
+            }
+        } else if (requestCode == REQUEST_CODE_MOVIE_DETAIL && resultCode == RESULT_CANCELED) {
+            // User pressed back from MovieDetailActivity without playing - show VOD grid
+            android.util.Log.e("MainActivity", "Back pressed from MovieDetailActivity - showing VOD grid")
+            val vodContainer = findViewById<FrameLayout>(R.id.vodContainer)
+            vodContainer.visibility = android.view.View.VISIBLE
         }
     }
     
@@ -1221,16 +1306,67 @@ class MainActivity : ComponentActivity() {
         val container = findViewById<FrameLayout>(R.id.vodPlayerContainer)
         container.addView(vodPlayer)
         
-        // Set back callback to return to detail screen
+        // Set back callback to return to appropriate detail/info screen based on content type
         vodPlayer.setOnBackPressedListener {
             val currentState = getCurrentNavigation()
-            Log.d(TAG, "Back pressed in player, current state: $currentState")
+            val contentType = vodPlayer.getCurrentContentType()
+            Log.d(TAG, "Back pressed in player, current state: $currentState, contentType: $contentType")
             
             // Pop player state
             popNavigation()
             
             Log.d(TAG, "Hiding player")
             hidePlayer()
+            
+            // Navigate to appropriate info screen based on content type
+            when (contentType) {
+                "MOVIE" -> {
+                    // Check if we came from MovieDetailActivity (separate activity)
+                    if (lastMovieDetails != null) {
+                        Log.d(TAG, "Returning to MovieDetailActivity (re-launching it)")
+                        // Re-launch MovieDetailActivity since it finished when it sent the play intent
+                        val details = lastMovieDetails!!
+                        val intent = Intent(this, MovieDetailActivity::class.java).apply {
+                            putExtra("MOVIE_ID", details.id)
+                            putExtra("MOVIE_NAME", details.name)
+                            putExtra("POSTER_URL", details.posterUrl)
+                            putExtra("DESCRIPTION", details.description)
+                            putExtra("ACTORS", details.actors)
+                            putExtra("DIRECTOR", details.director)
+                            putExtra("YEAR", details.year)
+                            putExtra("COUNTRY", details.country)
+                            putExtra("GENRES", details.genres)
+                            putExtra("CMD", details.cmd)
+                        }
+                        startActivityForResult(intent, REQUEST_CODE_MOVIE_DETAIL)
+                        lastMovieDetails = null // Clear after navigation
+                    } else {
+                        // Show movie detail/info screen inline in VODComponent
+                        Log.d(TAG, "Navigating to movie detail/info screen in VODComponent")
+                        val vodContainer = findViewById<FrameLayout>(R.id.vodContainer)
+                        vodContainer.visibility = android.view.View.VISIBLE
+                        vodComponent.post {
+                            vodComponent.ensureDetailScreenVisible()
+                            vodComponent.refreshProgress()
+                            vodComponent.focusPlayButton()
+                        }
+                    }
+                }
+                "SERIES" -> {
+                    // Show series detail/info screen
+                    Log.d(TAG, "Navigating to series detail/info screen")
+                    val seriesContainer = findViewById<FrameLayout>(R.id.seriesDetailContainer)
+                    seriesContainer.visibility = android.view.View.VISIBLE
+                    seriesDetail.post {
+                        // Focus will be restored to the episode list
+                    }
+                }
+                else -> {
+                    Log.w(TAG, "Unknown content type, defaulting to VOD component")
+                    val vodContainer = findViewById<FrameLayout>(R.id.vodContainer)
+                    vodContainer.visibility = android.view.View.VISIBLE
+                }
+            }
         }
         
         // Set next episode callback
@@ -1461,7 +1597,7 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun hidePlayer() {
-        Log.d(TAG, "hidePlayer() called - isPlayingFromSeries: $isPlayingFromSeries, navigationSource: $currentNavigationSource, navigation stack: $navigationStack")
+        Log.d(TAG, "hidePlayer() called - navigation stack: $navigationStack")
         
         // Stop player and hide container
         vodPlayer.stop()
@@ -1480,57 +1616,9 @@ class MainActivity : ComponentActivity() {
             Log.e(TAG, "Error cleaning PLAYER states from navigation stack", e)
         }
         
-        if (isPlayingFromSeries) {
-            // Return to series detail and focus the episode that was playing
-            val seriesContainer = findViewById<FrameLayout>(R.id.seriesDetailContainer)
-            seriesContainer.visibility = android.view.View.VISIBLE
-            
-            seriesDetail.post {
-                seriesDetail.focusPlayingEpisode()
-            }
-            
-            isPlayingFromSeries = false
-            Log.d(TAG, "Returned to series detail, stack: $navigationStack")
-        } else if (currentNavigationSource == NavigationSource.SEARCH) {
-            // Coming from search - show VOD detail screen fullscreen (sidebars still hidden)
-            Log.d(TAG, "Returning to movie detail from search context")
-            
-            // Keep sidebars hidden
-            val sideNavContainer = findViewById<FrameLayout>(R.id.sideNavContainer)
-            val categorySidebarContainer = findViewById<FrameLayout>(R.id.categorySidebarContainer)
-            sideNavContainer.visibility = android.view.View.GONE
-            categorySidebarContainer.visibility = android.view.View.GONE
-            
-            // Show VOD container fullscreen
-            val vodContainer = findViewById<FrameLayout>(R.id.vodContainer)
-            val params = vodContainer.layoutParams as android.widget.LinearLayout.LayoutParams
-            params.weight = 1f
-            params.width = 0
-            vodContainer.layoutParams = params
-            vodContainer.visibility = android.view.View.VISIBLE
-            vodContainer.requestLayout()
-            
-            // VOD component should still be showing detail screen
-            vodComponent.setFullscreen(true)
-            vodComponent.visibility = android.view.View.VISIBLE
-            vodComponent.post {
-                vodComponent.refreshProgress()
-                vodComponent.focusPlayButton()
-            }
-            Log.d(TAG, "Returned to movie detail from search, VOD container visible, stack: $navigationStack")
-        } else {
-            // Show VOD component again (movie detail screen)
-            val vodContainer = findViewById<FrameLayout>(R.id.vodContainer)
-            vodContainer.visibility = android.view.View.VISIBLE
-            
-            // VOD component should still be showing detail screen
-            // Refresh progress and focus the play button in detail screen
-            vodComponent.post {
-                vodComponent.refreshProgress()
-                vodComponent.focusPlayButton()
-            }
-            Log.d(TAG, "Returned to movie detail, stack: $navigationStack")
-        }
+        // Clean up flags
+        isPlayingFromSeries = false
+        Log.d(TAG, "Player hidden, navigation handled by back callback")
     }
     
     fun showLiveTVCategory(categoryName: String, providerId: String? = null) {

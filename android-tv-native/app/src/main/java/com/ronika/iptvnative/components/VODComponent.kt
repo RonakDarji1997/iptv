@@ -741,14 +741,45 @@ class VODComponent @JvmOverloads constructor(
     }
     
     private fun onItemSelected(position: Int) {
+        android.util.Log.e(TAG, "==========================================")
+        android.util.Log.e(TAG, "MOVIE THUMBNAIL CLICKED!")
+        android.util.Log.e(TAG, "Position: $position")
+        android.util.Log.e(TAG, "==========================================")
+        
         selectedPosition = position
         if (position < allItems.size) {
             val item = allItems[position]
-            // For series, skip detail screen and go directly to series detail
+            android.util.Log.e(TAG, "Item name: ${item.name}")
+            android.util.Log.e(TAG, "VOD Type: $vodType")
+            
+            // For series, go to series detail
             if (vodType == VODType.SERIES) {
+                android.util.Log.e(TAG, "Opening series detail...")
                 onSeriesSelectedCallback?.invoke(item)
             } else {
-                showDetailScreen(item)
+                // For movies, open MovieDetailActivity with TMDB support
+                android.util.Log.e(TAG, "==========================================")
+                android.util.Log.e(TAG, "Opening MovieDetailActivity for: ${item.name}")
+                android.util.Log.e(TAG, "==========================================")
+                
+                val intent = android.content.Intent(context, com.ronika.iptvnative.MovieDetailActivity::class.java).apply {
+                    putExtra("MOVIE_ID", item.id)
+                    putExtra("MOVIE_NAME", item.name)
+                    putExtra("POSTER_URL", item.posterUrl)
+                    putExtra("DESCRIPTION", item.description ?: "")
+                    putExtra("ACTORS", "") // VOD doesn't have actor info
+                    putExtra("DIRECTOR", "") // VOD doesn't have director info
+                    putExtra("YEAR", item.year ?: "")
+                    putExtra("COUNTRY", "")
+                    putExtra("GENRES", "")
+                    putExtra("CMD", item.cmd)
+                }
+                val activity = context as? android.app.Activity
+                if (activity != null) {
+                    activity.startActivityForResult(intent, 2001)
+                } else {
+                    context.startActivity(intent)
+                }
             }
         }
     }
@@ -920,9 +951,29 @@ class VODComponent @JvmOverloads constructor(
                     Log.d(TAG, "Open series detail: ${item.name}, ID: ${item.id}")
                     onSeriesSelectedCallback?.invoke(item)
                 } else {
-                    // For movies, play directly
-                    Log.d(TAG, "Play video: ${item.name}, ID: ${item.id}, cmd: ${item.cmd}")
-                    onPlayMovieCallback?.invoke(item)
+                    // For movies, open MovieDetailActivity with TMDB support
+                    Log.e(TAG, "==========================================")
+                    Log.e(TAG, "Opening MovieDetailActivity for: ${item.name}")
+                    Log.e(TAG, "==========================================")
+                    
+                    val intent = android.content.Intent(context, com.ronika.iptvnative.MovieDetailActivity::class.java).apply {
+                        putExtra("MOVIE_ID", item.id)
+                        putExtra("MOVIE_NAME", item.name)
+                        putExtra("POSTER_URL", item.posterUrl)
+                        putExtra("DESCRIPTION", item.description ?: "")
+                        putExtra("ACTORS", "") // VOD doesn't have actor info
+                        putExtra("DIRECTOR", "") // VOD doesn't have director info
+                        putExtra("YEAR", item.year ?: "")
+                        putExtra("COUNTRY", "")
+                        putExtra("GENRES", "")
+                        putExtra("CMD", item.cmd)
+                    }
+                    val activity = context as? android.app.Activity
+                    if (activity != null) {
+                        activity.startActivityForResult(intent, 2001)
+                    } else {
+                        context.startActivity(intent)
+                    }
                 }
             }
         }
@@ -1075,8 +1126,8 @@ class VODComponent @JvmOverloads constructor(
         // Reset fullscreen mode
         isFullscreenMode = false
         
-        // Reset current detail item
-        currentDetailItem = null
+        // DON'T reset currentDetailItem - we need it to restore detail screen when returning from player
+        // currentDetailItem = null
         
         Log.d(TAG, "VOD component reset complete")
     }
@@ -1145,6 +1196,17 @@ class VODComponent @JvmOverloads constructor(
                     }
                 }
             }
+        }
+    }
+    
+    fun ensureDetailScreenVisible() {
+        if (currentDetailItem != null && !isDetailScreenVisible) {
+            Log.d(TAG, "Ensuring detail screen is visible for: ${currentDetailItem!!.name}")
+            showDetailScreen(currentDetailItem!!)
+        } else if (isDetailScreenVisible) {
+            Log.d(TAG, "Detail screen already visible")
+        } else {
+            Log.w(TAG, "Cannot show detail screen - no current detail item")
         }
     }
     

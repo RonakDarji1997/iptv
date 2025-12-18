@@ -32,26 +32,21 @@ class SeriesDetailComponent @JvmOverloads constructor(
     
     // Views
     private lateinit var container: ViewGroup
-    private lateinit var backdropArea: FrameLayout
-    private lateinit var infoArea: LinearLayout
+    private lateinit var infoScreen: FrameLayout
+    private lateinit var episodesScreen: ScrollView
+    private lateinit var episodesBackButton: Button
     private lateinit var backdropImage: ImageView
+    private lateinit var categoryText: TextView
     private lateinit var titleText: TextView
     private lateinit var yearText: TextView
     private lateinit var seasonsText: TextView
-    private lateinit var ratingText: TextView
     private lateinit var descriptionText: TextView
-    private lateinit var seriesDescription: TextView
-    private lateinit var actionButtonsContainer: LinearLayout
+    private lateinit var castText: TextView
     private lateinit var playButton: Button
     private lateinit var favoriteButton: Button
-    private lateinit var episodesTab: TextView
-    private lateinit var seasonSelector: Spinner
-    private lateinit var episodeDescription: TextView
-    private lateinit var episodesRecycler: RecyclerView
+    private lateinit var seasonsContainer: LinearLayout
     private lateinit var loadingIndicator: ProgressBar
     private lateinit var tmdbLoading: ProgressBar
-    private lateinit var contentScroll: ScrollView
-    private lateinit var genresContainer: LinearLayout
     
     // Data
     private var seriesId: String = ""
@@ -62,8 +57,6 @@ class SeriesDetailComponent @JvmOverloads constructor(
     private val allEpisodesBySeason = mutableMapOf<String, List<Episode>>()
     private var firstEpisode: Episode? = null
     private var firstSeason: Season? = null
-    private var currentSeasonIndex = 0
-    private var currentFocusedEpisode: Episode? = null
     
     // TMDB Data
     private var tmdbTvId: Int? = null
@@ -76,12 +69,6 @@ class SeriesDetailComponent @JvmOverloads constructor(
     // Favourite state
     private var isFavorited = false
     private val favoriteRepository = FavoriteRepository(context)
-    
-    // Animation state
-    private var isBackdropHidden = false
-    
-    // Episode adapter
-    private var episodeAdapter: EpisodeHorizontalAdapter? = null
     
     // Callbacks
     private var onBackPressed: (() -> Unit)? = null
@@ -150,70 +137,34 @@ class SeriesDetailComponent @JvmOverloads constructor(
     
     private fun setupViews() {
         container = findViewById(R.id.series_detail_container)
-        contentScroll = findViewById(R.id.series_content_scroll)
-        backdropArea = findViewById(R.id.series_backdrop_area)
-        infoArea = findViewById(R.id.series_info_area)
+        infoScreen = findViewById(R.id.series_info_screen)
+        episodesScreen = findViewById(R.id.series_episodes_screen)
+        episodesBackButton = findViewById(R.id.series_episodes_back_button)
         backdropImage = findViewById(R.id.series_detail_backdrop)
+        categoryText = findViewById(R.id.series_detail_category)
         titleText = findViewById(R.id.series_detail_title)
         yearText = findViewById(R.id.series_detail_year)
         seasonsText = findViewById(R.id.series_detail_seasons)
-        ratingText = findViewById(R.id.series_detail_rating)
         descriptionText = findViewById(R.id.series_detail_description)
-        seriesDescription = findViewById(R.id.series_detail_description)
-        actionButtonsContainer = findViewById(R.id.series_action_buttons_container)
+        castText = findViewById(R.id.series_detail_cast)
         playButton = findViewById(R.id.series_detail_play_button)
         favoriteButton = findViewById(R.id.series_detail_favorite_button)
-        episodesTab = findViewById(R.id.series_episodes_tab)
-        seasonSelector = findViewById(R.id.series_season_selector)
-        episodeDescription = findViewById(R.id.series_episode_description)
-        episodesRecycler = findViewById(R.id.series_episodes_recycler)
+        seasonsContainer = findViewById(R.id.series_seasons_container)
         loadingIndicator = findViewById(R.id.series_detail_loading)
         tmdbLoading = findViewById(R.id.tmdb_loading)
-        genresContainer = findViewById(R.id.series_genres_container)
         
-        // Set fade gradient sizes to 40% of screen
-        post {
-            val displayMetrics = context.resources.displayMetrics
-            val screenWidth = displayMetrics.widthPixels
-            val screenHeight = displayMetrics.heightPixels
-            
-            // Left fade is 40% of screen width
-            val fadeLeft = findViewById<View>(R.id.fade_left)
-            val fadeLeftParams = fadeLeft.layoutParams
-            fadeLeftParams.width = (screenWidth * 0.4f).toInt()
-            fadeLeft.layoutParams = fadeLeftParams
-            
-            // Bottom fade is 40% of screen height
-            val fadeBottom = findViewById<View>(R.id.fade_bottom)
-            val fadeBottomParams = fadeBottom.layoutParams
-            fadeBottomParams.height = (screenHeight * 0.4f).toInt()
-            fadeBottom.layoutParams = fadeBottomParams
-            
-            android.util.Log.d("SeriesDetail", "Fade overlays set - L: ${fadeLeftParams.width}px, B: ${fadeBottomParams.height}px")
-        }
+        // Buttons are hidden in XML - episodes are shown by default
+        // No need to interact with them anymore
         
-        // Setup RecyclerView with proper focus handling
-        episodesRecycler.layoutManager = LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
-        episodesRecycler.isFocusable = false
-        episodesRecycler.isFocusableInTouchMode = false
-        episodesRecycler.descendantFocusability = android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
-        
-        // Setup button focus navigation
+        // Setup button focus navigation (kept for compatibility)
         playButton.nextFocusRightId = R.id.series_detail_favorite_button
         favoriteButton.nextFocusLeftId = R.id.series_detail_play_button
-        playButton.nextFocusDownId = R.id.series_season_selector
-        favoriteButton.nextFocusDownId = R.id.series_season_selector
-        seasonSelector.nextFocusDownId = R.id.series_episodes_recycler
         
-        setupButtonListeners()
-        setupFocusListeners()
-    }
-    
-    private fun setupButtonListeners() {
         playButton.setOnClickListener {
             firstEpisode?.let { episode ->
                 firstSeason?.let { season ->
                     Log.d(TAG, "Playing first episode: ${episode.name}")
+                    // Track playing episode
                     currentPlayingSeasonId = episode.seasonId
                     currentPlayingEpisodeId = episode.id
                     onPlayEpisode?.invoke(
@@ -249,16 +200,37 @@ class SeriesDetailComponent @JvmOverloads constructor(
             }
         }
         
-        // Season selector listener
-        seasonSelector.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (position != currentSeasonIndex && seasons.isNotEmpty()) {
-                    currentSeasonIndex = position
-                    loadEpisodesForSeason(position)
-                }
+        // Episodes back button
+        episodesBackButton.setOnClickListener {
+            showInfoScreen()
+        }
+        
+        episodesBackButton.setOnKeyListener { _, keyCode, event ->
+            if (event.action == android.view.KeyEvent.ACTION_DOWN && keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
+                focusFirstEpisode()
+                true
+            } else {
+                false
             }
-            
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        
+        // Handle down key from buttons to show episodes screen
+        playButton.setOnKeyListener { _, keyCode, event ->
+            if (event.action == android.view.KeyEvent.ACTION_DOWN && keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
+                showEpisodesScreen()
+                true
+            } else {
+                false
+            }
+        }
+        
+        favoriteButton.setOnKeyListener { _, keyCode, event ->
+            if (event.action == android.view.KeyEvent.ACTION_DOWN && keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
+                showEpisodesScreen()
+                true
+            } else {
+                false
+            }
         }
         
         // Handle back button
@@ -266,235 +238,20 @@ class SeriesDetailComponent @JvmOverloads constructor(
         container.isFocusableInTouchMode = true
     }
     
-    private fun setupFocusListeners() {
-        // When episodes recycler gets focus, hide backdrop/info with animation
-        episodesRecycler.setOnFocusChangeListener { _, hasFocus ->
-            if (hasFocus && !isBackdropHidden) {
-                hideBackdropArea()
-            }
-        }
-        
-        // Season selector: hide buttons/description and animate episodes up
-        seasonSelector.setOnFocusChangeListener { view, hasFocus ->
-            if (hasFocus) {
-                // Change text color to black on focus
-                (view as? Spinner)?.let { spinner ->
-                    (spinner.selectedView as? TextView)?.setTextColor(android.graphics.Color.BLACK)
-                }
-                
-                // Hide title, year, rating, buttons and description with animation
-                titleText.animate()
-                    .alpha(0f)
-                    .setDuration(200)
-                    .withEndAction {
-                        titleText.visibility = View.GONE
-                    }
-                    .start()
-                
-                yearText.animate()
-                    .alpha(0f)
-                    .setDuration(200)
-                    .withEndAction {
-                        yearText.visibility = View.GONE
-                    }
-                    .start()
-                
-                seasonsText.animate()
-                    .alpha(0f)
-                    .setDuration(200)
-                    .withEndAction {
-                        seasonsText.visibility = View.GONE
-                    }
-                    .start()
-                
-                ratingText.animate()
-                    .alpha(0f)
-                    .setDuration(200)
-                    .withEndAction {
-                        ratingText.visibility = View.GONE
-                    }
-                    .start()
-                
-                actionButtonsContainer.animate()
-                    .alpha(0f)
-                    .setDuration(200)
-                    .withEndAction {
-                        actionButtonsContainer.visibility = View.GONE
-                    }
-                    .start()
-                    
-                seriesDescription.animate()
-                    .alpha(0f)
-                    .setDuration(200)
-                    .withEndAction {
-                        seriesDescription.visibility = View.GONE
-                    }
-                    .start()
-                    
-            } else {
-                // Restore white text when not focused
-                (view as? Spinner)?.let { spinner ->
-                    (spinner.selectedView as? TextView)?.setTextColor(android.graphics.Color.WHITE)
-                }
-                
-                // Don't show anything when losing focus
-                // They will only show when buttons themselves get focus
-            }
-        }
-        
-        // When buttons get focus, show buttons/description with animation
-        val showButtonsListener = View.OnFocusChangeListener { _, hasFocus ->
-            if (hasFocus) {
-                // Show title, year, rating
-                titleText.visibility = View.VISIBLE
-                titleText.animate()
-                    .alpha(1f)
-                    .setDuration(200)
-                    .start()
-                
-                yearText.visibility = View.VISIBLE
-                yearText.animate()
-                    .alpha(1f)
-                    .setDuration(200)
-                    .start()
-                
-                seasonsText.visibility = View.VISIBLE
-                seasonsText.animate()
-                    .alpha(1f)
-                    .setDuration(200)
-                    .start()
-                
-                ratingText.visibility = View.VISIBLE
-                ratingText.animate()
-                    .alpha(1f)
-                    .setDuration(200)
-                    .start()
-                
-                // Show buttons and description with animation
-                actionButtonsContainer.visibility = View.VISIBLE
-                actionButtonsContainer.animate()
-                    .alpha(1f)
-                    .setDuration(200)
-                    .start()
-                    
-                seriesDescription.visibility = View.VISIBLE
-                seriesDescription.animate()
-                    .alpha(1f)
-                    .setDuration(200)
-                    .start()
-                    
-                // Also show backdrop if hidden
-                if (isBackdropHidden) {
-                    showBackdropArea()
-                }
-            }
-        }
-        
-        playButton.onFocusChangeListener = showButtonsListener
-        favoriteButton.onFocusChangeListener = showButtonsListener
+    private fun showEpisodesScreen() {
+        infoScreen.visibility = View.GONE
+        episodesScreen.visibility = View.VISIBLE
+        episodesBackButton.postDelayed({
+            episodesBackButton.requestFocus()
+        }, 100)
     }
     
-    private fun hideBackdropArea() {
-        isBackdropHidden = true
-        backdropArea.animate()
-            .alpha(0f)
-            .translationY(-100f)
-            .setDuration(300)
-            .withEndAction {
-                backdropArea.visibility = View.GONE
-            }
-            .start()
-            
-        infoArea.animate()
-            .alpha(0f)
-            .translationY(-50f)
-            .setDuration(300)
-            .withEndAction {
-                infoArea.visibility = View.GONE
-            }
-            .start()
-    }
-    
-    private fun showBackdropArea() {
-        isBackdropHidden = false
-        backdropArea.visibility = View.VISIBLE
-        backdropArea.alpha = 0f
-        backdropArea.translationY = -100f
-        backdropArea.animate()
-            .alpha(1f)
-            .translationY(0f)
-            .setDuration(300)
-            .start()
-            
-        infoArea.visibility = View.VISIBLE
-        infoArea.alpha = 0f
-        infoArea.translationY = -50f
-        infoArea.animate()
-            .alpha(1f)
-            .translationY(0f)
-            .setDuration(300)
-            .start()
-    }
-    
-    private fun loadEpisodesForSeason(seasonIndex: Int) {
-        if (seasonIndex < 0 || seasonIndex >= seasons.size) return
-        
-        val season = seasons[seasonIndex]
-        val episodes = allEpisodesBySeason[season.id] ?: emptyList()
-        
-        // Update adapter
-        episodeAdapter = EpisodeHorizontalAdapter(
-            episodes = episodes,
-            seriesId = seriesId,
-            providerId = currentProviderId ?: "",
-            seriesPosterUrl = posterUrl,
-            seasonNumber = season.seasonNumber,
-            onEpisodeClick = { episode ->
-                Log.d(TAG, "Playing episode: ${episode.name}")
-                currentPlayingSeasonId = episode.seasonId
-                currentPlayingEpisodeId = episode.id
-                onPlayEpisode?.invoke(
-                    seriesId,
-                    episode.seasonId,
-                    episode.id,
-                    season.seasonNumber,
-                    episode.episodeNumber,
-                    episode.name
-                )
-            },
-            onEpisodeFocused = { episode ->
-                // Show episode description when focused (Prime-like behavior)
-                if (!episode.tmdbDescription.isNullOrEmpty()) {
-                    episodeDescription.text = episode.tmdbDescription
-                    episodeDescription.visibility = View.VISIBLE
-                } else {
-                    episodeDescription.visibility = View.GONE
-                }
-            }
-        )
-        
-        episodesRecycler.adapter = episodeAdapter
-        
-        // Don't auto-focus episodes on initial load to prevent scroll down
-        // User can navigate down to episodes manually
-        android.util.Log.e("SeriesDetail", "Episodes adapter set, not requesting focus to prevent scroll")
-    }
-    
-    private fun updateEpisodeDescription(episode: Episode, seasonNumber: String) {
-        currentFocusedEpisode = episode
-        
-        // Try to get TMDB description
-        val seasonNum = seasonNumber.toIntOrNull() ?: 1
-        val episodeNum = extractEpisodeNumber(episode.name) ?: episode.episodeNumber.toIntOrNull() ?: 1
-        
-        val tmdbEpisode = tmdbSeasonData[seasonNum]?.episodes?.find { it.episodeNumber == episodeNum }
-        
-        if (tmdbEpisode != null && !tmdbEpisode.overview.isNullOrBlank()) {
-            episodeDescription.text = tmdbEpisode.overview
-            episodeDescription.visibility = View.VISIBLE
-        } else {
-            episodeDescription.visibility = View.GONE
-        }
+    private fun showInfoScreen() {
+        episodesScreen.visibility = View.GONE
+        infoScreen.visibility = View.VISIBLE
+        playButton.postDelayed({
+            playButton.requestFocus()
+        }, 100)
     }
     
     fun showSeries(
@@ -512,73 +269,68 @@ class SeriesDetailComponent @JvmOverloads constructor(
         this.seriesYear = year
         this.posterUrl = posterUrl
         
-        // 🧹 CLEAR OLD DATA FIRST to prevent stale thumbnails
-        Log.d(TAG, "🧹 Clearing old episode data before loading new series: $name")
-        seasons.clear()
-        allEpisodesBySeason.clear()
-        episodesRecycler.adapter = null
-        episodeAdapter = null
-        firstEpisode = null
-        firstSeason = null
-        
-        // Show container
+        // Show container with info screen
         container.visibility = View.VISIBLE
-        backdropArea.visibility = View.VISIBLE
-        infoArea.visibility = View.VISIBLE
-        isBackdropHidden = false
-        
-        android.util.Log.e("SeriesDetail", "=== SCROLL DEBUG START ===")
-        android.util.Log.e("SeriesDetail", "Current scroll position Y: ${contentScroll.scrollY}")
-        android.util.Log.e("SeriesDetail", "ContentScroll height: ${contentScroll.height}")
-        
-        // Scroll to top - wait for layout to complete
-        contentScroll.viewTreeObserver.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
-            override fun onGlobalLayout() {
-                contentScroll.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                android.util.Log.e("SeriesDetail", "OnGlobalLayout - scrollY before: ${contentScroll.scrollY}")
-                contentScroll.scrollTo(0, 0)
-                android.util.Log.e("SeriesDetail", "OnGlobalLayout - scrollY after scrollTo(0,0): ${contentScroll.scrollY}")
-            }
-        })
-        
-        // Also try immediate scroll
-        android.util.Log.e("SeriesDetail", "Immediate scrollTo(0,0)")
-        contentScroll.scrollTo(0, 0)
-        android.util.Log.e("SeriesDetail", "After immediate scroll, scrollY: ${contentScroll.scrollY}")
-        
-        contentScroll.post {
-            android.util.Log.e("SeriesDetail", "Post block - scrollY before: ${contentScroll.scrollY}")
-            contentScroll.scrollTo(0, 0)
-            contentScroll.smoothScrollTo(0, 0)
-            android.util.Log.e("SeriesDetail", "Post block - scrollY after: ${contentScroll.scrollY}")
-        }
-        
-        // Request focus on Play button to show top content
-        playButton.post {
-            android.util.Log.e("SeriesDetail", "Requesting focus on Play button")
-            playButton.requestFocus()
-        }
+        infoScreen.visibility = View.VISIBLE
+        episodesScreen.visibility = View.GONE
+        container.requestFocus()
         
         // Set info
+        categoryText.text = categoryName
         titleText.text = name
         yearText.text = year ?: ""
         descriptionText.text = description ?: "No description available"
         
-        // Hide content initially until TMDB loads
-        backdropImage.alpha = 0f
-        titleText.alpha = 0f
-        playButton.alpha = 0f
+        // Cast
+        val castInfo = buildString {
+            if (!director.isNullOrBlank()) {
+                append("Director: $director")
+            }
+            if (isNotEmpty() && !actors.isNullOrBlank()) {
+                append("  •  ")
+            }
+            if (!actors.isNullOrBlank()) {
+                append("Cast: $actors")
+            }
+        }
+        castText.text = castInfo.ifEmpty { "" }
+        castText.visibility = if (castInfo.isEmpty()) View.GONE else View.VISIBLE
         
-        // Hide rating initially, will be set by TMDB if available
-        ratingText.visibility = View.GONE
+        // Load backdrop - use dynamic base URL from provider
+        val fullPosterUrl = if (posterUrl?.startsWith("http") == true) {
+            posterUrl
+        } else if (portalBaseUrl.isNotEmpty()) {
+            "$portalBaseUrl$posterUrl"
+        } else {
+            posterUrl ?: ""
+        }
+        backdropImage.load(fullPosterUrl) {
+            crossfade(300)
+            placeholder(R.drawable.ic_movie_placeholder)
+            error(R.drawable.ic_movie_placeholder)
+        }
         
-        // Load TMDB data FIRST, then load seasons (need TV ID for episode data)
+        // Load TMDB data
+        loadTmdbData()
+        
+        // Auto-load seasons and episodes (always show by default)
+        loadingIndicator.visibility = View.VISIBLE
+        playButton.isEnabled = false
+        
+        // Check favorite status
         scope.launch {
             try {
-                // Wait for TMDB data to load first
-                loadTmdbData()
-                
-                // Now load seasons and episodes with TMDB TV ID available
+                isFavorited = favoriteRepository.isFavorite(id, FavoriteRepository.TYPE_SERIES, currentProviderId ?: "")
+                withContext(Dispatchers.Main) {
+                    updateFavoriteButtonUI()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error checking favorite status", e)
+            }
+        }
+        
+        scope.launch {
+            try {
                 loadSeasonsAndEpisodes()
                 
                 // Check for saved progress after loading episodes
@@ -594,63 +346,34 @@ class SeriesDetailComponent @JvmOverloads constructor(
         }
     }
     
-    private suspend fun loadTmdbData() {
+    private fun loadTmdbData() {
         android.util.Log.e("SeriesDetailComponent", "==========================================")
         android.util.Log.e("SeriesDetailComponent", "loadTmdbData() STARTED for: $seriesName")
         android.util.Log.e("SeriesDetailComponent", "==========================================")
         
-        withContext(Dispatchers.Main) {
-            tmdbLoading.visibility = View.VISIBLE
-        }
+        tmdbLoading.visibility = View.VISIBLE
         
-        try {
-            val yearInt = seriesYear?.toIntOrNull()
-            android.util.Log.e("SeriesDetailComponent", "Calling TmdbService.smartSearch for: $seriesName, year: $yearInt")
-            
-            val tmdbDetails = TmdbService.smartSearch(seriesName, "tv", yearInt)
-            
-            if (tmdbDetails != null) {
-                android.util.Log.e("SeriesDetailComponent", "TMDB data found! Title: ${tmdbDetails.title}, TV ID: ${tmdbDetails.id}")
-                withContext(Dispatchers.Main) {
-                    displayTmdbData(tmdbDetails)
-                }
-            } else {
-                android.util.Log.e("SeriesDetailComponent", "NO TMDB data found, using provider data")
-                // Load provider backdrop if TMDB not found
-                withContext(Dispatchers.Main) {
-                    val fullPosterUrl = if (posterUrl?.startsWith("http") == true) {
-                        posterUrl
-                    } else if (portalBaseUrl.isNotEmpty()) {
-                        "$portalBaseUrl$posterUrl"
-                    } else {
-                        posterUrl ?: ""
+        scope.launch {
+            try {
+                val yearInt = seriesYear?.toIntOrNull()
+                android.util.Log.e("SeriesDetailComponent", "Calling TmdbService.smartSearch for: $seriesName, year: $yearInt")
+                
+                val tmdbDetails = TmdbService.smartSearch(seriesName, "tv", yearInt)
+                
+                if (tmdbDetails != null) {
+                    android.util.Log.e("SeriesDetailComponent", "TMDB data found! Title: ${tmdbDetails.title}")
+                    withContext(Dispatchers.Main) {
+                        displayTmdbData(tmdbDetails)
                     }
-                    backdropImage.load(fullPosterUrl) {
-                        crossfade(300)
-                        placeholder(R.drawable.ic_movie_placeholder)
-                        error(R.drawable.ic_movie_placeholder)
-                    }
+                } else {
+                    android.util.Log.e("SeriesDetailComponent", "NO TMDB data found, using provider data")
                 }
-            }
-            
-            // Fade in content after TMDB check completes
-            withContext(Dispatchers.Main) {
-                backdropImage.animate().alpha(1f).setDuration(300).start()
-                titleText.animate().alpha(1f).setDuration(300).start()
-                playButton.animate().alpha(1f).setDuration(300).start()
-            }
-            
-        } catch (e: Exception) {
-            android.util.Log.e("SeriesDetailComponent", "Error loading TMDB data", e)
-            // Show provider data on error
-            withContext(Dispatchers.Main) {
-                backdropImage.animate().alpha(1f).setDuration(300).start()
-                titleText.animate().alpha(1f).setDuration(300).start()
-                playButton.animate().alpha(1f).setDuration(300).start()
-            }
-        } finally {
-            withContext(Dispatchers.Main) {
-                tmdbLoading.visibility = View.GONE
+            } catch (e: Exception) {
+                android.util.Log.e("SeriesDetailComponent", "Error loading TMDB data", e)
+            } finally {
+                withContext(Dispatchers.Main) {
+                    tmdbLoading.visibility = View.GONE
+                }
             }
         }
     }
@@ -685,23 +408,10 @@ class SeriesDetailComponent @JvmOverloads constructor(
             descriptionText.text = details.overview
         }
         
-        // Genres (from TMDB)
-        if (details.genres.isNotEmpty()) {
-            genresContainer.removeAllViews()
-            details.genres.take(5).forEach { genre ->
-                val chip = createGenreChip(genre.name)
-                genresContainer.addView(chip)
-            }
-            genresContainer.visibility = View.VISIBLE
-        } else {
-            genresContainer.visibility = View.GONE
-        }
-        
         // Rating badge (if available)
         val rating = details.voteAverage
         if (rating != null && rating > 0) {
-            ratingText.text = String.format("★ %.1f", rating)
-            ratingText.visibility = View.VISIBLE
+            // You can add a rating badge UI element similar to MovieDetailActivity
             android.util.Log.d("SeriesDetailComponent", "TMDB rating: $rating")
         }
         
@@ -819,12 +529,7 @@ class SeriesDetailComponent @JvmOverloads constructor(
                 
                 // Load episodes for each season
                 for (season in seasons) {
-                    loadEpisodesForSeasonData(season)
-                }
-                
-                // Setup season spinner after loading all seasons
-                withContext(Dispatchers.Main) {
-                    setupSeasonSpinner()
+                    loadEpisodesForSeason(season)
                 }
                 
             } catch (e: Exception) {
@@ -834,89 +539,40 @@ class SeriesDetailComponent @JvmOverloads constructor(
         }
     }
     
-    private fun setupSeasonSpinner() {
-        if (seasons.isEmpty()) return
-        
-        val seasonNames = seasons.map { it.name }
-        val adapter = ArrayAdapter(context, android.R.layout.simple_spinner_item, seasonNames)
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        seasonSelector.adapter = adapter
-        
-        // Load first season by default
-        if (seasons.isNotEmpty()) {
-            currentSeasonIndex = 0
-            loadEpisodesForSeason(0)
-        }
-    }
-    
     /**
      * Get TMDB episode data for a provider episode
      * Matches by episode number extracted from name or episode_num field
      */
     private fun getTmdbEpisodeData(episodeName: String, episodeNum: String, seasonNumber: Int): TmdbService.TmdbEpisode? {
-        val tmdbSeason = tmdbSeasonData[seasonNumber]
-        
-        if (tmdbSeason == null) {
-            Log.w(TAG, "❌ No TMDB season data for season $seasonNumber")
-            return null
-        }
+        val tmdbSeason = tmdbSeasonData[seasonNumber] ?: return null
         
         // Try to extract episode number
         var episodeNumber: Int? = null
         
-        // Strategy 1: From episode_num field (most reliable)
-        episodeNum.toIntOrNull()?.let { 
-            episodeNumber = it
-            Log.d(TAG, "✓ Got episode number from field: $it")
-        }
+        // Strategy 1: From episode_num field
+        episodeNum.toIntOrNull()?.let { episodeNumber = it }
         
         // Strategy 2: Extract from name (e.g., "Episode 1", "E01", "Ep. 5")
         if (episodeNumber == null) {
             val match = Regex("""(?:Episode|E|Ep\.?)\s*(\d+)""", RegexOption.IGNORE_CASE).find(episodeName)
-            match?.groupValues?.get(1)?.toIntOrNull()?.let { 
-                episodeNumber = it
-                Log.d(TAG, "✓ Extracted episode number from name: $it")
-            }
+            match?.groupValues?.get(1)?.toIntOrNull()?.let { episodeNumber = it }
         }
         
-        if (episodeNumber == null) {
-            Log.w(TAG, "❌ Could not extract episode number from: episodeNum='$episodeNum', name='$episodeName'")
-            return null
-        }
+        if (episodeNumber == null) return null
         
         // Find matching TMDB episode
-        val tmdbEpisode = tmdbSeason.episodes?.find { it.episodeNumber == episodeNumber }
-        
-        if (tmdbEpisode != null) {
-            Log.d(TAG, "✅ Matched TMDB episode: S${seasonNumber}E${episodeNumber} - ${tmdbEpisode.name}")
-        } else {
-            Log.w(TAG, "❌ No TMDB match for S${seasonNumber}E${episodeNumber}. Available episodes: ${tmdbSeason.episodes?.map { it.episodeNumber }}")
-        }
-        
-        return tmdbEpisode
+        return tmdbSeason.episodes?.find { it.episodeNumber == episodeNumber }
     }
     
-    private fun extractEpisodeNumber(name: String): Int? {
-        val match = Regex("""(?:Episode|E|Ep\.?)\s*(\d+)""", RegexOption.IGNORE_CASE).find(name)
-        return match?.groupValues?.get(1)?.toIntOrNull()
-    }
-    
-    private suspend fun loadEpisodesForSeasonData(season: Season) {
+    private suspend fun loadEpisodesForSeason(season: Season) {
         val client = stalkerClient ?: return
         
         // Extract season number and load TMDB data if available
         val seasonNumberMatch = season.name.let { Regex("""Season\s+(\d+)""", RegexOption.IGNORE_CASE).find(it) }
         val seasonNumber = seasonNumberMatch?.groupValues?.get(1)?.toIntOrNull() ?: season.seasonNumber.toIntOrNull() ?: 1
         
-        Log.d(TAG, "🎬 Loading episodes for ${season.name} (Season #$seasonNumber), TMDB TV ID: $tmdbTvId")
-        
-        // CRITICAL: Await TMDB data loading before loading episodes
         if (tmdbTvId != null && seasonNumber > 0) {
-            Log.d(TAG, "📡 Loading TMDB season data for TV ID $tmdbTvId, Season $seasonNumber")
-            loadTmdbSeasonData(tmdbTvId!!, seasonNumber)  // This is a suspend function, it will be awaited
-            Log.d(TAG, "✅ TMDB season data loaded. Episodes in cache: ${tmdbSeasonData[seasonNumber]?.episodes?.size ?: 0}")
-        } else {
-            Log.w(TAG, "⚠️ Cannot load TMDB data: tmdbTvId=$tmdbTvId, seasonNumber=$seasonNumber")
+            loadTmdbSeasonData(tmdbTvId!!, seasonNumber)
         }
         
         withContext(Dispatchers.IO) {
@@ -944,7 +600,7 @@ class SeriesDetailComponent @JvmOverloads constructor(
                         posterUrl
                     }
                     
-                    Log.d(TAG, "Episode S${seasonNumber}E${seriesNumber}: name='${name}', TMDB found=${tmdbEpisode != null}, has_image=${tmdbEpisode?.stillPath != null}, has_desc=${!tmdbEpisode?.overview.isNullOrEmpty()}")
+                    Log.d(TAG, "Episode $seriesNumber: ${name}, TMDB thumbnail: ${tmdbEpisode?.stillPath != null}")
                     
                     Episode(
                         id = id,
@@ -953,9 +609,7 @@ class SeriesDetailComponent @JvmOverloads constructor(
                         duration = time,
                         thumbnailUrl = thumbnail,
                         seasonId = season.id,
-                        cmd = null,
-                        tmdbImageUrl = if (tmdbEpisode?.stillPath != null) "https://image.tmdb.org/t/p/w300${tmdbEpisode.stillPath}" else null,
-                        tmdbDescription = tmdbEpisode?.overview
+                        cmd = null
                     )
                 }.sortedBy { it.episodeNumber.toIntOrNull() ?: 0 }
                 
@@ -967,13 +621,10 @@ class SeriesDetailComponent @JvmOverloads constructor(
                     firstSeason = season
                 }
                 
-                // Store episodes in map for later access
-                allEpisodesBySeason[season.id] = episodesList
-                
-                // OLD: Add season section to UI (now using RecyclerView)
-                // withContext(Dispatchers.Main) {
-                //     addSeasonSection(season, episodesList)
-                // }
+                // Add season section to UI
+                withContext(Dispatchers.Main) {
+                    addSeasonSection(season, episodesList)
+                }
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading episodes for season ${season.name}", e)
@@ -981,15 +632,97 @@ class SeriesDetailComponent @JvmOverloads constructor(
         }
     }
     
-    // OLD: Store adapters for progress refresh (no longer used with RecyclerView approach)
-    // private val episodeAdapters = mutableListOf<EpisodeHorizontalAdapter>()
+    // Store adapters for progress refresh
+    private val episodeAdapters = mutableListOf<EpisodeHorizontalAdapter>()
     
-    // OLD: addSeasonSection - now using RecyclerView with horizontal layout
-    /*
     private fun addSeasonSection(season: Season, episodes: List<Episode>) {
-        ...
+        // Inflate season section
+        val seasonView = LayoutInflater.from(context).inflate(
+            R.layout.item_season_section,
+            seasonsContainer,
+            false
+        ) as LinearLayout
+        
+        val seasonTitle = seasonView.findViewById<TextView>(R.id.season_title)
+        val episodesContainer = seasonView.findViewById<LinearLayout>(R.id.season_episodes_container)
+        
+        // Show season name with episode count
+        val episodeCount = episodes.size
+        seasonTitle.text = "${season.name} ($episodeCount ${if (episodeCount == 1) "Episode" else "Episodes"})"
+        
+        // Extract season number for TMDB matching
+        val seasonNumberMatch = season.name.let { Regex("""Season\s+(\d+)""", RegexOption.IGNORE_CASE).find(it) }
+        val seasonNumber = seasonNumberMatch?.groupValues?.get(1)?.toIntOrNull() ?: season.seasonNumber.toIntOrNull() ?: 1
+        
+        // Add each episode as a vertical item
+        episodes.forEachIndexed { index, episode ->
+            val episodeView = LayoutInflater.from(context).inflate(
+                R.layout.item_episode,
+                episodesContainer,
+                false
+            )
+            
+            val thumbnail = episodeView.findViewById<ImageView>(R.id.episode_thumbnail)
+            val name = episodeView.findViewById<TextView>(R.id.episode_name)
+            val description = episodeView.findViewById<TextView>(R.id.episode_description)
+            val time = episodeView.findViewById<TextView>(R.id.episode_time)
+            
+            // Get TMDB episode data
+            val tmdbEpisode = getTmdbEpisodeData(episode.name, episode.episodeNumber, seasonNumber)
+            
+            // Set episode name
+            name.text = if (episode.episodeNumber.isNotEmpty()) {
+                "E${episode.episodeNumber}. ${episode.name}"
+            } else {
+                episode.name
+            }
+            
+            // Set TMDB description if available
+            if (tmdbEpisode?.overview?.isNotEmpty() == true) {
+                description.text = tmdbEpisode.overview
+                description.visibility = View.VISIBLE
+            } else {
+                description.visibility = View.GONE
+            }
+            
+            // Set duration
+            time.text = episode.duration.ifEmpty { tmdbEpisode?.runtime?.let { "${it} min" } ?: "" }
+            
+            // Load thumbnail
+            thumbnail.load(episode.thumbnailUrl) {
+                crossfade(300)
+                placeholder(R.drawable.ic_movie_placeholder)
+                error(R.drawable.ic_movie_placeholder)
+            }
+            
+            // Set click listener
+            episodeView.setOnClickListener {
+                Log.d(TAG, "Episode clicked: ${episode.name}")
+                currentPlayingSeasonId = episode.seasonId
+                currentPlayingEpisodeId = episode.id
+                onPlayEpisode?.invoke(
+                    seriesId,
+                    episode.seasonId,
+                    episode.id,
+                    season.seasonNumber,
+                    episode.episodeNumber,
+                    episode.name
+                )
+            }
+            
+            episodesContainer.addView(episodeView)
+        }
+        
+        seasonsContainer.addView(seasonView)
+        
+        // Focus first episode of first season
+        if (seasonsContainer.childCount == 1 && episodesContainer.childCount > 0) {
+            episodesContainer.getChildAt(0)?.postDelayed({
+                episodesContainer.getChildAt(0)?.requestFocus()
+                Log.d(TAG, "Auto-focused first episode")
+            }, 150)
+        }
     }
-    */
     
     fun hide() {
         container.visibility = View.GONE
@@ -997,8 +730,8 @@ class SeriesDetailComponent @JvmOverloads constructor(
         // Clear data
         seasons.clear()
         allEpisodesBySeason.clear()
-        episodeAdapter = null
-        episodesRecycler.adapter = null
+        seasonsContainer.removeAllViews()
+        episodeAdapters.clear()
         firstEpisode = null
         firstSeason = null
         isFavorited = false
@@ -1028,7 +761,12 @@ class SeriesDetailComponent @JvmOverloads constructor(
         if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_BACK) {
             if (container.visibility == View.VISIBLE) {
                 Log.d(TAG, "Back pressed in series detail")
-                // With single-page design, just hide and go back
+                // If on episodes screen, go back to info screen
+                if (episodesScreen.visibility == View.VISIBLE) {
+                    showInfoScreen()
+                    return true
+                }
+                // If on info screen, close detail view
                 hide()
                 onBackPressed?.invoke()
                 return true
@@ -1037,9 +775,8 @@ class SeriesDetailComponent @JvmOverloads constructor(
         return super.dispatchKeyEvent(event)
     }
     
-    // OLD: focusFirstEpisode - now using RecyclerView
-    /*
     private fun focusFirstEpisode() {
+        // Find first season's episode container and focus first item
         if (seasonsContainer.childCount > 0) {
             val firstSeasonView = seasonsContainer.getChildAt(0) as? LinearLayout
             val episodesContainer = firstSeasonView?.findViewById<LinearLayout>(R.id.season_episodes_container)
@@ -1048,14 +785,37 @@ class SeriesDetailComponent @JvmOverloads constructor(
             }, 100)
         }
     }
-    */
     
-    // OLD: focusPlayingEpisode - needs RecyclerView implementation
-    /*
     fun focusPlayingEpisode() {
-        ...old season container logic...
+        // Focus the episode that was being played when returning from fullscreen
+        if (currentPlayingSeasonId == null || currentPlayingEpisodeId == null) {
+            // No episode tracked, focus first episode
+            focusFirstEpisode()
+            return
+        }
+        
+        // Find the season container with the playing episode
+        for (i in 0 until seasonsContainer.childCount) {
+            val seasonView = seasonsContainer.getChildAt(i) as? LinearLayout ?: continue
+            val episodesContainer = seasonView.findViewById<LinearLayout>(R.id.season_episodes_container) ?: continue
+            
+            // Check if this season contains the playing episode
+            val episodes = allEpisodesBySeason[currentPlayingSeasonId] ?: continue
+            val episodeIndex = episodes.indexOfFirst { it.id == currentPlayingEpisodeId }
+            
+            if (episodeIndex >= 0 && episodeIndex < episodesContainer.childCount) {
+                // Found the episode, focus it
+                episodesContainer.postDelayed({
+                    episodesContainer.getChildAt(episodeIndex)?.requestFocus()
+                    Log.d(TAG, "Focused playing episode at position $episodeIndex")
+                }, 150)
+                return
+            }
+        }
+        
+        // Fallback: focus first episode
+        focusFirstEpisode()
     }
-    */
     
     fun playNextEpisodeAfter(currentEpisodeId: String) {
         Log.d(TAG, "Looking for next episode after: $currentEpisodeId")
@@ -1113,26 +873,6 @@ class SeriesDetailComponent @JvmOverloads constructor(
         }
         
         Log.w(TAG, "Could not find current episode to determine next")
-    }
-    
-    private fun dpToPx(dp: Int): Int {
-        return (dp * context.resources.displayMetrics.density).toInt()
-    }
-    
-    private fun createGenreChip(genreName: String): TextView {
-        return TextView(context).apply {
-            text = genreName
-            setTextColor(android.graphics.Color.parseColor("#d4d4d8"))
-            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f)
-            setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6))
-            setBackgroundResource(R.drawable.genre_chip_bg)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(0, 0, dpToPx(8), 0)
-            }
-        }
     }
     
     fun cleanup() {

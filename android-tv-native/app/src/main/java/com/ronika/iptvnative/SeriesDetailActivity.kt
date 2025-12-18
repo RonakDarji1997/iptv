@@ -48,6 +48,7 @@ class SeriesDetailActivity : ComponentActivity() {
     
     private lateinit var backButton: Button
     private lateinit var posterImage: ImageView
+    private lateinit var heroSection: LinearLayout
     private lateinit var seriesTitle: TextView
     private lateinit var seriesTotalSeasons: TextView
     private lateinit var seriesGenres: TextView
@@ -55,6 +56,8 @@ class SeriesDetailActivity : ComponentActivity() {
     private lateinit var seriesDirector: TextView
     private lateinit var seriesDescription: TextView
     private lateinit var playButton: Button
+    private lateinit var seasonLabel: TextView
+    private lateinit var seasonSpinner: Spinner
     private lateinit var seasonsEpisodesContainer: LinearLayout
     private lateinit var loadingIndicator: ProgressBar
     private lateinit var episodesLoadingIndicator: ProgressBar
@@ -79,7 +82,7 @@ class SeriesDetailActivity : ComponentActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_series_detail)
+        setContentView(R.layout.activity_series_detail_new)
         
         // Get data from intent
         seriesId = intent.getStringExtra("SERIES_ID") ?: ""
@@ -121,6 +124,7 @@ class SeriesDetailActivity : ComponentActivity() {
     private fun initViews() {
         backButton = findViewById(R.id.back_button)
         posterImage = findViewById(R.id.poster_image)
+        heroSection = findViewById(R.id.hero_section)
         seriesTitle = findViewById(R.id.series_title)
         seriesTotalSeasons = findViewById(R.id.series_total_seasons)
         seriesGenres = findViewById(R.id.series_genres)
@@ -128,9 +132,17 @@ class SeriesDetailActivity : ComponentActivity() {
         seriesDirector = findViewById(R.id.series_director)
         seriesDescription = findViewById(R.id.series_description)
         playButton = findViewById(R.id.play_button)
+        seasonLabel = findViewById(R.id.season_label)
+        seasonSpinner = findViewById(R.id.season_spinner)
         seasonsEpisodesContainer = findViewById(R.id.seasons_episodes_container)
         loadingIndicator = findViewById(R.id.loading_indicator)
         episodesLoadingIndicator = findViewById(R.id.episodes_loading_indicator)
+        
+        // Hide hero section initially (Prime-like behavior)
+        heroSection.visibility = View.GONE
+        
+        // Hide spinner since we're not using it in this implementation
+        seasonSpinner.visibility = View.GONE
         
         backButton.setOnClickListener {
             finish()
@@ -341,6 +353,9 @@ class SeriesDetailActivity : ComponentActivity() {
                 }
             }
             
+            // Fetch TMDB data for this season's episodes
+            enrichEpisodesWithTmdbData(season, episodesList)
+            
             // Add season section to UI
             runOnUiThread {
                 addSeasonSection(season, episodesList)
@@ -356,42 +371,115 @@ class SeriesDetailActivity : ComponentActivity() {
         val seasonView = layoutInflater.inflate(R.layout.item_season_section, seasonsEpisodesContainer, false) as LinearLayout
         
         val seasonTitle = seasonView.findViewById<TextView>(R.id.season_title)
-        val episodesRecycler = seasonView.findViewById<RecyclerView>(R.id.season_episodes_recycler)
+        val episodesContainer = seasonView.findViewById<LinearLayout>(R.id.season_episodes_container)
         
         seasonTitle.text = season.name
         
-        // Setup horizontal episodes recycler
-        val episodeAdapter = EpisodeHorizontalAdapter(episodes, seriesId, posterUrl ?: "", providerId) { episode ->
-            lastPlayedEpisodeId = episode.id
-            playEpisode(episode)
+        // Make season title clickable/focusable to show hero section (Prime-like dropdown)
+        seasonTitle.isFocusable = true
+        seasonTitle.isFocusableInTouchMode = true
+        seasonTitle.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                heroSection.visibility = View.VISIBLE
+                seasonTitle.setTextColor(android.graphics.Color.parseColor("#000000"))
+                seasonTitle.setBackgroundColor(android.graphics.Color.parseColor("#FFFFFF"))
+                seasonTitle.setPadding(
+                    dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8)
+                )
+            } else {
+                seasonTitle.setTextColor(android.graphics.Color.parseColor("#FFFFFF"))
+                seasonTitle.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                seasonTitle.setPadding(0, 0, 0, 0)
+            }
         }
         
-        episodesRecycler.apply {
-            layoutManager = LinearLayoutManager(this@SeriesDetailActivity, LinearLayoutManager.HORIZONTAL, false)
-            adapter = episodeAdapter
-            setHasFixedSize(true)
-            // Prevent auto-focus switching
-            descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
+        // Add episodes vertically
+        episodes.forEach { episode ->
+            val episodeView = layoutInflater.inflate(R.layout.item_episode, episodesContainer, false)
             
-            // Store episode views for focus restoration
-            addOnChildAttachStateChangeListener(object : RecyclerView.OnChildAttachStateChangeListener {
-                override fun onChildViewAttachedToWindow(view: View) {
-                    val position = getChildAdapterPosition(view)
-                    if (position >= 0 && position < episodes.size) {
-                        episodeViewHolders[episodes[position].id] = view
-                    }
+            val thumbnail = episodeView.findViewById<ImageView>(R.id.episode_thumbnail)
+            val name = episodeView.findViewById<TextView>(R.id.episode_name)
+            val description = episodeView.findViewById<TextView>(R.id.episode_description)
+            val time = episodeView.findViewById<TextView>(R.id.episode_time)
+            
+            // Use S1 E1 format
+            name.text = "S${season.seasonNumber} E${episode.episodeNumber}"
+            time.text = episode.duration
+            
+            // Load TMDB episode image if available, otherwise use default
+            val episodeTmdbImageUrl = episode.tmdbImageUrl
+            if (!episodeTmdbImageUrl.isNullOrEmpty()) {
+                thumbnail.load(episodeTmdbImageUrl) {
+                    crossfade(false)
+                    memoryCachePolicy(CachePolicy.ENABLED)
+                    diskCachePolicy(CachePolicy.ENABLED)
+                    placeholder(R.drawable.ic_movie_placeholder)
+                    error(R.drawable.ic_movie_placeholder)
                 }
-                
-                override fun onChildViewDetachedFromWindow(view: View) {
-                    val position = getChildAdapterPosition(view)
-                    if (position >= 0 && position < episodes.size) {
-                        episodeViewHolders.remove(episodes[position].id)
-                    }
+            } else {
+                // Use default placeholder
+                thumbnail.setImageResource(R.drawable.ic_movie_placeholder)
+            }
+            
+            // Show description on focus (Prime-like behavior)
+            episodeView.setOnFocusChangeListener { _, hasFocus ->
+                if (hasFocus && !episode.tmdbDescription.isNullOrEmpty()) {
+                    description.text = episode.tmdbDescription
+                    description.visibility = View.VISIBLE
+                } else {
+                    description.visibility = View.GONE
                 }
-            })
+            }
+            
+            episodeView.setOnClickListener {
+                lastPlayedEpisodeId = episode.id
+                playEpisode(episode)
+            }
+            
+            episodesContainer.addView(episodeView)
         }
         
         seasonsEpisodesContainer.addView(seasonView)
+    }
+    
+    private fun dpToPx(dp: Int): Int {
+        return android.util.TypedValue.applyDimension(
+            android.util.TypedValue.COMPLEX_UNIT_DIP,
+            dp.toFloat(),
+            resources.displayMetrics
+        ).toInt()
+    }
+    
+    private suspend fun enrichEpisodesWithTmdbData(season: Season, episodes: List<Episode>) {
+        try {
+            // Search for the TV show on TMDB
+            val yearInt = year?.toIntOrNull()
+            val tmdbDetails = com.ronika.iptvnative.services.TmdbService.smartSearch(seriesName, "tv", yearInt)
+            
+            if (tmdbDetails != null && tmdbDetails.id > 0) {
+                // Get season details with episodes
+                val seasonNum = season.seasonNumber.toIntOrNull() ?: 1
+                val tmdbSeason = com.ronika.iptvnative.services.TmdbService.getSeasonDetails(tmdbDetails.id, seasonNum)
+                
+                if (tmdbSeason?.episodes != null) {
+                    // Match our episodes with TMDB episodes by episode number
+                    episodes.forEach { episode ->
+                        val episodeNum = episode.episodeNumber.toIntOrNull() ?: 0
+                        val tmdbEpisode = tmdbSeason.episodes.find { it.episodeNumber == episodeNum }
+                        
+                        if (tmdbEpisode != null) {
+                            // Enrich with TMDB data
+                            episode.tmdbImageUrl = com.ronika.iptvnative.services.TmdbService.getEpisodeStillUrl(tmdbEpisode.stillPath, "w300")
+                            episode.tmdbDescription = tmdbEpisode.overview
+                            
+                            android.util.Log.d("SeriesDetail", "Enriched episode S${season.seasonNumber}E${episode.episodeNumber} with TMDB data")
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SeriesDetail", "Error enriching episodes with TMDB data", e)
+        }
     }
     
     private fun playEpisode(episode: Episode) {

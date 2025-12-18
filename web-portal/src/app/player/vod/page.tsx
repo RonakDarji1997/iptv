@@ -2,14 +2,14 @@
 
 import { useEffect, useState, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, Play, Pause, Volume2, VolumeX, Maximize, Rewind, FastForward, Loader, SkipBack, SkipForward, Subtitles, Settings } from 'lucide-react';
+import { ArrowLeft, Play, Pause, Volume2, VolumeX, Maximize, Rewind, FastForward, Loader, SkipBack, SkipForward, Subtitles } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Hls from 'hls.js';
 import { authService } from '@/services/authService';
 import { cache } from '@/utils/cache';
 import { apiCache } from '@/utils/api-cache';
 import { API_URL } from '@/config/constants';
-import { VideoStatsMonitor, VideoStats, getTranscodedUrl, fetchTranscodePlaylist, formatBitrate, QUALITY_OPTIONS, QualityOption } from '@/utils/videoStats';
+
 import { isMobileApp, playVideoNative, listenToNative } from '@/utils/mobileDetection';
 
 // Subtitle type definition
@@ -32,14 +32,6 @@ interface Subtitle {
 function VODPlayerContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  
-  // CRITICAL: Prevent VOD player page from loading on mobile
-  // Mobile apps should never navigate to /player/vod - they use native player directly
-  if (isMobileApp()) {
-    console.log('[VOD] Mobile app detected - not rendering player page');
-    // Don't render anything on mobile - native player handles playback
-    return null;
-  }
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -124,30 +116,9 @@ function VODPlayerContent() {
   const [subtitleSearch, setSubtitleSearch] = useState('');
   const [loadingSubtitles, setLoadingSubtitles] = useState(false);
   const [subtitleTrack, setSubtitleTrack] = useState<string | null>(null);
-  const [videoStats, setVideoStats] = useState<VideoStats | null>(null);
-  const statsMonitorRef = useRef<VideoStatsMonitor | null>(null);
-  const [transcodeUrl, setTranscodeUrl] = useState<string | null>(null);
-  const [selectedQuality, setSelectedQuality] = useState<QualityOption>('original');
-  const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [isDraggingProgress, setIsDraggingProgress] = useState(false);
   const [savedPosition, setSavedPosition] = useState<number>(0);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [progressLoaded, setProgressLoaded] = useState(false);
-
-  // Cleanup transcode session
-  const cleanupTranscodeSession = async (sessionId: string) => {
-    if (!sessionId) return;
-    
-    try {
-      console.log('[Transcode] Cleaning up session:', sessionId);
-      await fetch(`http://localhost:4000/cleanup/${sessionId}`, {
-        method: 'POST',
-      });
-      console.log('[Transcode] ✅ Session cleaned up');
-    } catch (error) {
-      console.error('[Transcode] ❌ Cleanup failed:', error);
-    }
-  };
 
   // Subtitle functions (defined before useEffect that uses them)
   const selectSubtitle = async (subtitle: Subtitle) => {
@@ -348,11 +319,6 @@ function VODPlayerContent() {
       await saveWatchProgress(currentPosition, durationRef.current);
     }
     
-    // Cleanup transcode session before navigating away
-    if (currentSessionId) {
-      await cleanupTranscodeSession(currentSessionId);
-    }
-    
     router.back();
   };
 
@@ -398,46 +364,7 @@ function VODPlayerContent() {
     }
   }, [isSeries]);
 
-  // Load transcoded URL
-  useEffect(() => {
-    const loadTranscodeUrl = async () => {
-      if (!streamUrl) return;
-      
-      const decoded = decodeURIComponent(streamUrl);
-      const qualityConfig = QUALITY_OPTIONS.find(q => q.value === selectedQuality);
-      
-      if (!qualityConfig || selectedQuality === 'original') {
-        setTranscodeUrl(decoded);
-      } else if (qualityConfig.target && qualityConfig.mode) {
-        try {
-          // First, get the transcode endpoint URL
-          const transcodeEndpoint = await getTranscodedUrl(
-            decoded,
-            qualityConfig.target,
-            qualityConfig.mode
-          );
-          
-          console.log('[Quality] Got transcode endpoint:', transcodeEndpoint.substring(0, 100));
-          
-          // If it's a transcode URL (not original), fetch the HLS playlist URL
-          if (transcodeEndpoint.includes('/transcode?')) {
-            console.log('[Quality] Fetching HLS playlist URL...');
-            const playlistUrl = await fetchTranscodePlaylist(transcodeEndpoint);
-            console.log('[Quality] Setting HLS playlist:', playlistUrl);
-            setTranscodeUrl(playlistUrl);
-          } else {
-            setTranscodeUrl(transcodeEndpoint);
-          }
-        } catch (error) {
-          console.error('[Quality] Failed to get transcoded URL, using original:', error);
-          setTranscodeUrl(decoded);
-          // Don't change quality back to original - let error handler deal with it
-        }
-      }
-    };
-    
-    loadTranscodeUrl();
-  }, [streamUrl, selectedQuality]);
+
 
   // Load watch progress on mount
   useEffect(() => {
@@ -493,17 +420,18 @@ function VODPlayerContent() {
   // Initialize HLS.js for HLS streams
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !transcodeUrl || !progressLoaded) return;
+    if (!video || !streamUrl || !progressLoaded) return;
 
-    const isHLS = transcodeUrl.includes('.m3u8');
+    const videoUrl = decodeURIComponent(streamUrl);
+    const isHLS = videoUrl.includes('.m3u8');
     
-    console.log('[HLS] Video source:', transcodeUrl.substring(0, 100), 'isHLS:', isHLS);
+    console.log('[HLS] Video source:', videoUrl.substring(0, 100), 'isHLS:', isHLS);
 
     // CHECK: If running in mobile app, delegate to native player with loaded progress
     if (isMobileApp()) {
       console.log('[VOD Mobile] Opening native player with savedPosition:', savedPosition);
       playVideoNative('vod', {
-        url: transcodeUrl,
+        url: videoUrl,
         title: title || 'Video',
         contentId: contentId || '',
         contentType: contentType,
@@ -518,15 +446,6 @@ function VODPlayerContent() {
         poster: poster || undefined,
       });
       return; // Don't initialize HLS.js - native player will handle it
-    }
-
-    // Extract session ID from HLS URL for cleanup later
-    if (isHLS && transcodeUrl.includes('/hls/')) {
-      const sessionMatch = transcodeUrl.match(/\/hls\/([^/]+)\//);
-      if (sessionMatch) {
-        setCurrentSessionId(sessionMatch[1]);
-        console.log('[HLS] Tracking session:', sessionMatch[1]);
-      }
     }
 
     // Clean up existing HLS instance
@@ -544,7 +463,7 @@ function VODPlayerContent() {
         backBufferLength: 90,
       });
 
-      hls.loadSource(transcodeUrl);
+      hls.loadSource(videoUrl);
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -581,11 +500,11 @@ function VODPlayerContent() {
     } else if (isHLS && video.canPlayType('application/vnd.apple.mpegurl')) {
       // Safari native HLS support
       console.log('[HLS] Using native HLS support (Safari)');
-      video.src = transcodeUrl;
+      video.src = videoUrl;
     } else {
       // Regular video file
       console.log('[HLS] Using regular video source');
-      video.src = transcodeUrl;
+      video.src = videoUrl;
     }
 
     return () => {
@@ -594,24 +513,10 @@ function VODPlayerContent() {
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
-      
-      // Cleanup transcode session when switching quality or unmounting
-      if (currentSessionId) {
-        cleanupTranscodeSession(currentSessionId);
-      }
     };
-  }, [transcodeUrl, savedPosition]);
+  }, [streamUrl, savedPosition, progressLoaded]);
 
-  const handleQualityChange = (quality: QualityOption) => {
-    // Save current position before changing quality
-    if (videoRef.current) {
-      setSavedPosition(videoRef.current.currentTime);
-      console.log('[Quality] Saving position:', videoRef.current.currentTime);
-    }
-    setSelectedQuality(quality);
-    setShowQualityMenu(false);
-    // Reload will happen via useEffect above
-  };
+
 
   // Load subtitles when player mounts
   useEffect(() => {
@@ -763,17 +668,9 @@ function VODPlayerContent() {
       
       // Restore saved position after quality change
       if (savedPosition > 0 && video.currentTime === 0) {
-        console.log('[Quality] Restoring position:', savedPosition);
+        console.log('[Player] Restoring position:', savedPosition);
         video.currentTime = savedPosition;
         setSavedPosition(0);
-      }
-      
-      // Start bitrate monitoring
-      if (!statsMonitorRef.current) {
-        statsMonitorRef.current = new VideoStatsMonitor(video);
-        statsMonitorRef.current.start((stats) => {
-          setVideoStats(stats);
-        });
       }
     };
     const handleError = (e: Event) => {
@@ -787,14 +684,7 @@ function VODPlayerContent() {
         readyState: video.readyState
       });
       
-      // If transcoded stream fails, try falling back to original
-      if (transcodeUrl && selectedQuality !== 'original') {
-        console.log('[Video Error] Transcode failed, falling back to original');
-        setSelectedQuality('original');
-        toast.error('Transcode failed, switching to original quality');
-      } else {
-        setError('Failed to load video stream');
-      }
+      setError('Failed to load video stream');
     };
     const handleEnded = async () => {
       // Save to watch history when video completes
@@ -838,12 +728,6 @@ function VODPlayerContent() {
       video.removeEventListener('error', handleError);
       video.removeEventListener('ended', handleEnded);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
-      
-      // Stop stats monitoring
-      if (statsMonitorRef.current) {
-        statsMonitorRef.current.stop();
-        statsMonitorRef.current = null;
-      }
     };
   }, [streamUrl, isSeries, episodePlaylist]);
 
@@ -1111,6 +995,14 @@ function VODPlayerContent() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // CRITICAL: Prevent VOD player page from loading on mobile
+  // Mobile apps should never navigate to /player/vod - they use native player directly
+  if (isMobileApp()) {
+    console.log('[VOD] Mobile app detected - not rendering player page');
+    // Don't render anything on mobile - native player handles playback
+    return null;
+  }
+
   if (error) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
@@ -1292,11 +1184,6 @@ function VODPlayerContent() {
           {title && (
             <div className="flex-1 text-center px-2">
               <h1 className="text-white text-sm sm:text-xl font-semibold truncate">{decodeURIComponent(title)}</h1>
-              {videoStats && (
-                <p className="text-gray-400 text-xs mt-1">
-                  {videoStats.resolution} • {formatBitrate(videoStats.bitrate)}
-                </p>
-              )}
             </div>
           )}
           <div className="w-12 sm:w-20 flex-shrink-0" /> {/* Spacer for centering */}
@@ -1417,45 +1304,6 @@ function VODPlayerContent() {
 
           {/* Right Controls */}
           <div className="flex items-center gap-4">
-            {/* Quality Selector */}
-            <div className="relative">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowQualityMenu(!showQualityMenu);
-                }}
-                className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-white px-3 py-2 rounded-lg transition-colors"
-                title="Quality Settings"
-              >
-                <Settings size={20} />
-                <span className="text-sm font-medium hidden sm:inline">{QUALITY_OPTIONS.find(q => q.value === selectedQuality)?.label}</span>
-              </button>
-              
-              {showQualityMenu && (
-                <div className="absolute bottom-full right-0 mb-2 bg-gray-900 border border-gray-700 rounded-lg shadow-xl overflow-hidden z-50">
-                  <div className="px-3 py-2 border-b border-gray-700">
-                    <p className="text-xs text-gray-400 font-semibold">VIDEO QUALITY</p>
-                  </div>
-                  {QUALITY_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      onClick={() => handleQualityChange(option.value)}
-                      className={`w-full px-4 py-2 text-left hover:bg-gray-800 transition-colors ${
-                        selectedQuality === option.value ? 'bg-gray-800 text-yellow-500' : 'text-white'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-8">
-                        <span className="font-medium">{option.label}</span>
-                        {selectedQuality === option.value && (
-                          <span className="text-yellow-500">✓</span>
-                        )}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
             {/* Subtitle Menu */}
             <div className="relative flex items-center">
               <button

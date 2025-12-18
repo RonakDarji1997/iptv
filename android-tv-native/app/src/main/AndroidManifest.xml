@@ -54,6 +54,18 @@
             android:exported="true"
             android:screenOrientation="landscape" />
         
+        <!-- Movie Detail Activity - TMDB-enhanced movie info -->
+        <activity
+            android:name=".MovieDetailActivity"
+            android:exported="false"
+            android:screenOrientation="landscape" />
+        
+        <!-- Series Detail Activity -->
+        <activity
+            android:name=".SeriesDetailActivity"
+            android:exported="false"
+            android:screenOrientation="landscape" />
+        
         <!-- Live TV Channels Activity -->
         <activity
             android:name=".LiveTVChannelsActivity"

@@ -20,14 +20,12 @@
         android:shadowRadius="3"
         android:layout_marginBottom="12dp" />
 
-    <!-- Horizontal Episodes List -->
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/season_episodes_recycler"
+    <!-- Vertical Episodes Container -->
+    <LinearLayout
+        android:id="@+id/season_episodes_container"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingStart="8dp"
-        android:paddingEnd="8dp"
-        android:clipToPadding="false"
+        android:orientation="vertical"
         android:descendantFocusability="beforeDescendants" />
 
 </LinearLayout>

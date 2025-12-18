@@ -322,10 +322,39 @@ class RefactoredSearchComponent @JvmOverloads constructor(
                 performSearch(query)
             }
         })
+        
+        // Intercept IME action (when keyboard sends SEARCH action)
+        searchInput.setOnEditorActionListener { _, actionId, event ->
+            Log.d(TAG, "🔍 IME Action: actionId=$actionId, event=$event")
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH || 
+                actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE ||
+                actionId == android.view.inputmethod.EditorInfo.IME_ACTION_GO) {
+                Log.d(TAG, "🔍 Intercepted IME SEARCH action - keeping focus in search")
+                val query = searchInput.text?.toString() ?: ""
+                if (query.isNotEmpty()) {
+                    performSearch(query)
+                }
+                // Keep focus on search input
+                searchInput.post {
+                    searchInput.requestFocus()
+                }
+                return@setOnEditorActionListener true  // Consume the action
+            }
+            false
+        }
 
         searchInput.setOnKeyListener { _, keyCode, event ->
             if (event.action == KeyEvent.ACTION_DOWN) {
                 when (keyCode) {
+                    KeyEvent.KEYCODE_SEARCH, KeyEvent.KEYCODE_ENTER -> {
+                        // Handle search button / enter key - keep focus in search, don't navigate away
+                        Log.d(TAG, "Search/Enter button pressed - keeping focus in search")
+                        val query = searchInput.text?.toString() ?: ""
+                        if (query.isNotEmpty()) {
+                            performSearch(query)
+                        }
+                        return@setOnKeyListener true  // Consume event to prevent navigation
+                    }
                     KeyEvent.KEYCODE_DPAD_UP -> {
                         // If multiple providers, go to provider buttons
                         if (activeProviders.size > 1 && providerButtons.isNotEmpty()) {
@@ -678,5 +707,28 @@ class RefactoredSearchComponent @JvmOverloads constructor(
                 coil.ImageLoader(context).enqueue(request)
             }
         }
+    }
+    
+    /**
+     * Override dispatchKeyEvent to intercept SEARCH and ENTER keys
+     * BEFORE they bubble up to MainActivity
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Only intercept when search input has focus
+        if (searchInput.hasFocus() && event.action == KeyEvent.ACTION_DOWN) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_SEARCH, KeyEvent.KEYCODE_ENTER -> {
+                    Log.d(TAG, "🔍 Intercepted ${if (event.keyCode == KeyEvent.KEYCODE_SEARCH) "SEARCH" else "ENTER"} key in dispatchKeyEvent")
+                    val query = searchInput.text?.toString() ?: ""
+                    if (query.isNotEmpty()) {
+                        performSearch(query)
+                    }
+                    return true  // Consume the event completely
+                }
+            }
+        }
+        
+        // Let the component handle other keys normally
+        return super.dispatchKeyEvent(event)
     }
 }

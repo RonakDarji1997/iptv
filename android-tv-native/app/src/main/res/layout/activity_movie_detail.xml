@@ -1,18 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#09090b"
-    android:fillViewport="true"
-    android:scrollbars="none">
+    android:background="#000000">
 
+    <!-- Backdrop Image (Full screen with left overlay only) -->
+    <ImageView
+        android:id="@+id/backdrop_image"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:contentDescription="Movie Backdrop" />
+
+    <!-- Left side overlay gradient (only on left where content is) -->
+    <View
+        android:layout_width="800dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:background="@drawable/gradient_left_overlay" />
+
+    <!-- Content (Left 50%) -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="match_parent"
         android:orientation="vertical"
-        android:paddingStart="60dp"
-        android:paddingEnd="60dp"
+        android:paddingStart="50dp"
+        android:paddingEnd="30dp"
         android:paddingTop="40dp"
         android:paddingBottom="40dp">
 
@@ -21,225 +34,216 @@
             android:id="@+id/back_button"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="← Back"
-            android:textColor="#ffffff"
-            android:textSize="16sp"
+            android:text="← BACK"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
             android:textStyle="bold"
-            android:background="@drawable/button_back_square"
-            android:paddingStart="20dp"
-            android:paddingEnd="20dp"
+            android:background="@drawable/button_back_floating"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
             android:paddingTop="10dp"
             android:paddingBottom="10dp"
-            android:layout_marginBottom="24dp"
+            android:layout_marginBottom="40dp"
             android:focusable="true"
             android:focusableInTouchMode="true" />
 
-        <!-- DEBUG: Show section status -->
+        <!-- Movie Title -->
         <TextView
-            android:id="@+id/debug_status"
+            android:id="@+id/movie_title"
+            android:layout_width="700dp"
+            android:layout_height="wrap_content"
+            android:text="Movie Title"
+            android:textColor="#FFFFFF"
+            android:textSize="42sp"
+            android:textStyle="bold"
+            android:fontFamily="sans-serif-condensed"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:layout_marginBottom="10dp" />
+
+        <!-- Meta Row (IMDb Rating, Year, Runtime) -->
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="DEBUG: Section status"
-            android:textColor="#ff0000"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:layout_marginBottom="12dp" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="16dp">
 
-        <!-- Top Section: Info (left 70%) + Poster (right 30%) -->
+            <!-- IMDb Rating -->
+            <LinearLayout
+                android:id="@+id/rating_container"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:background="@drawable/rating_badge_bg"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:paddingTop="6dp"
+                android:paddingBottom="6dp"
+                android:gravity="center_vertical"
+                android:visibility="gone">
+
+                <ImageView
+                    android:layout_width="32dp"
+                    android:layout_height="16dp"
+                    android:src="@drawable/imdb_logo"
+                    android:scaleType="fitCenter"
+                    android:layout_marginEnd="6dp"
+                    android:contentDescription="IMDb" />
+
+                <TextView
+                    android:id="@+id/movie_rating"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="5.0"
+                    android:textColor="#FFFFFF"
+                    android:textSize="16sp"
+                    android:fontFamily="sans-serif-medium" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="/10"
+                    android:textColor="#CCFFFFFF"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <!-- Year -->
+            <TextView
+                android:id="@+id/movie_year"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="2024"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:fontFamily="sans-serif-light"
+                android:layout_marginStart="12dp" />
+
+            <!-- Separator -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text=" • "
+                android:textColor="#FFFFFF"
+                android:textSize="15sp" />
+
+            <!-- Runtime -->
+            <TextView
+                android:id="@+id/movie_runtime"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="1h 5m"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:fontFamily="sans-serif-light"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- Description -->
+        <TextView
+            android:id="@+id/movie_description"
+            android:layout_width="700dp"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textColor="#CCCCCC"
+            android:textSize="14sp"
+            android:fontFamily="sans-serif-light"
+            android:lineSpacingExtra="2dp"
+            android:maxLines="3"
+            android:ellipsize="end"
+            android:layout_marginBottom="14dp" />
+
+        <!-- Genres -->
         <LinearLayout
-            android:layout_width="match_parent"
+            android:id="@+id/genres_container"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginBottom="40dp">
-
-            <!-- Info Section (70%) -->
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="0.7"
-                android:orientation="vertical"
-                android:paddingEnd="40dp">
-
-                <!-- Title -->
-                <TextView
-                    android:id="@+id/movie_title"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Movie Title"
-                    android:textColor="#ffffff"
-                    android:textSize="32sp"
-                    android:textStyle="bold"
-                    android:shadowColor="#000000"
-                    android:shadowDx="2"
-                    android:shadowDy="2"
-                    android:shadowRadius="4"
-                    android:layout_marginBottom="12dp" />
-
-                <!-- Year -->
-                <TextView
-                    android:id="@+id/movie_year"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="2023"
-                    android:textColor="#ffffff"
-                    android:textSize="18sp"
-                    android:shadowColor="#000000"
-                    android:shadowDx="1"
-                    android:shadowDy="1"
-                    android:shadowRadius="3"
-                    android:layout_marginBottom="8dp" />
-
-                <!-- Category/Genres -->
-                <TextView
-                    android:id="@+id/movie_genres"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Drama • Action"
-                    android:textColor="#d4d4d8"
-                    android:textSize="16sp"
-                    android:shadowColor="#000000"
-                    android:shadowDx="1"
-                    android:shadowDy="1"
-                    android:shadowRadius="3"
-                    android:layout_marginBottom="16dp" />
-
-                <!-- Cast -->
-                <TextView
-                    android:id="@+id/movie_cast"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Cast: "
-                    android:textColor="#d4d4d8"
-                    android:textSize="14sp"
-                    android:shadowColor="#000000"
-                    android:shadowDx="1"
-                    android:shadowDy="1"
-                    android:shadowRadius="3"
-                    android:layout_marginBottom="8dp"
-                    android:visibility="gone" />
-
-                <!-- Director -->
-                <TextView
-                    android:id="@+id/movie_director"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Director: "
-                    android:textColor="#d4d4d8"
-                    android:textSize="14sp"
-                    android:shadowColor="#000000"
-                    android:shadowDx="1"
-                    android:shadowDy="1"
-                    android:shadowRadius="3"
-                    android:layout_marginBottom="16dp"
-                    android:visibility="gone" />
-
-                <!-- Description -->
-                <TextView
-                    android:id="@+id/movie_description"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:textColor="#d4d4d8"
-                    android:textSize="14sp"
-                    android:lineHeight="20dp"
-                    android:maxLines="5"
-                    android:ellipsize="end"
-                    android:shadowColor="#000000"
-                    android:shadowDx="1"
-                    android:shadowDy="1"
-                    android:shadowRadius="3"
-                    android:layout_marginBottom="24dp"
-                    android:visibility="gone" />
-
-                <!-- Play Button -->
-                <Button
-                    android:id="@+id/play_button"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:minWidth="180dp"
-                    android:text="▶  Play Movie"
-                    android:textColor="#ffffff"
-                    android:textSize="16sp"
-                    android:textStyle="bold"
-                    android:background="@drawable/button_play_bg"
-                    android:paddingStart="32dp"
-                    android:paddingEnd="32dp"
-                    android:paddingTop="12dp"
-                    android:paddingBottom="12dp"
-                    android:layout_marginTop="8dp"
-                    android:focusable="true" />
-
-            </LinearLayout>
-
-            <!-- Poster (30%) - Same height as info section -->
-            <ImageView
-                android:id="@+id/poster_image"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="0.3"
-                android:scaleType="centerCrop"
-                android:contentDescription="Movie Poster" />
-
-        </LinearLayout>
-
-        <!-- See More Section -->
-        <LinearLayout
-            android:id="@+id/see_more_section"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:layout_marginTop="40dp"
+            android:layout_marginBottom="24dp"
             android:visibility="gone">
+            <!-- Genre chips added dynamically -->
+        </LinearLayout>
 
-            <!-- Section Header -->
-            <LinearLayout
-                android:layout_width="match_parent"
+        <!-- Buttons Row -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <!-- Play Button -->
+            <Button
+                android:id="@+id/play_button"
+                android:layout_width="160dp"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:layout_marginBottom="20dp">
-
-                <TextView
-                    android:id="@+id/see_more_title"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="See more in Action"
-                    android:textColor="#ffffff"
-                    android:textSize="24sp"
-                    android:textStyle="bold"
-                    android:shadowColor="#000000"
-                    android:shadowDx="2"
-                    android:shadowDy="2"
-                    android:shadowRadius="4" />
-
-                <Button
-                    android:id="@+id/view_all_button"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="View All"
-                    android:textColor="#ffffff"
-                    android:textSize="14sp"
-                    android:textStyle="bold"
-                    android:background="@drawable/button_back_square"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="16dp"
-                    android:paddingTop="8dp"
-                    android:paddingBottom="8dp"
-                    android:focusable="true"
-                    android:focusableInTouchMode="true" />
-
-            </LinearLayout>
-
-            <!-- Movies RecyclerView -->
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/see_more_recycler"
-                android:layout_width="match_parent"
-                android:layout_height="260dp"
-                android:orientation="horizontal"
-                app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"
-                android:layout_marginBottom="20dp" />
+                android:text="▶ Play"
+                android:textColor="#000000"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif"
+                android:background="@drawable/button_play_focus"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp"
+                android:layout_marginEnd="12dp"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:nextFocusDown="@id/back_button" />
 
         </LinearLayout>
+
+        <!-- Cast Section - COMMENTED OUT FOR NOW
+        <TextView
+            android:id="@+id/cast_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Cast"
+            android:textSize="14sp"
+            android:textColor="#CCCCCC"
+            android:textStyle="bold"
+            android:layout_marginTop="16dp"
+            android:visibility="gone" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/cast_recycler"
+            android:layout_width="match_parent"
+            android:layout_height="130dp"
+            android:layout_marginTop="6dp"
+            android:visibility="gone"
+            android:nextFocusDown="@id/back_button" />
+        -->
 
     </LinearLayout>
 
-</ScrollView>
+    <!-- Hidden fields for compatibility (cast removed, keeping other fields) -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:orientation="vertical"
+        android:visibility="gone">
+        
+        <TextView android:id="@+id/movie_tagline" android:layout_width="0dp" android:layout_height="0dp" />
+        <TextView android:id="@+id/movie_age" android:layout_width="0dp" android:layout_height="0dp" />
+        <LinearLayout android:id="@+id/progress_container" android:layout_width="0dp" android:layout_height="0dp" android:orientation="vertical" />
+        <ProgressBar android:id="@+id/watch_progress" android:layout_width="0dp" android:layout_height="0dp" />
+        <TextView android:id="@+id/progress_text" android:layout_width="0dp" android:layout_height="0dp" />
+        <LinearLayout android:id="@+id/overview_container" android:layout_width="0dp" android:layout_height="0dp" android:orientation="vertical" />
+        <LinearLayout android:id="@+id/cast_container" android:layout_width="0dp" android:layout_height="0dp" android:orientation="vertical" />
+        <LinearLayout android:id="@+id/cast_items_container" android:layout_width="0dp" android:layout_height="0dp" android:orientation="horizontal" />
+        <LinearLayout android:id="@+id/info_grid" android:layout_width="0dp" android:layout_height="0dp" android:orientation="vertical" />
+        <LinearLayout android:id="@+id/director_container" android:layout_width="0dp" android:layout_height="0dp" android:orientation="horizontal" />
+        <TextView android:id="@+id/movie_director" android:layout_width="0dp" android:layout_height="0dp" />
+        <LinearLayout android:id="@+id/country_container" android:layout_width="0dp" android:layout_height="0dp" android:orientation="horizontal" />
+        <TextView android:id="@+id/movie_country" android:layout_width="0dp" android:layout_height="0dp" />
+        <LinearLayout android:id="@+id/production_container" android:layout_width="0dp" android:layout_height="0dp" android:orientation="horizontal" />
+        <TextView android:id="@+id/movie_production" android:layout_width="0dp" android:layout_height="0dp" />
+    </LinearLayout>
+
+    <!-- Loading Indicator -->
+    <ProgressBar
+        android:id="@+id/tmdb_loading"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:visibility="gone" />
+
+</FrameLayout>

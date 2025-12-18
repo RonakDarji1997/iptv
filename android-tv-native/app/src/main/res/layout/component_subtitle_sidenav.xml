@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/subtitle_sidenav_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/transparent"
+    android:focusable="true"
+    android:focusableInTouchMode="true"
+    android:clickable="true">
+
+    <!-- Dark Overlay -->
+    <View
+        android:id="@+id/subtitle_sidenav_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#99000000"
+        android:clickable="true"
+        android:focusable="false" />
+
+    <!-- Side Navigation Panel - 20% width, right side -->
+    <LinearLayout
+        android:id="@+id/subtitle_sidenav_panel"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="end"
+        android:background="#FF1A1A1A"
+        android:orientation="vertical"
+        android:padding="32dp"
+        android:focusableInTouchMode="true">
+
+        <!-- Header -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Subtitles"
+            android:textColor="#FFFFFFFF"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="40dp" />
+
+        <!-- Subtitle Options Container -->
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/subtitle_options_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <!-- Off Option -->
+                <LinearLayout
+                    android:id="@+id/subtitle_option_off"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:padding="16dp"
+                    android:background="@drawable/subtitle_option_bg"
+                    android:focusable="true"
+                    android:clickable="true"
+                    android:layout_marginBottom="12dp"
+                    android:nextFocusLeft="@id/subtitle_option_off"
+                    android:nextFocusRight="@id/subtitle_option_off"
+                    android:nextFocusUp="@id/subtitle_option_off">
+
+                    <RadioButton
+                        android:id="@+id/subtitle_radio_off"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:checked="true"
+                        android:clickable="false"
+                        android:focusable="false" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Off"
+                        android:textColor="#FFFFFFFF"
+                        android:textSize="20sp"
+                        android:layout_marginStart="16dp"
+                        android:gravity="center_vertical" />
+
+                </LinearLayout>
+
+                <!-- Upload Option -->
+                <LinearLayout
+                    android:id="@+id/subtitle_option_upload"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:padding="16dp"
+                    android:background="@drawable/subtitle_option_bg"
+                    android:focusable="true"
+                    android:clickable="true"
+                    android:layout_marginBottom="12dp"
+                    android:nextFocusLeft="@id/subtitle_option_upload"
+                    android:nextFocusRight="@id/subtitle_option_upload">
+
+                    <RadioButton
+                        android:id="@+id/subtitle_radio_upload"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:clickable="false"
+                        android:focusable="false" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Upload SRT File"
+                        android:textColor="#FFFFFFFF"
+                        android:textSize="20sp"
+                        android:layout_marginStart="16dp"
+                        android:gravity="center_vertical" />
+
+                </LinearLayout>
+
+                <!-- OpenSubtitles Header -->
+                <TextView
+                    android:id="@+id/opensubtitles_header"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="OpenSubtitles.com"
+                    android:textColor="#FF888888"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:layout_marginTop="16dp"
+                    android:layout_marginBottom="12dp"
+                    android:visibility="gone" />
+
+                <!-- Loading Indicator for OpenSubtitles -->
+                <LinearLayout
+                    android:id="@+id/opensubtitles_loading"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:padding="16dp"
+                    android:gravity="center"
+                    android:visibility="gone">
+
+                    <ProgressBar
+                        android:layout_width="32dp"
+                        android:layout_height="32dp"
+                        android:indeterminateTint="#FFFFFFFF" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Loading subtitles..."
+                        android:textColor="#FFFFFFFF"
+                        android:textSize="16sp"
+                        android:layout_marginStart="16dp" />
+
+                </LinearLayout>
+
+                <!-- OpenSubtitles List Container -->
+                <LinearLayout
+                    android:id="@+id/opensubtitles_list_container"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone" />
+
+                <!-- No Subtitles Found Message -->
+                <TextView
+                    android:id="@+id/no_subtitles_message"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="No subtitles found"
+                    android:textColor="#FF888888"
+                    android:textSize="16sp"
+                    android:padding="16dp"
+                    android:gravity="center"
+                    android:visibility="gone" />
+
+            </LinearLayout>
+
+        </ScrollView>
+
+        <!-- Close Button -->
+        <TextView
+            android:id="@+id/subtitle_sidenav_close"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Close"
+            android:textColor="#FFFFFFFF"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:background="@drawable/subtitle_option_bg"
+            android:padding="20dp"
+            android:gravity="center"
+            android:layout_marginTop="24dp"
+            android:focusable="true"
+            android:clickable="true"
+            android:nextFocusLeft="@id/subtitle_sidenav_close"
+            android:nextFocusRight="@id/subtitle_sidenav_close"
+            android:nextFocusDown="@id/subtitle_option_off" />
+
+    </LinearLayout>
+
+</FrameLayout>

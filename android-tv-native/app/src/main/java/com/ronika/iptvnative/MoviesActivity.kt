@@ -55,6 +55,11 @@ class MoviesActivity : ComponentActivity() {
     private fun setupAdapter() {
         movieCategoryRowAdapter = MovieCategoryRowAdapter(
             onMovieClick = { movie, categoryId, categoryTitle ->
+                android.util.Log.e("MoviesActivity", "==========================================")
+                android.util.Log.e("MoviesActivity", "MOVIE CLICKED: ${movie.name}")
+                android.util.Log.e("MoviesActivity", "Opening MovieDetailActivity...")
+                android.util.Log.e("MoviesActivity", "==========================================")
+                
                 // Open movie detail
                 val intent = Intent(this, MovieDetailActivity::class.java).apply {
                     putExtra("MOVIE_ID", movie.id)
@@ -70,7 +75,10 @@ class MoviesActivity : ComponentActivity() {
                     putExtra("CATEGORY_ID", categoryId)
                     putExtra("CATEGORY_TITLE", categoryTitle)
                 }
+                
+                android.util.Log.e("MoviesActivity", "Starting MovieDetailActivity...")
                 startActivity(intent)
+                android.util.Log.e("MoviesActivity", "startActivity() called")
             },
             onViewAllClick = { categoryId, categoryTitle ->
                 android.util.Log.d("MoviesActivity", "View All clicked for category: $categoryTitle")

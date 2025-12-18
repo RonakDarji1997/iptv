@@ -95,24 +95,40 @@ class SearchActivity : ComponentActivity() {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: android.text.Editable?) {
-                val query = s.toString()
-                performSearch(query)
+                try {
+                    val query = s?.toString() ?: ""
+                    performSearch(query)
+                } catch (e: Exception) {
+                    android.util.Log.e("SearchActivity", "Error in afterTextChanged", e)
+                }
             }
         })
         
         searchInput.setOnKeyListener { _, keyCode, event ->
-            if (event.action == KeyEvent.ACTION_DOWN) {
-                when (keyCode) {
-                    KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        if (searchResults.isNotEmpty()) {
-                            searchRecycler.requestFocus()
-                            searchRecycler.post {
-                                searchRecycler.getChildAt(0)?.requestFocus()
+            try {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            if (searchResults.isNotEmpty()) {
+                                searchRecycler.requestFocus()
+                                searchRecycler.post {
+                                    searchRecycler.getChildAt(0)?.requestFocus()
+                                }
+                                return@setOnKeyListener true
+                            }
+                        }
+                        KeyEvent.KEYCODE_SEARCH, KeyEvent.KEYCODE_ENTER -> {
+                            // Handle search button / enter key press
+                            val query = searchInput.text?.toString() ?: ""
+                            if (query.isNotEmpty()) {
+                                performSearch(query)
                             }
                             return@setOnKeyListener true
                         }
                     }
                 }
+            } catch (e: Exception) {
+                android.util.Log.e("SearchActivity", "Error in key listener", e)
             }
             false
         }
@@ -122,7 +138,10 @@ class SearchActivity : ComponentActivity() {
         // Cancel previous search
         searchJob?.cancel()
         
-        if (query.length < 2) {
+        // Safely handle null or empty query
+        val trimmedQuery = query.trim()
+        
+        if (trimmedQuery.length < 2) {
             searchResults.clear()
             searchMovies.clear()
             searchAdapter.setChannels(searchResults)
@@ -138,11 +157,11 @@ class SearchActivity : ComponentActivity() {
         searchProgress.visibility = android.view.View.VISIBLE
         
         searchJob = lifecycleScope.launch {
-            // Debounce: wait 300ms before searching
-            delay(300)
-            
             try {
-                android.util.Log.d("SearchActivity", "Searching for: $query")
+                // Debounce: wait 300ms before searching
+                delay(300)
+                
+                android.util.Log.d("SearchActivity", "Searching for: $trimmedQuery")
                 
                 searchResults.clear()
                 searchMovies.clear()
@@ -154,8 +173,8 @@ class SearchActivity : ComponentActivity() {
                 for (page in 1..5) {
                     if (!hasMorePages) break
                     
-                    android.util.Log.d("SearchActivity", "Loading search page $page for: $query")
-                    val response = stalkerClient.searchContent(query, page)
+                    android.util.Log.d("SearchActivity", "Loading search page $page for: $trimmedQuery")
+                    val response = stalkerClient.searchContent(trimmedQuery, page)
                     
                     android.util.Log.d("SearchActivity", "Search page $page results: ${response.items.data.size} items")
                     

@@ -65,4 +65,11 @@
         android:padding="20dp"
         android:visibility="gone" />
 
+    <!-- Subtitle Side Navigation -->
+    <com.ronika.iptvnative.components.SubtitleSideNavComponent
+        android:id="@+id/subtitle_sidenav"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
 </FrameLayout>

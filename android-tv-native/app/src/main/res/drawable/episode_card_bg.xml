@@ -1,14 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Focused state - white border with inset -->
+    <!-- Focused state - white border with full coverage -->
     <item android:state_focused="true">
-        <inset android:inset="2dp">
-            <shape android:shape="rectangle">
-                <solid android:color="@android:color/transparent"/>
-                <corners android:radius="8dp"/>
-                <stroke android:width="3dp" android:color="#ffffff"/>
-            </shape>
-        </inset>
+        <shape android:shape="rectangle">
+            <solid android:color="@android:color/transparent"/>
+            <corners android:radius="8dp"/>
+            <stroke android:width="4dp" android:color="#ffffff"/>
+        </shape>
     </item>
     
     <!-- Default state - transparent -->
