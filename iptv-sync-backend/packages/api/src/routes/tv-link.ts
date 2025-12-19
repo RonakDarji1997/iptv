@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import { Pool } from 'pg';
-import { authenticateToken } from '../middleware/auth';
+import { authMiddleware } from '../middleware/auth';
 
 /**
  * Router for managing TV device linking and cloud sync
@@ -215,7 +215,7 @@ export const createTvLinkRouter = (pool: Pool) => {
    * POST /api/tv/unlink-account
    * Disable cloud sync for a TV device
    */
-  router.post('/unlink-account', authenticateToken, async (req: Request, res: Response) => {
+  router.post('/unlink-account', authMiddleware, async (req: Request, res: Response) => {
     try {
       const userId = (req as any).user.userId;
       
@@ -248,7 +248,7 @@ export const createTvLinkRouter = (pool: Pool) => {
    * GET /api/tv/sync-status
    * Get cloud sync status for current user
    */
-  router.get('/sync-status', authenticateToken, async (req: Request, res: Response) => {
+  router.get('/sync-status', authMiddleware, async (req: Request, res: Response) => {
     try {
       const userId = (req as any).user.userId;
       
