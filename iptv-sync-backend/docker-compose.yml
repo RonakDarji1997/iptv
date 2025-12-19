@@ -67,7 +67,7 @@ services:
       DB_NAME: iptv_sync
       DB_USER: postgres
       DB_PASSWORD: test123
-      REDIS_HOST: redis
+      REDIS_HOST: iptv-sync-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: test123
       JWT_SECRET: change-this-to-a-random-secret-in-production

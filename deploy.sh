@@ -124,15 +124,21 @@ for i in {1..30}; do
 done
 
 print_info "Running database migrations..."
-# Detect the postgres container name (could be iptv-postgres or iptv-sync-postgres)
-POSTGRES_CONTAINER=$(sudo docker ps --filter "name=postgres" --format "{{.Names}}" | grep -E "iptv.*postgres" | head -n 1)
+# Use the existing iptv-postgres container
+POSTGRES_CONTAINER="iptv-postgres"
 
-if [ -z "$POSTGRES_CONTAINER" ]; then
-  print_error "Postgres container not found"
+if ! sudo docker ps --format "{{.Names}}" | grep -q "^${POSTGRES_CONTAINER}$"; then
+  print_error "Postgres container '$POSTGRES_CONTAINER' not found or not running"
+  sudo docker ps --format "{{.Names}}" | grep postgres || true
   exit 1
 fi
 
 print_info "Using postgres container: $POSTGRES_CONTAINER"
+
+# Copy migrations to the postgres container
+print_info "Copying migrations to container..."
+sudo docker exec "$POSTGRES_CONTAINER" mkdir -p /migrations || true
+sudo docker cp "$BACKEND_DIR/packages/database/migrations/." "$POSTGRES_CONTAINER:/migrations/"
 
 # Run migrations directly inside the postgres container
 sudo docker exec "$POSTGRES_CONTAINER" sh -c '
