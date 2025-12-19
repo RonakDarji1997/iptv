@@ -123,19 +123,56 @@ for i in {1..30}; do
     sleep 2
 done
 
-print_info "Installing backend dependencies..."
-sudo npm install || {
-    print_error "npm install failed for backend"
-    exit 1
-}
-print_success "Backend dependencies installed"
-
 print_info "Running database migrations..."
-sudo npm run db:migrate || {
-    print_error "Database migrations failed"
-    print_warning "Showing migration logs:"
-    sudo docker-compose logs postgres
-    exit 1
+# Detect the postgres container name (could be iptv-postgres or iptv-sync-postgres)
+POSTGRES_CONTAINER=$(sudo docker ps --filter "name=postgres" --format "{{.Names}}" | grep -E "iptv.*postgres" | head -n 1)
+
+if [ -z "$POSTGRES_CONTAINER" ]; then
+  print_error "Postgres container not found"
+  exit 1
+fi
+
+print_info "Using postgres container: $POSTGRES_CONTAINER"
+
+# Run migrations directly inside the postgres container
+sudo docker exec "$POSTGRES_CONTAINER" sh -c '
+  cd /migrations 2>/dev/null || { echo "❌ Migrations directory not found"; exit 1; }
+  
+  echo "🔄 Running migrations..."
+  for file in *.sql; do
+    [ -e "$file" ] || continue
+    filename=$(basename "$file")
+    echo "📄 Checking migration: $filename"
+    
+    # Check if migration already executed
+    executed=$(PGPASSWORD=test123 psql -U postgres -d iptv_sync -tAc "SELECT COUNT(*) FROM migrations WHERE name = '\''$filename'\''" 2>/dev/null || echo "0")
+    
+    if [ "$executed" = "0" ]; then
+      # Create migrations table if it does not exist
+      PGPASSWORD=test123 psql -U postgres -d iptv_sync -c "CREATE TABLE IF NOT EXISTS migrations (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL UNIQUE,
+        executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )" > /dev/null 2>&1
+      
+      echo "🔄 Running: $filename"
+      if PGPASSWORD=test123 psql -U postgres -d iptv_sync -f "$file"; then
+        PGPASSWORD=test123 psql -U postgres -d iptv_sync -c "INSERT INTO migrations (name) VALUES ('\''$filename'\'')" > /dev/null
+        echo "✅ Completed: $filename"
+      else
+        echo "❌ Failed: $filename"
+        exit 1
+      fi
+    else
+      echo "⏭️  Skipped (already executed): $filename"
+    fi
+  done
+  echo "✅ All migrations completed"
+' || {
+  print_error "Database migrations failed"
+  print_warning "Showing postgres logs:"
+  sudo docker logs --tail=50 "$POSTGRES_CONTAINER"
+  exit 1
 }
 print_success "Database migrations completed"
 
