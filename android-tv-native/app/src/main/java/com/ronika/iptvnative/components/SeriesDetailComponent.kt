@@ -10,6 +10,7 @@ import android.view.ViewGroup
 import android.widget.*
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import coil.imageLoader
 import coil.load
 import com.ronika.iptvnative.R
 import com.ronika.iptvnative.adapters.EpisodeHorizontalAdapter
@@ -76,6 +77,31 @@ class SeriesDetailComponent @JvmOverloads constructor(
     // Favourite state
     private var isFavorited = false
     private val favoriteRepository = FavoriteRepository(context)
+    
+    // Public getters for series info
+    fun getCurrentSeriesName(): String = seriesName
+    fun getCurrentSeriesId(): String = seriesId
+    fun getCurrentPosterUrl(): String? = posterUrl
+    
+    // Focus on specific episode (for returning from player)
+    fun focusOnEpisode(episodeId: String) {
+        post {
+            val adapter = episodeAdapter ?: return@post
+            val episodes = adapter.episodes
+            val position = episodes.indexOfFirst { it.id == episodeId }
+            if (position >= 0) {
+                Log.d(TAG, "📍 Focusing on episode at position $position (ID: $episodeId)")
+                episodesRecycler.scrollToPosition(position)
+                episodesRecycler.post {
+                    val viewHolder = episodesRecycler.findViewHolderForAdapterPosition(position)
+                    viewHolder?.itemView?.requestFocus()
+                    Log.d(TAG, "📍 Episode focused successfully")
+                }
+            } else {
+                Log.w(TAG, "📍 Episode ID $episodeId not found in current episode list")
+            }
+        }
+    }
     
     // Animation state
     private var isBackdropHidden = false
@@ -512,8 +538,26 @@ class SeriesDetailComponent @JvmOverloads constructor(
         this.seriesYear = year
         this.posterUrl = posterUrl
         
-        // 🧹 CLEAR OLD DATA FIRST to prevent stale thumbnails
+        // 🧹 CLEAR OLD DATA FIRST to prevent stale data
         Log.d(TAG, "🧹 Clearing old episode data before loading new series: $name")
+        
+        // Show loading state IMMEDIATELY
+        loadingIndicator.visibility = View.VISIBLE
+        container.visibility = View.VISIBLE
+        
+        // Hide all content until data is ready
+        backdropArea.visibility = View.GONE
+        infoArea.visibility = View.GONE
+        episodesRecycler.visibility = View.GONE
+        
+        // Clear Coil cache for previous series
+        try {
+            context.imageLoader.memoryCache?.clear()
+            context.imageLoader.diskCache?.clear()
+        } catch (e: Exception) {
+            Log.w(TAG, "Cache clear failed: ${e.message}")
+        }
+        
         seasons.clear()
         allEpisodesBySeason.clear()
         episodesRecycler.adapter = null
@@ -521,41 +565,20 @@ class SeriesDetailComponent @JvmOverloads constructor(
         firstEpisode = null
         firstSeason = null
         
-        // Show container
-        container.visibility = View.VISIBLE
-        backdropArea.visibility = View.VISIBLE
-        infoArea.visibility = View.VISIBLE
-        isBackdropHidden = false
+        // CRITICAL: Reset ALL TMDB data to prevent using previous series data
+        tmdbTvId = null
+        tmdbSeasonData.clear()
+        Log.d(TAG, "🔄 Reset tmdbTvId and season cache for new series")
         
-        android.util.Log.e("SeriesDetail", "=== SCROLL DEBUG START ===")
-        android.util.Log.e("SeriesDetail", "Current scroll position Y: ${contentScroll.scrollY}")
-        android.util.Log.e("SeriesDetail", "ContentScroll height: ${contentScroll.height}")
-        
-        // Scroll to top - wait for layout to complete
-        contentScroll.viewTreeObserver.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
-            override fun onGlobalLayout() {
-                contentScroll.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                android.util.Log.e("SeriesDetail", "OnGlobalLayout - scrollY before: ${contentScroll.scrollY}")
-                contentScroll.scrollTo(0, 0)
-                android.util.Log.e("SeriesDetail", "OnGlobalLayout - scrollY after scrollTo(0,0): ${contentScroll.scrollY}")
-            }
-        })
-        
-        // Also try immediate scroll
-        android.util.Log.e("SeriesDetail", "Immediate scrollTo(0,0)")
+        // Scroll to top preparation
         contentScroll.scrollTo(0, 0)
-        android.util.Log.e("SeriesDetail", "After immediate scroll, scrollY: ${contentScroll.scrollY}")
-        
         contentScroll.post {
-            android.util.Log.e("SeriesDetail", "Post block - scrollY before: ${contentScroll.scrollY}")
             contentScroll.scrollTo(0, 0)
             contentScroll.smoothScrollTo(0, 0)
-            android.util.Log.e("SeriesDetail", "Post block - scrollY after: ${contentScroll.scrollY}")
         }
         
         // Request focus on Play button to show top content
         playButton.post {
-            android.util.Log.e("SeriesDetail", "Requesting focus on Play button")
             playButton.requestFocus()
         }
         
@@ -564,22 +587,33 @@ class SeriesDetailComponent @JvmOverloads constructor(
         yearText.text = year ?: ""
         descriptionText.text = description ?: "No description available"
         
-        // Hide content initially until TMDB loads
-        backdropImage.alpha = 0f
-        titleText.alpha = 0f
-        playButton.alpha = 0f
-        
         // Hide rating initially, will be set by TMDB if available
         ratingText.visibility = View.GONE
         
-        // Load TMDB data FIRST, then load seasons (need TV ID for episode data)
+        // Load TMDB data FIRST to get TV ID, then load seasons
         scope.launch {
             try {
-                // Wait for TMDB data to load first
+                // CRITICAL: Load TMDB first to populate tmdbTvId before loading episodes
                 loadTmdbData()
                 
                 // Now load seasons and episodes with TMDB TV ID available
                 loadSeasonsAndEpisodes()
+                
+                // Now show all content at once with fade-in animation
+                withContext(Dispatchers.Main) {
+                    backdropArea.visibility = View.VISIBLE
+                    infoArea.visibility = View.VISIBLE
+                    episodesRecycler.visibility = View.VISIBLE
+                    
+                    // Smooth fade-in animation
+                    backdropArea.alpha = 0f
+                    infoArea.alpha = 0f
+                    episodesRecycler.alpha = 0f
+                    
+                    backdropArea.animate().alpha(1f).setDuration(300).start()
+                    infoArea.animate().alpha(1f).setDuration(300).start()
+                    episodesRecycler.animate().alpha(1f).setDuration(300).start()
+                }
                 
                 // Check for saved progress after loading episodes
                 checkSeriesProgress()

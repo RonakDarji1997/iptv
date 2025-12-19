@@ -10,6 +10,7 @@ import android.widget.TextView
 import androidx.cardview.widget.CardView
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
+import coil.request.CachePolicy
 import com.ronika.iptvnative.R
 import com.ronika.iptvnative.models.Episode
 import com.ronika.iptvnative.repository.WatchProgressRepository
@@ -19,7 +20,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class EpisodeHorizontalAdapter(
-    private val episodes: List<Episode>,
+    val episodes: List<Episode>,
     private val seriesId: String,
     private val providerId: String,
     private val seriesPosterUrl: String?,
@@ -100,16 +101,36 @@ class EpisodeHorizontalAdapter(
                 "http://tv.stream4k.cc$imageUrl"
             }
             
+            // CRITICAL: Clear drawable completely to prevent stale images from RecyclerView pool
+            holder.thumbnail.setImageDrawable(null)
+            
+            // Use unique cache keys including timestamp to prevent cross-series conflicts
+            val uniqueCacheKey = "${seriesId}_${episode.seasonId}_${episode.id}_${System.currentTimeMillis()}"
+            
+            android.util.Log.e("EpisodeAdapter", "🎬 Loading S${seasonNumber}E${episode.episodeNumber} - URL: $fullUrl - Key: $uniqueCacheKey")
+            
             holder.thumbnail.load(fullUrl) {
                 crossfade(false) // Disable for performance
                 placeholder(R.drawable.ic_movie_placeholder)
                 error(R.drawable.ic_movie_placeholder)
                 size(250, 375) // Resize for episodes
-                memoryCacheKey(fullUrl)
-                diskCacheKey(fullUrl)
+                memoryCacheKey(uniqueCacheKey)
+                diskCacheKey(uniqueCacheKey)
+                // DISABLED = Always fetch fresh, never use cache
+                memoryCachePolicy(CachePolicy.DISABLED)
+                diskCachePolicy(CachePolicy.DISABLED)
                 allowHardware(true)
+                listener(
+                    onSuccess = { _, result ->
+                        android.util.Log.e("EpisodeAdapter", "✅ Loaded S${seasonNumber}E${episode.episodeNumber} successfully from $fullUrl")
+                    },
+                    onError = { _, error ->
+                        android.util.Log.e("EpisodeAdapter", "❌ Failed S${seasonNumber}E${episode.episodeNumber}: ${error.throwable.message}")
+                    }
+                )
             }
         } else {
+            holder.thumbnail.setImageDrawable(null)
             holder.thumbnail.setImageResource(R.drawable.ic_movie_placeholder)
         }
         

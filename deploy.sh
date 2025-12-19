@@ -123,6 +123,22 @@ for i in {1..30}; do
     sleep 2
 done
 
+print_info "Installing backend dependencies..."
+sudo npm install || {
+    print_error "npm install failed for backend"
+    exit 1
+}
+print_success "Backend dependencies installed"
+
+print_info "Running database migrations..."
+sudo npm run db:migrate || {
+    print_error "Database migrations failed"
+    print_warning "Showing migration logs:"
+    sudo docker-compose logs postgres
+    exit 1
+}
+print_success "Database migrations completed"
+
 print_info "Building Docker image for backend API..."
 sudo docker-compose build api || {
     print_error "Docker build failed for backend"

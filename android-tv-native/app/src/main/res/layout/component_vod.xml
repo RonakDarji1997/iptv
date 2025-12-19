@@ -11,11 +11,11 @@
         android:layout_height="match_parent"
         android:orientation="vertical">
 
-        <!-- Backdrop Section - Split Layout -->
+        <!-- Backdrop Section - Split Layout (50% of screen height) -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="0.40"
+            android:layout_weight="0.50"
             android:orientation="horizontal"
             android:background="#FF000000">
 
@@ -67,10 +67,37 @@
                     android:textSize="14sp"
                     android:lineSpacingExtra="2dp"
                     android:layout_marginTop="10dp"
-                    android:maxLines="4"
+                    android:maxLines="5"
                     android:ellipsize="end" />
 
+                <!-- Rating and Genre Info -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="12dp">
 
+                    <TextView
+                        android:id="@+id/rating_text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="★ 8.5"
+                        android:textColor="#FFD700"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/genre_text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Action, Drama"
+                        android:textColor="#B3FFFFFF"
+                        android:textSize="13sp"
+                        android:layout_marginStart="16dp"
+                        android:visibility="gone" />
+
+                </LinearLayout>
 
             </LinearLayout>
 
@@ -98,12 +125,12 @@
 
         </LinearLayout>
 
-        <!-- Thumbnails Grid Section -->
+        <!-- Thumbnails Grid Section (50% of screen height) -->
         <com.ronika.iptvnative.components.CustomGridRecyclerView
             android:id="@+id/thumbnails_recycler"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="0.60"
+            android:layout_weight="0.50"
             android:paddingStart="40dp"
             android:paddingEnd="40dp"
             android:paddingTop="20dp"

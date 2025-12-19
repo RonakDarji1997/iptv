@@ -82,6 +82,7 @@ import { createDevicesRouter } from './routes/devices';
 import { createStreamRouter } from './routes/stream';
 import { createProgressRouter } from './routes/progress';
 import { createStalkerProxyRouter } from './routes/stalker-proxy';
+import { createTvLinkRouter } from './routes/tv-link';
 import favoritesRouter from './routes/favorites';
 import watchHistoryRouter from './routes/watch-history';
 import parentalControlRouter from './routes/parental-control';
@@ -111,6 +112,7 @@ apiRouter.use('/devices', authMiddleware, createDevicesRouter(pool));
 apiRouter.use('/stream', authMiddleware, createStreamRouter(pool));
 apiRouter.use('/progress', authMiddleware, createProgressRouter(pool));
 apiRouter.use('/stalker-proxy', conditionalAuth, createStalkerProxyRouter(pool));
+apiRouter.use('/tv', createTvLinkRouter(pool)); // TV linking endpoints (no auth for initial link)
 
 // New routes
 app.locals.db = pool; // Make pool available to new route handlers

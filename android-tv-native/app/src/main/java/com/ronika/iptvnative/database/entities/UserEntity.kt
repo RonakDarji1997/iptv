@@ -13,6 +13,9 @@ data class UserEntity(
     val bearerToken: String,
     val tokenExpiry: Long, // Unix timestamp
     val lastSync: Long? = null, // Unix timestamp
+    val cloudUserId: String? = null, // Cloud user ID from backend
+    val cloudEnabled: Boolean = false, // Whether cloud sync is enabled
+    val subscriptionEnabled: Boolean = false, // Whether subscription features are enabled
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

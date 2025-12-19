@@ -46,6 +46,9 @@ class CategorySidebarComponent @JvmOverloads constructor(
     // Track all focusable views for navigation
     private val focusableViews = mutableListOf<View>()
     
+    // Callback for category focus (for preview mode)
+    private var onCategoryFocusedCallback: ((categoryName: String, categoryId: String, contentType: String, providerId: String) -> Unit)? = null
+    
     // Current section filter (from main sidenav)
     private var currentSection: Section = Section.LIVE_TV
     
@@ -56,9 +59,9 @@ class CategorySidebarComponent @JvmOverloads constructor(
     // Data class to hold provider with its categories
     data class ProviderWithCategories(
         val provider: ProviderEntity,
-        val liveCategories: List<String>,
-        val movieCategories: List<String>,
-        val seriesCategories: List<String>
+        val liveCategories: List<CategoryEntity>,
+        val movieCategories: List<CategoryEntity>,
+        val seriesCategories: List<CategoryEntity>
     )
     
     private var providers: List<ProviderWithCategories> = emptyList()
@@ -128,7 +131,7 @@ class CategorySidebarComponent @JvmOverloads constructor(
                     val sortedMovies = sortCategoriesByAdult(movies)
                     val sortedSeries = sortCategoriesByAdult(series)
                     
-                    ProviderWithCategories(provider, sortedLive.map { it.name }, sortedMovies.map { it.name }, sortedSeries.map { it.name })
+                    ProviderWithCategories(provider, sortedLive, sortedMovies, sortedSeries)
                 }
                 
                 providers = providersWithCategories
@@ -219,17 +222,17 @@ class CategorySidebarComponent @JvmOverloads constructor(
         val provider = providerData.provider
         
         // Get categories based on current section (already sorted with adult at bottom)
-        val categories = when (currentSection) {
+        val categoryEntities = when (currentSection) {
             Section.LIVE_TV -> providerData.liveCategories
-            Section.MOVIES -> {
-                // Add Continue Watching and Favourites at the top
-                listOf("▶️ Continue Watching", "⭐ Favourites") + providerData.movieCategories
-            }
-            Section.SERIES -> {
-                // Add Continue Watching and Favourites at the top
-                listOf("▶️ Continue Watching", "⭐ Favourites") + providerData.seriesCategories
-            }
+            Section.MOVIES -> providerData.movieCategories
+            Section.SERIES -> providerData.seriesCategories
             Section.SEARCH -> emptyList() // Search doesn't have categories in sidebar
+        }
+        
+        // Add special categories for Movies/Series
+        val specialCategories = when (currentSection) {
+            Section.MOVIES, Section.SERIES -> listOf("▶️ Continue Watching", "⭐ Favourites")
+            else -> emptyList()
         }
         
         // Get content type for click handler
@@ -240,19 +243,27 @@ class CategorySidebarComponent @JvmOverloads constructor(
             Section.SEARCH -> return // No categories to add for search
         }
         
-        categories.forEach { categoryName ->
-            val categoryView = createCategoryView(categoryName, provider, contentType)
+        // Add special categories first
+        specialCategories.forEach { categoryName ->
+            val categoryView = createCategoryView(categoryName, null, provider, contentType)
             providersContainer.addView(categoryView)
             focusableViews.add(categoryView)
         }
         
-        Log.d(TAG, "Added ${categories.size} direct categories for ${provider.name}")
+        // Add regular categories
+        categoryEntities.forEach { category ->
+            val categoryView = createCategoryView(category.name, category, provider, contentType)
+            providersContainer.addView(categoryView)
+            focusableViews.add(categoryView)
+        }
+        
+        Log.d(TAG, "Added ${specialCategories.size + categoryEntities.size} direct categories for ${provider.name}")
     }
     
     /**
      * Create a category view item (same style as dropdown categories)
      */
-    private fun createCategoryView(categoryName: String, provider: ProviderEntity, contentType: String): View {
+    private fun createCategoryView(categoryName: String, category: CategoryEntity?, provider: ProviderEntity, contentType: String): View {
         // Use the same layout as dropdown categories
         val textView = LayoutInflater.from(context)
             .inflate(R.layout.item_category_simple, null) as TextView
@@ -273,6 +284,9 @@ class CategorySidebarComponent @JvmOverloads constructor(
             if (hasFocus) {
                 textView.isSelected = true
                 scrollToView(textView)
+                // Trigger preview mode callback with actual category externalId
+                val categoryId = category?.externalId ?: categoryName  // Use externalId for real categories, name for special ones
+                onCategoryFocusedCallback?.invoke(categoryName, categoryId, contentType, provider.id)
             } else {
                 textView.isSelected = false
             }
@@ -404,39 +418,33 @@ class CategorySidebarComponent @JvmOverloads constructor(
                         dropdownView.findViewById(R.id.live_tv_categories),
                         "📺 Live TV",
                         providerData.liveCategories,
-                        provider.id,
+                        provider,
                         "live"
                     )
                 }
             }
             Section.MOVIES -> {
                 if (providerData.movieCategories.isNotEmpty()) {
-                    // Add Continue Watching and Favourites at the top (categories already sorted with adult at bottom)
-                    val categoriesWithExtras = listOf("▶️ Continue Watching", "⭐ Favourites") + providerData.movieCategories
-                    Log.d(TAG, "🎬 Movies: Added ${categoriesWithExtras.size} categories (including Continue Watching & Favourites)")
                     buildCategorySection(
                         dropdownView.findViewById(R.id.movies_section),
                         dropdownView.findViewById(R.id.movies_header),
                         dropdownView.findViewById(R.id.movies_categories),
                         "🎬 Movies",
-                        categoriesWithExtras,
-                        provider.id,
+                        providerData.movieCategories,
+                        provider,
                         "movie"
                     )
                 }
             }
             Section.SERIES -> {
                 if (providerData.seriesCategories.isNotEmpty()) {
-                    // Add Continue Watching and Favourites at the top (categories already sorted with adult at bottom)
-                    val categoriesWithExtras = listOf("▶️ Continue Watching", "⭐ Favourites") + providerData.seriesCategories
-                    Log.d(TAG, "📺 Series: Added ${categoriesWithExtras.size} categories (including Continue Watching & Favourites)")
                     buildCategorySection(
                         dropdownView.findViewById(R.id.series_section),
                         dropdownView.findViewById(R.id.series_header),
                         dropdownView.findViewById(R.id.series_categories),
                         "📺 Series",
-                        categoriesWithExtras,
-                        provider.id,
+                        providerData.seriesCategories,
+                        provider,
                         "series"
                     )
                 }
@@ -458,8 +466,8 @@ class CategorySidebarComponent @JvmOverloads constructor(
         headerView: TextView,
         categoriesLayout: LinearLayout,
         headerText: String,
-        categories: List<String>,
-        providerId: String,
+        categories: List<CategoryEntity>,
+        provider: ProviderEntity,
         contentType: String
     ) {
         sectionLayout.visibility = View.VISIBLE
@@ -467,9 +475,22 @@ class CategorySidebarComponent @JvmOverloads constructor(
         headerView.visibility = View.GONE
         categoriesLayout.removeAllViews()
         
-        // Add category items directly (no header)
-        categories.forEach { categoryName ->
-            val categoryView = createCategoryItem(categoryName, providerId, contentType)
+        // Add special categories for Movies/Series
+        val specialCategories = when (contentType) {
+            "movie", "series" -> listOf("▶️ Continue Watching", "⭐ Favourites")
+            else -> emptyList()
+        }
+        
+        // Add special category items first
+        specialCategories.forEach { categoryName ->
+            val categoryView = createCategoryItem(categoryName, null, provider.id, contentType)
+            categoriesLayout.addView(categoryView)
+            focusableViews.add(categoryView)
+        }
+        
+        // Add regular category items
+        categories.forEach { category ->
+            val categoryView = createCategoryItem(category.name, category, provider.id, contentType)
             categoriesLayout.addView(categoryView)
             focusableViews.add(categoryView)
         }
@@ -480,6 +501,7 @@ class CategorySidebarComponent @JvmOverloads constructor(
      */
     private fun createCategoryItem(
         categoryName: String,
+        category: CategoryEntity?,
         providerId: String,
         contentType: String
     ): View {
@@ -497,6 +519,14 @@ class CategorySidebarComponent @JvmOverloads constructor(
         
         textView.isFocusable = true
         textView.isFocusableInTouchMode = true
+        
+        // Focus change listener for preview
+        textView.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                val categoryId = category?.externalId ?: categoryName
+                onCategoryFocusedCallback?.invoke(categoryName, categoryId, contentType, providerId)
+            }
+        }
         
         // Click handler
         textView.setOnClickListener {
@@ -616,6 +646,13 @@ class CategorySidebarComponent @JvmOverloads constructor(
             "movie" -> (context as? MainActivity)?.showMoviesCategory(categoryName, providerId)
             "series" -> (context as? MainActivity)?.showSeriesCategory(categoryName, providerId)
         }
+    }
+    
+    /**
+     * Set callback for category focus (preview mode)
+     */
+    fun setOnCategoryFocusedListener(listener: (categoryName: String, categoryId: String, contentType: String, providerId: String) -> Unit) {
+        onCategoryFocusedCallback = listener
     }
     
     /**

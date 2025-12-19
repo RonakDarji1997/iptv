@@ -99,6 +99,9 @@ class MainActivity : ComponentActivity() {
     private var currentSeasonId: String? = null
     private var currentEpisodeId: String? = null
     
+    // Track last played episode for focus restoration
+    private var lastPlayedEpisodeId: String? = null
+    
     // StalkerClient - initialized lazily from provider
     private var stalkerClient: StalkerClient? = null
     private val database by lazy { AppDatabase.getDatabase(this) }
@@ -1253,21 +1256,7 @@ class MainActivity : ComponentActivity() {
                         currentSeriesId = seriesId
                         currentSeasonId = seasonId
                         currentEpisodeId = episodeId
-                        
-                        // Set content info for progress tracking
-                        currentSeriesItem?.let { seriesItem ->
-                            vodPlayer.setContentInfo(
-                                contentId = seriesId,
-                                contentType = "SERIES",
-                                posterUrl = seriesItem.posterUrl,
-                                cmd = vodCmd,
-                                providerId = vodComponent.getCurrentProviderId() ?: "",
-                                episodeId = episodeId,
-                                seasonId = seasonId,  // Pass seasonId for progress tracking
-                                seasonNumber = seasonNum.toIntOrNull(),
-                                episodeNumber = episodeNum.toIntOrNull()
-                            )
-                        }
+                        lastPlayedEpisodeId = episodeId  // Store for focus restoration
                         
                         // Check for saved progress for this specific episode
                         val repository = com.ronika.iptvnative.repository.WatchProgressRepository(applicationContext)
@@ -1275,12 +1264,40 @@ class MainActivity : ComponentActivity() {
                         val progress = repository.getEpisodeProgress(seriesId, compositeKey, vodComponent.getCurrentProviderId() ?: "")
                         val startPosition = progress?.currentPosition ?: 0L
                         
-                        // IMPORTANT: Set series title BEFORE playSeries so player can show "Series — Episode X"
-                        currentSeriesItem?.let { seriesItem ->
-                            vodPlayer.setSeriesTitle(seriesItem.name)
-                        }
-                        // Play series - this will set currentMovieTitle to the episode format when needed
+                        // Play series FIRST
                         vodPlayer.playSeries(response.url, title, hasNext = true, startPosition = startPosition)
+                        
+                        // THEN set series metadata AFTER playSeries so it doesn't get cleared
+                        // Get series info from SeriesDetailComponent
+                        val currentSeriesName = seriesDetail.getCurrentSeriesName()
+                        val currentPosterUrl = seriesDetail.getCurrentPosterUrl()
+                        
+                        Log.d(TAG, "🎬 DEBUG: Got series name from SeriesDetail: $currentSeriesName")
+                        
+                        if (currentSeriesName.isNotEmpty()) {
+                            vodPlayer.setSeriesTitle(currentSeriesName)
+                            Log.d(TAG, "🎬 Set series title for subtitle search: $currentSeriesName")
+                        } else {
+                            Log.e(TAG, "🎬 ERROR: Series name is empty!")
+                        }
+                        
+                        // Set content info for progress tracking AFTER playSeries
+                        if (currentSeriesName.isNotEmpty()) {
+                            vodPlayer.setContentInfo(
+                                contentId = seriesId,
+                                contentType = "SERIES",
+                                posterUrl = currentPosterUrl,
+                                cmd = vodCmd,
+                                providerId = vodComponent.getCurrentProviderId() ?: "",
+                                episodeId = episodeId,
+                                seasonId = seasonId,  // Pass seasonId for progress tracking
+                                seasonNumber = seasonNum.toIntOrNull(),
+                                episodeNumber = episodeNum.toIntOrNull()
+                            )
+                            Log.d(TAG, "🎬 Set content info after playSeries - seriesId: $seriesId, type: SERIES, name: $currentSeriesName")
+                        } else {
+                            Log.e(TAG, "🎬 ERROR: Cannot set content info - series name is empty!")
+                        }
                         
                         Log.d(TAG, "🎬 Episode playback started successfully, stack: $navigationStack")
                     } else {
@@ -1318,6 +1335,17 @@ class MainActivity : ComponentActivity() {
             Log.d(TAG, "Hiding player")
             hidePlayer()
             
+            // Hide all other components first
+            val sideNavContainer = findViewById<FrameLayout>(R.id.sideNavContainer)
+            val categorySidebarContainer = findViewById<FrameLayout>(R.id.categorySidebarContainer)
+            val vodContainer = findViewById<FrameLayout>(R.id.vodContainer)
+            val seriesContainer = findViewById<FrameLayout>(R.id.seriesDetailContainer)
+            
+            sideNavContainer.visibility = android.view.View.GONE
+            categorySidebarContainer.visibility = android.view.View.GONE
+            vodContainer.visibility = android.view.View.GONE
+            seriesContainer.visibility = android.view.View.GONE
+            
             // Navigate to appropriate info screen based on content type
             when (contentType) {
                 "MOVIE" -> {
@@ -1343,7 +1371,6 @@ class MainActivity : ComponentActivity() {
                     } else {
                         // Show movie detail/info screen inline in VODComponent
                         Log.d(TAG, "Navigating to movie detail/info screen in VODComponent")
-                        val vodContainer = findViewById<FrameLayout>(R.id.vodContainer)
                         vodContainer.visibility = android.view.View.VISIBLE
                         vodComponent.post {
                             vodComponent.ensureDetailScreenVisible()
@@ -1354,16 +1381,27 @@ class MainActivity : ComponentActivity() {
                 }
                 "SERIES" -> {
                     // Show series detail/info screen
-                    Log.d(TAG, "Navigating to series detail/info screen")
-                    val seriesContainer = findViewById<FrameLayout>(R.id.seriesDetailContainer)
+                    Log.d(TAG, "Navigating back to series detail/info screen")
+                    
+                    // Show series detail container
                     seriesContainer.visibility = android.view.View.VISIBLE
+                    
+                    // Request focus on series detail to restore proper navigation
                     seriesDetail.post {
-                        // Focus will be restored to the episode list
+                        seriesDetail.visibility = android.view.View.VISIBLE
+                        
+                        // Try to focus on the last played episode, otherwise just focus the container
+                        if (lastPlayedEpisodeId != null) {
+                            Log.d(TAG, "🎯 Restoring focus to last played episode: $lastPlayedEpisodeId")
+                            seriesDetail.focusOnEpisode(lastPlayedEpisodeId!!)
+                        } else {
+                            seriesDetail.requestFocus()
+                            Log.d(TAG, "Series detail container shown and focused")
+                        }
                     }
                 }
                 else -> {
                     Log.w(TAG, "Unknown content type, defaulting to VOD component")
-                    val vodContainer = findViewById<FrameLayout>(R.id.vodContainer)
                     vodContainer.visibility = android.view.View.VISIBLE
                 }
             }

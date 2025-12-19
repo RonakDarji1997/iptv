@@ -127,7 +127,15 @@ class OpenSubtitlesService {
         episode: Int? = null
     ): List<SubtitleItem> = withContext(Dispatchers.IO) {
         try {
-            Log.d(TAG, "Searching subtitles for: $query")
+            Log.d(TAG, "=".repeat(80))
+            Log.d(TAG, "🌐 API REQUEST - searchByQuery")
+            Log.d(TAG, "=".repeat(80))
+            Log.d(TAG, "📤 SENDING TO API:")
+            Log.d(TAG, "📝   query: $query")
+            Log.d(TAG, "📝   language: $language")
+            Log.d(TAG, "📝   year: ${year ?: "(null)"}")
+            Log.d(TAG, "📝   season: ${season ?: "(null)"}")
+            Log.d(TAG, "📝   episode: ${episode ?: "(null)"}")
             
             var url = "$BASE_URL?action=search&query=${java.net.URLEncoder.encode(query, "UTF-8")}&languages=$language"
             
@@ -141,6 +149,9 @@ class OpenSubtitlesService {
                 url += "&episodeNumber=$episode"
             }
             
+            Log.d(TAG, "🔗 Full URL: $url")
+            Log.d(TAG, "=".repeat(80))
+            
             val request = Request.Builder()
                 .url(url)
                 .get()
@@ -148,6 +159,17 @@ class OpenSubtitlesService {
             
             val response = client.newCall(request).execute()
             val responseBody = response.body?.string()
+            
+            Log.d(TAG, "=".repeat(80))
+            Log.d(TAG, "📥 API RESPONSE")
+            Log.d(TAG, "📝 Response Code: ${response.code}")
+            Log.d(TAG, "📝 Response Body Length: ${responseBody?.length ?: 0} chars")
+            if (responseBody != null && responseBody.length < 500) {
+                Log.d(TAG, "📝 Full Response: $responseBody")
+            } else if (responseBody != null) {
+                Log.d(TAG, "📝 Response Preview: ${responseBody.take(200)}...")
+            }
+            Log.d(TAG, "=".repeat(80))
             
             if (!response.isSuccessful) {
                 Log.e(TAG, "API request failed: ${response.code}, body: $responseBody")
@@ -161,6 +183,9 @@ class OpenSubtitlesService {
             
             val jsonResponse = JSONObject(responseBody)
             val subtitlesArray = jsonResponse.optJSONArray("subtitles") ?: JSONArray()
+            
+            Log.d(TAG, "📝 Parsing JSON response...")
+            Log.d(TAG, "📝 Found ${subtitlesArray.length()} subtitle entries in JSON")
             
             val subtitles = mutableListOf<SubtitleItem>()
             
@@ -185,11 +210,18 @@ class OpenSubtitlesService {
                 }
             }
             
-            Log.d(TAG, "Found ${subtitles.size} subtitles")
+            Log.d(TAG, "=".repeat(80))
+            Log.d(TAG, "✅ searchByQuery FINAL RESULT: ${subtitles.size} valid subtitles")
+            if (subtitles.isNotEmpty()) {
+                subtitles.take(3).forEach { sub ->
+                    Log.d(TAG, "📝   - ID: ${sub.id}, File: ${sub.fileName}")
+                }
+            }
+            Log.d(TAG, "=".repeat(80))
             subtitles
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error searching subtitles", e)
+            Log.e(TAG, "❌ Error in searchByQuery", e)
             emptyList()
         }
     }

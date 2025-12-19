@@ -77,6 +77,12 @@ class SettingsComponent @JvmOverloads constructor(
     private lateinit var lastUpdatedText: TextView
     private lateinit var syncStatusText: TextView
     
+    // Cloud sync views (in Playlist section)
+    private lateinit var cloudSyncStatus: TextView
+    private lateinit var btnToggleCloudSync: LinearLayout
+    private lateinit var cloudSyncCheckbox: android.widget.CheckBox
+    private lateinit var cloudSubscriptionStatus: TextView
+    
     // Player section views
     private lateinit var btnToggleBitrate: LinearLayout
     private lateinit var checkboxBitrate: android.widget.CheckBox
@@ -101,7 +107,7 @@ class SettingsComponent @JvmOverloads constructor(
     private var currentProvider: ProviderEntity? = null
     
     enum class Section {
-        PLAYLIST, PARENTAL, PLAYER, ABOUT
+        PLAYLIST, PARENTAL, PLAYER, CLOUD, ABOUT
     }
     
     private val database by lazy { AppDatabase.getDatabase(context) }
@@ -143,6 +149,12 @@ class SettingsComponent @JvmOverloads constructor(
         activePlaylistsContainer = findViewById(R.id.active_playlists_container)
         lastUpdatedText = findViewById(R.id.last_updated_text)
         syncStatusText = findViewById(R.id.sync_status_text)
+        
+        // Cloud sync views (in Playlist section)
+        cloudSyncStatus = findViewById(R.id.cloud_sync_status)
+        btnToggleCloudSync = findViewById(R.id.btn_toggle_cloud_sync)
+        cloudSyncCheckbox = findViewById(R.id.cloud_sync_checkbox)
+        cloudSubscriptionStatus = findViewById(R.id.cloud_subscription_status)
         
         // Player section
         btnToggleBitrate = findViewById(R.id.btn_toggle_bitrate)
@@ -250,6 +262,7 @@ class SettingsComponent @JvmOverloads constructor(
         btnManageCategories.onFocusChangeListener = contentFocusListener
         btnSyncCategories.onFocusChangeListener = contentFocusListener
         btnUpdatePlaylist.onFocusChangeListener = contentFocusListener
+        btnToggleCloudSync.onFocusChangeListener = contentFocusListener
         // btnAddPlaylist.onFocusChangeListener = contentFocusListener // hidden: single-provider mode
         btnToggleBitrate.onFocusChangeListener = contentFocusListener
         seekTimeSlider.onFocusChangeListener = contentFocusListener
@@ -286,6 +299,11 @@ class SettingsComponent @JvmOverloads constructor(
         btnUpdatePlaylist.setOnClickListener {
             Toast.makeText(context, "Updating playlist...", Toast.LENGTH_SHORT).show()
             onUpdatePlaylistCallback?.invoke()
+        }
+        
+        // Cloud Sync toggle
+        btnToggleCloudSync.setOnClickListener {
+            toggleCloudSync()
         }
         
         /*
@@ -879,6 +897,7 @@ class SettingsComponent @JvmOverloads constructor(
                 populateActivePlaylists(configuredProviders)
                 updateParentalSection(provider)
                 updateAboutSection(provider)
+                updateCloudSyncStatus()
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading settings data", e)
@@ -1209,5 +1228,70 @@ class SettingsComponent @JvmOverloads constructor(
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+    
+    private fun updateCloudSyncStatus() {
+        coroutineScope.launch {
+            try {
+                val cloudSyncManager = com.ronika.iptvnative.managers.CloudSyncManager(context)
+                val isCloudEnabled = cloudSyncManager.isCloudEnabled()
+                val hasSubscription = cloudSyncManager.isSubscriptionEnabled()
+                
+                withContext(Dispatchers.Main) {
+                    cloudSyncCheckbox.isChecked = isCloudEnabled
+                    cloudSyncStatus.text = if (isCloudEnabled) "Cloud Sync: ON" else "Cloud Sync: OFF"
+                    cloudSyncStatus.setTextColor(if (isCloudEnabled) 0xFF4CAF50.toInt() else 0xFF9E9E9E.toInt())
+                    
+                    cloudSubscriptionStatus.text = if (hasSubscription) 
+                        "✓ Subtitles Enabled" else "○ Subtitles Disabled"
+                    cloudSubscriptionStatus.setTextColor(if (hasSubscription) 0xFF4CAF50.toInt() else 0xFF9E9E9E.toInt())
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading cloud sync status", e)
+            }
+        }
+    }
+    
+    private fun toggleCloudSync() {
+        coroutineScope.launch {
+            try {
+                val cloudSyncManager = com.ronika.iptvnative.managers.CloudSyncManager(context)
+                val currentlyEnabled = cloudSyncManager.isCloudEnabled()
+                
+                if (currentlyEnabled) {
+                    // Disable cloud sync
+                    val result = cloudSyncManager.unlinkFromCloud()
+                    
+                    withContext(Dispatchers.Main) {
+                        if (result.isSuccess) {
+                            Toast.makeText(context, "Cloud sync disabled", Toast.LENGTH_SHORT).show()
+                            updateCloudSyncStatus()
+                        } else {
+                            Toast.makeText(context, "Failed to disable cloud sync", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else {
+                    // Enable cloud sync - need to login
+                    withContext(Dispatchers.Main) {
+                        AlertDialog.Builder(context)
+                            .setTitle("Enable Cloud Sync")
+                            .setMessage("You need to log in to enable cloud sync. This will sync your favorites and watch progress across devices.")
+                            .setPositiveButton("Login") { _, _ ->
+                                // Launch CloudAuthActivity
+                                val intent = Intent(context, com.ronika.iptvnative.CloudAuthActivity::class.java)
+                                intent.putExtra("from_settings", true)
+                                context.startActivity(intent)
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error toggling cloud sync", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 }

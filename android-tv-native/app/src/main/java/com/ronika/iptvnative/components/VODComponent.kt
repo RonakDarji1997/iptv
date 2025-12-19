@@ -34,6 +34,7 @@ class CustomGridRecyclerView @JvmOverloads constructor(
 ) : RecyclerView(context, attrs, defStyleAttr) {
     
     var customKeyHandler: ((Int, KeyEvent) -> Boolean)? = null
+    private val consumedKeys = mutableMapOf<Int, Boolean>()
     
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // Intercept DPAD keys BEFORE RecyclerView processes them
@@ -44,18 +45,30 @@ class CustomGridRecyclerView @JvmOverloads constructor(
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 if (event.action == KeyEvent.ACTION_DOWN) {
                     customKeyHandler?.let { handler ->
-                        if (handler(event.keyCode, event)) {
+                        val consumed = handler(event.keyCode, event)
+                        consumedKeys[event.keyCode] = consumed
+                        if (consumed) {
                             return true // Event consumed, don't let RecyclerView handle it
                         }
                     }
                 }
-                // Also consume ACTION_UP to prevent RecyclerView from handling it
+                // Consume ACTION_UP only if we consumed the corresponding ACTION_DOWN
                 if (event.action == KeyEvent.ACTION_UP) {
-                    return true
+                    val wasConsumed = consumedKeys[event.keyCode] ?: false
+                    consumedKeys.remove(event.keyCode)
+                    if (wasConsumed) {
+                        return true
+                    }
                 }
             }
         }
         return super.dispatchKeyEvent(event)
+    }
+    
+    // Override to prevent RecyclerView from doing its own focus search
+    override fun focusSearch(focused: View?, direction: Int): View? {
+        // Let our custom handler manage all focus movement
+        return null
     }
 }
 
@@ -297,83 +310,110 @@ class VODComponent @JvmOverloads constructor(
         gridLayoutManager = GridLayoutManager(context, columnCount)
         
         // Set custom key handler for navigation with proper boundary checks
-        thumbnailsRecycler.customKeyHandler = { keyCode, event ->
+        thumbnailsRecycler.customKeyHandler = handler@ { keyCode, event ->
             val currentView = thumbnailsRecycler.focusedChild
-            if (currentView != null) {
-                val currentPosition = thumbnailsRecycler.getChildAdapterPosition(currentView)
-                if (currentPosition != RecyclerView.NO_POSITION) {
-                    val spanCount = columnCount
-                    val totalItems = thumbnailAdapter.itemCount
-                    val currentRow = currentPosition / spanCount
-                    val currentCol = currentPosition % spanCount
-                    val totalRows = (totalItems + spanCount - 1) / spanCount
-                    
-                    val nextPosition = when (keyCode) {
-                        android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
-                            val calculatedPos = currentPosition + spanCount
-                            if (calculatedPos >= totalItems) {
-                                // Would go beyond available items, block navigation
-                                Log.d(TAG, "🚫 Blocking DOWN - no item below (pos $currentPosition, would be $calculatedPos, max ${totalItems - 1})")
-                                currentPosition
-                            } else {
-                                calculatedPos
-                            }
-                        }
-                        android.view.KeyEvent.KEYCODE_DPAD_UP -> {
-                            if (currentRow == 0) {
-                                // At top, block navigation
-                                Log.d(TAG, "🚫 Blocking UP at top row")
-                                currentPosition
-                            } else {
-                                currentPosition - spanCount
-                            }
-                        }
-                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                            if (currentCol == spanCount - 1 || currentPosition == totalItems - 1) {
-                                // At right edge, block navigation
-                                Log.d(TAG, "🚫 Blocking RIGHT at edge")
-                                currentPosition
-                            } else {
-                                currentPosition + 1
-                            }
-                        }
-                        android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                            if (currentCol == 0) {
-                                // At left edge, block navigation
-                                Log.d(TAG, "🚫 Blocking LEFT at edge")
-                                currentPosition
-                            } else {
-                                currentPosition - 1
-                            }
-                        }
-                        else -> currentPosition
-                    }
-                    
-                    if (nextPosition != currentPosition) {
-                        Log.d(TAG, "🔍 Moving focus from $currentPosition (row $currentRow, col $currentCol) to $nextPosition")
-                        thumbnailsRecycler.scrollToPosition(nextPosition)
-                        thumbnailsRecycler.post {
-                            gridLayoutManager.findViewByPosition(nextPosition)?.requestFocus()
-                            Log.d(TAG, "✅ Focused position $nextPosition")
-                        }
-                        true // Consume the event
-                    } else {
-                        // Position didn't change (at boundary), consume event to block navigation
-                        true
-                    }
-                } else {
-                    false
-                }
-            } else {
-                false
+            Log.d(TAG, "📍 customKeyHandler - keyCode: $keyCode, currentView: ${currentView != null}")
+            
+            if (currentView == null) {
+                Log.d(TAG, "❌ No focused child, returning false")
+                return@handler false
             }
+            
+            val currentPosition = thumbnailsRecycler.getChildAdapterPosition(currentView)
+            Log.d(TAG, "📍 currentPosition: $currentPosition")
+            
+            if (currentPosition == RecyclerView.NO_POSITION) {
+                Log.d(TAG, "❌ NO_POSITION, returning false")
+                return@handler false
+            }
+            
+            val spanCount = columnCount
+            val totalItems = thumbnailAdapter.itemCount
+            val currentRow = currentPosition / spanCount
+            val currentCol = currentPosition % spanCount
+            
+            Log.d(TAG, "📊 Grid state: pos=$currentPosition, row=$currentRow, col=$currentCol, total=$totalItems, columns=$spanCount")
+            
+            // Check boundaries FIRST and return early if blocked
+            when (keyCode) {
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    val calculatedPos = currentPosition + spanCount
+                    Log.d(TAG, "⬇️ DOWN pressed: would move to $calculatedPos (current: $currentPosition)")
+                    if (calculatedPos >= totalItems) {
+                        Log.d(TAG, "🚫 BLOCKING DOWN - no item below (pos $currentPosition, would be $calculatedPos, max ${totalItems - 1})")
+                        return@handler true  // Consume event, stay at current position
+                    }
+                }
+                android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                    Log.d(TAG, "⬆️ UP pressed: current row=$currentRow")
+                    if (currentRow == 0) {
+                        Log.d(TAG, "🚫 BLOCKING UP at top row")
+                        return@handler true
+                    }
+                }
+                android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    Log.d(TAG, "➡️ RIGHT pressed: current col=$currentCol, spanCount=$spanCount")
+                    if (currentCol == spanCount - 1 || currentPosition == totalItems - 1) {
+                        Log.d(TAG, "🚫 BLOCKING RIGHT at edge")
+                        return@handler true
+                    }
+                }
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    Log.d(TAG, "⬅️ LEFT pressed: current col=$currentCol")
+                    if (currentCol == 0) {
+                        Log.d(TAG, "🚫 BLOCKING LEFT at edge")
+                        return@handler true
+                    }
+                }
+                else -> {
+                    Log.d(TAG, "❓ Unknown keyCode: $keyCode")
+                }
+            }
+            
+            // Calculate next position (boundaries already checked above)
+            val nextPosition = when (keyCode) {
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> currentPosition + spanCount
+                android.view.KeyEvent.KEYCODE_DPAD_UP -> currentPosition - spanCount
+                android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> currentPosition + 1
+                android.view.KeyEvent.KEYCODE_DPAD_LEFT -> currentPosition - 1
+                else -> {
+                    Log.d(TAG, "❌ Invalid key, returning false")
+                    return@handler false
+                }
+            }
+            
+            // Move to next position
+            Log.d(TAG, "🎯 Moving focus: $currentPosition -> $nextPosition (row $currentRow, col $currentCol)")
+            
+            // Update selected position immediately
+            selectedPosition = nextPosition
+            
+            // Try to focus the view if it's already in layout
+            val nextView = gridLayoutManager.findViewByPosition(nextPosition)
+            if (nextView != null && nextView.isAttachedToWindow) {
+                // View already exists, focus immediately
+                nextView.requestFocus()
+                Log.d(TAG, "✅ Instant focus to position $nextPosition")
+            } else {
+                // View needs to be scrolled into view
+                gridLayoutManager.scrollToPositionWithOffset(nextPosition, 0)
+                thumbnailsRecycler.post {
+                    val view = gridLayoutManager.findViewByPosition(nextPosition)
+                    view?.requestFocus()
+                    Log.d(TAG, "✅ Focused after scroll: $nextPosition")
+                }
+            }
+            true // Consume the event
         }
         
         thumbnailsRecycler.apply {
             layoutManager = gridLayoutManager
             adapter = thumbnailAdapter
             setHasFixedSize(true)
-            setItemViewCacheSize(50)
+            // Increase cache to keep more views in memory (2-3 rows worth)
+            setItemViewCacheSize(columnCount * 3)
+            // Increase recycled view pool
+            recycledViewPool.setMaxRecycledViews(0, columnCount * 5)
             itemAnimator = null
             
             // Disable automatic focus search on all children
@@ -442,6 +482,15 @@ class VODComponent @JvmOverloads constructor(
         allItems.clear()
         currentGenreId = null
         
+        // CRITICAL: Stop RecyclerView from processing any pending operations
+        thumbnailsRecycler.stopScroll()
+        
+        // Clear adapter data FIRST to prevent IndexOutOfBoundsException
+        thumbnailAdapter.updateItems(emptyList())
+        
+        // Force RecyclerView to detach and recycle all views
+        thumbnailsRecycler.recycledViewPool.clear()
+        
         // Make sure detail screen is hidden and grid is ready to show
         isDetailScreenVisible = false
         vodDetailContainer.visibility = GONE
@@ -473,6 +522,15 @@ class VODComponent @JvmOverloads constructor(
         loadedPages.clear()
         allItems.clear()
         currentGenreId = null
+        
+        // CRITICAL: Stop RecyclerView from processing any pending operations
+        thumbnailsRecycler.stopScroll()
+        
+        // Clear adapter data FIRST to prevent IndexOutOfBoundsException
+        thumbnailAdapter.updateItems(emptyList())
+        
+        // Force RecyclerView to detach and recycle all views
+        thumbnailsRecycler.recycledViewPool.clear()
         
         // Make sure detail screen is hidden and grid is ready to show
         isDetailScreenVisible = false
@@ -690,29 +748,42 @@ class VODComponent @JvmOverloads constructor(
                 
                 val results = deferredResults.awaitAll()
                 
+                val oldItemCount = allItems.size
+                val newItemsList = mutableListOf<VODItem>()
+                
                 results.forEach { (page, items) ->
                     if (items.isNotEmpty()) {
-                        allItems.addAll(items)
+                        newItemsList.addAll(items)
                         loadedPages.add(page)
                     }
                 }
                 
-                // Sort by page order
-                thumbnailAdapter.updateItems(allItems)
+                // Add to master list
+                allItems.addAll(newItemsList)
                 
-                // Show first item details
-                if (allItems.isNotEmpty() && selectedPosition == 0) {
-                    updateBackdrop(allItems[0])
-                }
-                
-                // Hide loading indicator
-                loadingIndicator.visibility = GONE
-                
-                // Focus first item
-                thumbnailsRecycler.post {
-                    thumbnailsRecycler.postDelayed({
-                        thumbnailsRecycler.getChildAt(0)?.requestFocus()
-                    }, 150)
+                // Update adapter - use different methods for initial vs pagination
+                if (oldItemCount == 0) {
+                    // Initial load - use updateItems and focus first item
+                    thumbnailAdapter.updateItems(allItems)
+                    
+                    // Show first item details
+                    if (allItems.isNotEmpty() && selectedPosition == 0) {
+                        updateBackdrop(allItems[0])
+                    }
+                    
+                    // Hide loading indicator
+                    loadingIndicator.visibility = GONE
+                    
+                    // Focus first item
+                    thumbnailsRecycler.post {
+                        thumbnailsRecycler.postDelayed({
+                            thumbnailsRecycler.getChildAt(0)?.requestFocus()
+                        }, 150)
+                    }
+                } else {
+                    // Pagination - append items without losing focus
+                    thumbnailAdapter.appendItems(newItemsList)
+                    Log.d(TAG, "✅ Appended ${newItemsList.size} new items, focus preserved")
                 }
                 
                 isLoadingMore = false
@@ -1247,6 +1318,14 @@ class VODComponent @JvmOverloads constructor(
             notifyDataSetChanged()
         }
         
+        // Append new items without losing focus (for pagination)
+        fun appendItems(newItems: List<VODItem>) {
+            val oldSize = items.size
+            items = items + newItems
+            notifyItemRangeInserted(oldSize, newItems.size)
+            Log.d(TAG, "📝 Appended ${newItems.size} items (total now: ${items.size})")
+        }
+        
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ThumbnailViewHolder {
             val view = LayoutInflater.from(parent.context)
                 .inflate(R.layout.item_vod_thumbnail, parent, false)
@@ -1254,6 +1333,11 @@ class VODComponent @JvmOverloads constructor(
         }
         
         override fun onBindViewHolder(holder: ThumbnailViewHolder, position: Int) {
+            // Safety check to prevent IndexOutOfBoundsException
+            if (position < 0 || position >= items.size) {
+                Log.e(TAG, "❌ Invalid position in onBindViewHolder: $position, itemCount: ${items.size}")
+                return
+            }
             holder.bind(items[position], position)
         }
         

@@ -292,7 +292,15 @@ class SubtitleSideNavComponent @JvmOverloads constructor(
         opensubtitlesListContainer.visibility = View.GONE
         noSubtitlesMessage.visibility = View.GONE
         
-        Log.d(TAG, "🔍 Searching OpenSubtitles - Title: $movieTitle, IMDB: $imdbId, Year: $year, Season: $season, Episode: $episode")
+        Log.d(TAG, "=".repeat(80))
+        Log.d(TAG, "🔍 SEARCHING OPENSUBTITLES")
+        Log.d(TAG, "=".repeat(80))
+        Log.d(TAG, "📝 Title: $movieTitle")
+        Log.d(TAG, "📝 IMDB ID: ${imdbId ?: "(null)"}")
+        Log.d(TAG, "📝 Year: ${year ?: "(null)"}")
+        Log.d(TAG, "📝 Season: ${season ?: "(null)"}")
+        Log.d(TAG, "📝 Episode: ${episode ?: "(null)"}")
+        Log.d(TAG, "=".repeat(80))
         
         scope.launch {
             try {
@@ -313,7 +321,16 @@ class SubtitleSideNavComponent @JvmOverloads constructor(
                     emptyList()
                 }
                 
-                Log.d(TAG, "📥 OpenSubtitles returned ${subtitles.size} results")
+                Log.d(TAG, "=".repeat(80))
+                Log.d(TAG, "📝 SUBTITLE SEARCH RESULTS")
+                Log.d(TAG, "📝 Found ${subtitles.size} subtitles")
+                if (subtitles.isNotEmpty()) {
+                    Log.d(TAG, "📝 First few results:")
+                    subtitles.take(3).forEach { sub ->
+                        Log.d(TAG, "📝   - ${sub.fileName} (${sub.language})")
+                    }
+                }
+                Log.d(TAG, "=".repeat(80))
                 subtitleList = subtitles
                 
                 // Hide loading

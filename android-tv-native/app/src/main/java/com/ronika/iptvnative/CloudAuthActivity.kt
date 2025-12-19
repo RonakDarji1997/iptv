@@ -135,17 +135,37 @@ class CloudAuthActivity : AppCompatActivity() {
                     val syncPrefs = getSharedPreferences("iptv_sync", MODE_PRIVATE)
                     val token = syncPrefs.getString("access_token", "") ?: ""
                     
+                    // Link to cloud and get subscription status
+                    tvStatus.text = "☁️ Linking to cloud..."
+                    val cloudSyncManager = com.ronika.iptvnative.managers.CloudSyncManager(this@CloudAuthActivity)
+                    val deviceId = android.provider.Settings.Secure.getString(
+                        contentResolver,
+                        android.provider.Settings.Secure.ANDROID_ID
+                    )
+                    
+                    val linkResult = cloudSyncManager.linkToCloud(
+                        email = email,
+                        password = password,
+                        deviceId = deviceId,
+                        deviceName = android.os.Build.MODEL
+                    )
+                    
+                    val subscriptionEnabled = linkResult.getOrNull()?.subscriptionEnabled ?: false
+                    
                     val user = com.ronika.iptvnative.database.entities.UserEntity(
                         username = email.substringBefore('@'),
                         email = email,
                         password = password, // Store for token refresh
                         bearerToken = token,
                         tokenExpiry = System.currentTimeMillis() + (24 * 60 * 60 * 1000), // 24 hours
-                        lastSync = System.currentTimeMillis()
+                        lastSync = System.currentTimeMillis(),
+                        cloudUserId = linkResult.getOrNull()?.cloudUserId,
+                        cloudEnabled = true,
+                        subscriptionEnabled = subscriptionEnabled
                     )
                     
                     database.userDao().insertUser(user)
-                    Log.d(TAG, "✅ User saved to database: ${user.email}")
+                    Log.d(TAG, "✅ User saved to database: ${user.email}, Subscription: $subscriptionEnabled")
                     
                     // Small delay to ensure SharedPreferences is committed across processes
                     delay(100)

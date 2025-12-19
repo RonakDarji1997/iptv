@@ -122,10 +122,32 @@ class VODPlayerComponent @JvmOverloads constructor(
     private var onBackPressed: (() -> Unit)? = null
     private var onNextEpisode: (() -> Unit)? = null
     
+    // Track if next button should be visible (for series with next episode)
+    private var hasNextEpisode: Boolean = false
+    
     init {
         LayoutInflater.from(context).inflate(R.layout.component_vod_player, this, true)
         setupViews()
         setupPlayer()
+        checkSubtitleFeatureAccess()
+    }
+    
+    private fun checkSubtitleFeatureAccess() {
+        scope.launch {
+            try {
+                val cloudSyncManager = com.ronika.iptvnative.managers.CloudSyncManager(context)
+                val hasSubscription = cloudSyncManager.isSubscriptionEnabled()
+                
+                // Show/hide subtitle button based on subscription
+                subtitleButton.visibility = if (hasSubscription) View.VISIBLE else View.GONE
+                
+                Log.d(TAG, "Subtitle feature access: $hasSubscription")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error checking subtitle access", e)
+                // Default to hidden if check fails
+                subtitleButton.visibility = View.GONE
+            }
+        }
     }
 
     private fun setupViews() {
@@ -191,13 +213,15 @@ class VODPlayerComponent @JvmOverloads constructor(
             playerView.setControllerVisibilityListener(object : PlayerView.ControllerVisibilityListener {
                 override fun onVisibilityChanged(visibility: Int) {
                     val isVisible = visibility == View.VISIBLE
+                    Log.d(TAG, "🎮 Controller visibility changed - isVisible: $isVisible, hasNextEpisode: $hasNextEpisode, contentType: $currentContentType")
                     if (isVisible) {
                         // Show all overlays at the same time as progress bar
                         contentTitle.visibility = View.VISIBLE
                         restartButton.visibility = View.VISIBLE
                         subtitleButton.visibility = View.VISIBLE
-                        // Preserve nextButton visibility as set for series vs movies
-                        if (nextButton.visibility == View.VISIBLE) nextButton.visibility = View.VISIBLE
+                        // Restore next button visibility based on stored state
+                        nextButton.visibility = if (hasNextEpisode) View.VISIBLE else View.GONE
+                        Log.d(TAG, "🎮 Restoring nextButton to: ${if (hasNextEpisode) "VISIBLE" else "GONE"}")
                         aspectRatioButton.visibility = View.VISIBLE
                         // Ensure progress/timebar are visible as well and match timing
                         progressBarContainer?.visibility = View.VISIBLE
@@ -223,6 +247,7 @@ class VODPlayerComponent @JvmOverloads constructor(
                         }
                     } else {
                         // Hide everything immediately to match the progress bar hide timing
+                        Log.d(TAG, "🎮 Hiding all controls (nextButton state preserved: hasNextEpisode=$hasNextEpisode)")
                         contentTitle.visibility = View.GONE
                         restartButton.visibility = View.GONE
                         subtitleButton.visibility = View.GONE
@@ -779,7 +804,16 @@ class VODPlayerComponent @JvmOverloads constructor(
             currentMovieTitle // e.g., "The Matrix"
         }
         
-        Log.d(TAG, "Opening subtitle side nav - Title: $searchTitle, Season: $currentSeasonNumber, Episode: $currentEpisodeNumber")
+        Log.d(TAG, "=".repeat(80))
+        Log.d(TAG, "🎬 OPENING SUBTITLE SIDE NAV")
+        Log.d(TAG, "=".repeat(80))
+        Log.d(TAG, "📝 Content Type: $currentContentType")
+        Log.d(TAG, "📝 Series Title (currentSeriesTitle): $currentSeriesTitle")
+        Log.d(TAG, "📝 Episode/Movie Title (currentMovieTitle): $currentMovieTitle")
+        Log.d(TAG, "📝 Search Title (will be sent): $searchTitle")
+        Log.d(TAG, "📝 Season Number: $currentSeasonNumber")
+        Log.d(TAG, "📝 Episode Number: $currentEpisodeNumber")
+        Log.d(TAG, "=".repeat(80))
         
         // Show side nav with movie/series metadata
         subtitleSideNav.show(
@@ -1010,7 +1044,9 @@ class VODPlayerComponent @JvmOverloads constructor(
         lastDisplayedCueIndex = -1
         
         contentTitle.text = title
+        hasNextEpisode = false  // Clear state for movies
         nextButton.visibility = GONE // Hide next button for movies
+        Log.d(TAG, "🎬 Movie playback - hasNextEpisode cleared, nextButton visibility: GONE")
         
         // Update focus navigation for movies (no next button): restart <-> subtitle <-> aspectRatio
         restartButton.nextFocusRightId = R.id.subtitle_button
@@ -1074,7 +1110,9 @@ class VODPlayerComponent @JvmOverloads constructor(
             title
         }
         contentTitle.text = displayTitle
+        hasNextEpisode = hasNext  // Store state for controller visibility listener
         nextButton.visibility = if (hasNext) VISIBLE else GONE
+        Log.d(TAG, "📺 Series playback - hasNextEpisode set to: $hasNext, nextButton visibility: ${if (hasNext) "VISIBLE" else "GONE"}")
         
         // Update focus navigation for series: restart -> next -> subtitle -> aspectRatio
         restartButton.nextFocusRightId = R.id.next_button
