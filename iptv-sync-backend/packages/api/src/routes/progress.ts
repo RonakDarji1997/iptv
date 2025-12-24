@@ -155,6 +155,30 @@ export const createProgressRouter = (pool: Pool) => {
       res.status(500).json({ error: 'Failed to update progress' });
     }
   });
+
+  // DELETE /progress/:id - Delete watch progress by ID
+  router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const { userId } = (req as any).user;
+      const { id } = req.params;
+
+      const result = await pool.query(
+        'DELETE FROM watch_progress WHERE id = $1 AND user_id = $2 RETURNING *',
+        [id, userId]
+      );
+
+      if (result.rowCount === 0) {
+        return res.status(404).json({ error: 'Progress not found' });
+      }
+
+      console.log('✅ [Progress DELETE] Deleted:', id);
+      res.json({ success: true });
+      
+    } catch (error) {
+      console.error('❌ Progress delete error:', error);
+      res.status(500).json({ error: 'Failed to delete progress' });
+    }
+  });
   
   return router;
 };

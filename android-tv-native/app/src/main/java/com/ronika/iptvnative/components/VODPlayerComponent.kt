@@ -1332,25 +1332,34 @@ class VODPlayerComponent @JvmOverloads constructor(
                             currentMovieTitle
                         }
                         
-                        Log.d(TAG, "Calling repository.saveProgress for $titleToSave ($currentContentType)")
-                        // For series: Use seasonId as the key, but store actual episodeId in a custom field
-                        // This way we have one entry per season, but know which episode to show progress on
-                        val actualEpisodeId = if (currentContentType == "SERIES" && currentSeasonId != null) {
-                            "${currentSeasonId}_${currentEpisodeId}"  // Composite key: season_episode
+                        Log.d(TAG, "💾 Saving progress for $titleToSave ($currentContentType)")
+                        // For series: Use actual episodeId to match cloud sync format
+                        // For movies: Use empty string
+                        val actualEpisodeId = if (currentContentType == "SERIES") {
+                            currentEpisodeId ?: ""  // Use actual episode ID (e.g., "2682741")
                         } else {
-                            // For movies, store empty string so DB unique index that includes episode_id treats movie rows properly
-                            currentEpisodeId ?: ""
+                            currentEpisodeId ?: ""  // For movies, store empty string
                         }
+                        
+                        // Use seriesId as contentId for episodes to match cloud sync
+                        val contentIdToSave = if (currentContentType == "SERIES" && currentContentId != null) {
+                            currentContentId!!  // This should be the seriesId (e.g., "428014")
+                        } else {
+                            currentContentId!!  // For movies, use movieId
+                        }
+                        
+                        Log.d(TAG, "💾 Save params: contentId=$contentIdToSave, episodeId=$actualEpisodeId, providerId='', type=${if (currentContentType == "SERIES") "EPISODE" else currentContentType}")
+                        
                         progressRepository.saveProgress(
-                            contentId = currentContentId!!,
-                            contentType = currentContentType!!,
-                            providerId = currentProviderId ?: "",
+                            contentId = contentIdToSave,
+                            contentType = if (currentContentType == "SERIES") "EPISODE" else currentContentType!!,
+                            providerId = "",  // Match cloud sync pattern
                             title = titleToSave,  // Use series title for series, movie title for movies
                             posterUrl = currentPosterUrl,
                             currentPosition = position,
                             duration = duration,
                             cmd = currentCmd ?: "",
-                            episodeId = actualEpisodeId,  // Use composite key for series (empty string for movies)
+                            episodeId = actualEpisodeId,  // Use actual episode ID for series
                             episodeNumber = currentEpisodeNumber,
                             seasonNumber = currentSeasonNumber
                         )

@@ -2,10 +2,11 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Play, Star, Heart, Clock, History, Volume2, VolumeX, Maximize } from 'lucide-react'
+import { Play, Star, Heart, Clock, History, Volume2, VolumeX, Maximize, X } from 'lucide-react'
 import Navbar from '@/components/Navbar'
 import { authService } from '@/services/authService'
 import { contentService } from '@/services/contentService'
+import ContentInfoModal from '@/components/ContentInfoModal'
 import Image from 'next/image'
 import toast from 'react-hot-toast'
 import { isMobileApp, listenToNative } from '@/utils/mobileDetection'
@@ -62,6 +63,9 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true)
   const [loadingStream, setLoadingStream] = useState(false)
   const [isMuted, setIsMuted] = useState(true)
+  const [selectedContent, setSelectedContent] = useState<any>(null)
+  const [showInfoModal, setShowInfoModal] = useState(false)
+  const [contentType, setContentType] = useState<'movie' | 'series' | 'live'>('movie')
 
   useEffect(() => {
     // Skip auth check on mobile - native app handles session
@@ -220,11 +224,70 @@ export default function HomePage() {
   }
 
   const handleVODClick = (item: FavoriteItem) => {
-    if (item.content_type === 'MOVIE') {
-      router.push(`/browse/movies/category/${item.content_id}`)
-    } else if (item.content_type === 'SERIES' || item.content_type === 'VOD') {
-      // Use 0 as category ID for favorites too
-      router.push(`/browse/series/0/${item.content_id}`)
+    // Open info modal with content details
+    setSelectedContent({
+      id: item.content_id,
+      name: item.content_name,
+      is_series: item.content_type === 'SERIES' || item.content_type === 'VOD' ? 1 : 0,
+      imageUrl: item.content_poster,
+      description: item.metadata?.description || '',
+    })
+    setContentType(item.content_type === 'SERIES' || item.content_type === 'VOD' ? 'series' : 'movie')
+    setShowInfoModal(true)
+  }
+
+  const deleteProgress = async (progressId: string) => {
+    try {
+      const response = await fetch(`${API_URL}/progress/${progressId}`, {
+        method: 'DELETE',
+        headers: authService.getAuthHeader(),
+      })
+      if (response.ok) {
+        setContinueWatching(prev => prev.filter(item => item.id !== progressId))
+        toast.success('Removed from continue watching')
+      } else {
+        toast.error('Failed to remove item')
+      }
+    } catch (error) {
+      console.error('Failed to delete progress:', error)
+      toast.error('Failed to remove item')
+    }
+  }
+
+  const deleteFavorite = async (favoriteId: string) => {
+    try {
+      const response = await fetch(`${API_URL}/favorites/${favoriteId}`, {
+        method: 'DELETE',
+        headers: authService.getAuthHeader(),
+      })
+      if (response.ok) {
+        setFavoriteVOD(prev => prev.filter(item => item.id !== favoriteId))
+        toast.success('Removed from favorites')
+      } else {
+        toast.error('Failed to remove favorite')
+      }
+    } catch (error) {
+      console.error('Failed to delete favorite:', error)
+      toast.error('Failed to remove favorite')
+    }
+  }
+
+  const deleteChannelAnalytics = async (channelId: string) => {
+    try {
+      const response = await fetch(`${API_URL}/channel-analytics/${channelId}`, {
+        method: 'DELETE',
+        headers: authService.getAuthHeader(),
+      })
+      if (response.ok) {
+        setRecentChannels(prev => prev.filter(item => item.id !== channelId))
+        setFavoriteChannels(prev => prev.filter(item => (item.id || item.channel_id) !== channelId))
+        toast.success('Removed from history')
+      } else {
+        toast.error('Failed to remove item')
+      }
+    } catch (error) {
+      console.error('Failed to delete channel analytics:', error)
+      toast.error('Failed to remove item')
     }
   }
 
@@ -429,10 +492,22 @@ export default function HomePage() {
                 {continueWatching.map((item) => (
                   <div
                     key={item.id}
-                    onClick={() => handleContinueWatching(item)}
-                    className="group cursor-pointer flex-shrink-0 w-32 sm:w-36 md:w-40 snap-start"
+                    className="group cursor-pointer flex-shrink-0 w-32 sm:w-36 md:w-40 snap-start relative"
                   >
-                    <div className="relative aspect-[2/3] rounded-lg overflow-hidden bg-gray-800 mb-2">
+                    {/* Delete button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        deleteProgress(item.id)
+                      }}
+                      className="absolute top-1 right-1 z-10 p-1.5 bg-red-600/90 hover:bg-red-700 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Remove"
+                    >
+                      <X className="w-3 h-3 text-white" />
+                    </button>
+                    
+                    <div onClick={() => handleContinueWatching(item)}>
+                      <div className="relative aspect-[2/3] rounded-lg overflow-hidden bg-gray-800 mb-2">
                       {item.content_poster ? (
                         <Image
                           src={item.content_poster}
@@ -475,8 +550,7 @@ export default function HomePage() {
                       <p className="text-[10px] text-gray-500">
                         S{item.season_number} E{item.episode_number}
                       </p>
-                    )}
-                  </div>
+                    )}                    </div>                  </div>
                 ))}
               </div>
             </div>
@@ -499,10 +573,22 @@ export default function HomePage() {
                 {favoriteVOD.map((item) => (
                   <div
                     key={item.id}
-                    onClick={() => handleVODClick(item)}
-                    className="group cursor-pointer flex-shrink-0 w-32 sm:w-36 md:w-40 snap-start"
+                    className="group cursor-pointer flex-shrink-0 w-32 sm:w-36 md:w-40 snap-start relative"
                   >
-                    <div className="relative aspect-[2/3] rounded-lg overflow-hidden bg-gray-800 mb-2">
+                    {/* Delete button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        deleteFavorite(item.id)
+                      }}
+                      className="absolute top-1 right-1 z-10 p-1.5 bg-red-600/90 hover:bg-red-700 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Remove from favorites"
+                    >
+                      <X className="w-3 h-3 text-white" />
+                    </button>
+                    
+                    <div onClick={() => handleVODClick(item)}>
+                      <div className="relative aspect-[2/3] rounded-lg overflow-hidden bg-gray-800 mb-2">
                       {item.content_poster ? (
                         <Image
                           src={item.content_poster}
@@ -526,6 +612,7 @@ export default function HomePage() {
                     <h3 className="text-xs font-medium text-white line-clamp-1">
                       {item.content_name}
                     </h3>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -549,10 +636,22 @@ export default function HomePage() {
                 {recentChannels.map((channel, index) => (
                   <div
                     key={channel.id || `${channel.provider_id}-${channel.channel_id}` || `channel-${index}`}
-                    onClick={() => handleRecentChannelClick(channel)}
-                    className="group cursor-pointer flex-shrink-0 w-32 sm:w-36 md:w-40 snap-start"
+                    className="group cursor-pointer flex-shrink-0 w-32 sm:w-36 md:w-40 snap-start relative"
                   >
-                    <div className="relative aspect-[2/3] rounded-lg overflow-hidden bg-gray-800 mb-2">
+                    {/* Delete button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        deleteChannelAnalytics(channel.id || '')
+                      }}
+                      className="absolute top-1 right-1 z-10 p-1.5 bg-red-600/90 hover:bg-red-700 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Remove from history"
+                    >
+                      <X className="w-3 h-3 text-white" />
+                    </button>
+                    
+                    <div onClick={() => handleRecentChannelClick(channel)}>
+                      <div className="relative aspect-[2/3] rounded-lg overflow-hidden bg-gray-800 mb-2">
                       {channel.channel_logo ? (
                         <Image
                           src={channel.channel_logo}
@@ -586,6 +685,7 @@ export default function HomePage() {
                         Ch {channel.channel_number}
                       </p>
                     )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -605,10 +705,21 @@ export default function HomePage() {
               {favoriteChannels.slice(0, 8).map((channel, index) => (
                 <div
                   key={`${channel.channel_id}-${index}`}
-                  onClick={() => handleChannelClick(channel)}
-                  className="group cursor-pointer bg-gray-900/40 border border-gray-800 rounded-lg p-3 hover:bg-gray-800/60 hover:border-gray-700 transition-all"
+                  className="group cursor-pointer bg-gray-900/40 border border-gray-800 rounded-lg p-3 hover:bg-gray-800/60 hover:border-gray-700 transition-all relative"
                 >
-                  <div className="flex items-center space-x-3">
+                  {/* Delete button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      deleteChannelAnalytics(channel.id || channel.channel_id)
+                    }}
+                    className="absolute top-2 right-2 z-10 p-1.5 bg-red-600/90 hover:bg-red-700 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Remove from favorites"
+                  >
+                    <X className="w-3 h-3 text-white" />
+                  </button>
+                  
+                  <div onClick={() => handleChannelClick(channel)} className="flex items-center space-x-3">
                     {channel.channel_logo ? (
                       <div className="relative w-12 h-12 rounded-lg overflow-hidden bg-gray-800 flex-shrink-0">
                         <Image
@@ -673,6 +784,14 @@ export default function HomePage() {
           </div>
         )}
       </div>
+
+      {/* Content Info Modal */}
+      <ContentInfoModal
+        isOpen={showInfoModal}
+        onClose={() => setShowInfoModal(false)}
+        content={selectedContent || {}}
+        type={contentType}
+      />
     </div>
   )
 }

@@ -4,17 +4,22 @@ import android.content.Context
 import android.util.Log
 import com.ronika.iptvnative.database.AppDatabase
 import com.ronika.iptvnative.database.entities.FavoriteEntity
+import com.ronika.iptvnative.managers.CloudSyncManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 
 /**
  * Repository for managing favorite movies and series
  */
-class FavoriteRepository(context: Context) {
+class FavoriteRepository(private val context: Context) {
     
     private val TAG = "FavoriteRepository"
     private val favoriteDao = AppDatabase.getDatabase(context).favoriteDao()
     private val movieDao = AppDatabase.getDatabase(context).movieDao()
     private val seriesDao = AppDatabase.getDatabase(context).seriesDao()
+    private val cloudSyncManager = CloudSyncManager.getInstance(context)
     
     companion object {
         const val TYPE_MOVIE = "MOVIE"
@@ -44,6 +49,16 @@ class FavoriteRepository(context: Context) {
         )
         favoriteDao.insert(favorite)
         Log.d(TAG, "Added favorite: $name (id=$itemId, type=$type, provider=$providerId)")
+        
+        // Trigger cloud sync in background
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                cloudSyncManager.syncToCloud()
+                Log.d(TAG, "☁️ Favorite synced to cloud")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to sync favorite to cloud", e)
+            }
+        }
     }
     
     /**
@@ -52,6 +67,16 @@ class FavoriteRepository(context: Context) {
     suspend fun removeFavorite(itemId: String, type: String, providerId: String) {
         favoriteDao.delete(itemId, type, providerId)
         Log.d(TAG, "Removed favorite: id=$itemId, type=$type, provider=$providerId")
+        
+        // Trigger cloud sync in background
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                cloudSyncManager.syncToCloud()
+                Log.d(TAG, "☁️ Favorite removal synced to cloud")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to sync favorite removal to cloud", e)
+            }
+        }
     }
     
     /**

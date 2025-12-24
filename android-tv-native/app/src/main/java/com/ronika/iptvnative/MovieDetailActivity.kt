@@ -17,7 +17,12 @@ import coil.request.CachePolicy
 import coil.transform.RoundedCornersTransformation
 import coil.transform.CircleCropTransformation
 import com.ronika.iptvnative.services.TmdbService
+import com.ronika.iptvnative.managers.CloudSyncManager
+import com.ronika.iptvnative.repository.WatchProgressRepository
+import com.ronika.iptvnative.database.WatchProgress
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MovieDetailActivity : ComponentActivity() {
 
@@ -66,6 +71,9 @@ class MovieDetailActivity : ComponentActivity() {
     private var genres: String? = null
     private var cmd: String? = null
     private var tmdbDetails: TmdbService.TmdbDetails? = null
+    private var providerId: String = ""
+    private var currentProgress: WatchProgress? = null
+    private lateinit var cloudSyncManager: CloudSyncManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,12 +98,24 @@ class MovieDetailActivity : ComponentActivity() {
 
         android.util.Log.e("MovieDetailActivity", "Movie: $movieName, Year: $year, CMD: $cmd")
 
+        cloudSyncManager = CloudSyncManager.getInstance(applicationContext)
+        
+        // Get active provider
+        lifecycleScope.launch {
+            val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(applicationContext)
+            val activeProvider = database.providerDao().getActiveProvider()
+            providerId = activeProvider?.id ?: ""
+        }
+
         initViews()
         
         // Hide content initially until we load data
         backdropImage.alpha = 0f
         movieTitle.alpha = 0f
         playButton.alpha = 0f
+        
+        // Fetch latest progress from cloud before loading
+        refreshProgress()
         
         loadTmdbData()
 
@@ -148,6 +168,55 @@ class MovieDetailActivity : ComponentActivity() {
         }
         
         android.util.Log.e("MovieDetailActivity", "Play button initialized, requesting focus...")
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        // Refresh progress when returning from player
+        refreshProgress()
+    }
+    
+    private fun refreshProgress() {
+        lifecycleScope.launch {
+            try {
+                // Sync from cloud first
+                if (cloudSyncManager.isCloudEnabled()) {
+                    android.util.Log.d("MovieDetail", "🔄 Syncing progress from cloud...")
+                    cloudSyncManager.syncFromCloud()
+                }
+                
+                // Load progress from local DB
+                if (providerId.isNotEmpty()) {
+                    val repository = WatchProgressRepository(applicationContext)
+                    currentProgress = repository.getProgress(movieId, "MOVIE", providerId)
+                    
+                    withContext(Dispatchers.Main) {
+                        updateProgressUI()
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MovieDetail", "Error refreshing progress", e)
+            }
+        }
+    }
+    
+    private fun updateProgressUI() {
+        if (currentProgress != null) {
+            val percentage = currentProgress!!.progressPercentage
+            android.util.Log.d("MovieDetail", "📊 Progress: $percentage% for $movieName")
+            
+            // Show progress bar
+            progressContainer.visibility = View.VISIBLE
+            watchProgress.progress = percentage
+            progressText.text = "$percentage% watched"
+            
+            // Change button to "Resume" instead of "Play"
+            playButton.text = "▶️ Resume"
+        } else {
+            // No progress, hide progress bar
+            progressContainer.visibility = View.GONE
+            playButton.text = "▶️ Play"
+        }
     }
 
     private fun displayBasicInfo() {

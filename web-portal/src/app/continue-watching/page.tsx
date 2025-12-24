@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Play, Film, Tv, Clock } from 'lucide-react';
+import { ArrowLeft, Play, Film, Tv, Clock, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authService } from '@/services/authService';
 import Image from 'next/image';
@@ -148,6 +148,27 @@ export default function ContinueWatchingPage() {
     }
   };
 
+  const deleteProgress = async (e: React.MouseEvent, itemId: number) => {
+    e.stopPropagation();
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+      const response = await fetch(`${apiUrl}/progress/${itemId}`, {
+        method: 'DELETE',
+        headers: authService.getAuthHeader(),
+      });
+      
+      if (response.ok) {
+        setProgress(prev => prev.filter(item => item.id !== itemId));
+        toast.success('Removed from continue watching');
+      } else {
+        toast.error('Failed to remove item');
+      }
+    } catch (error) {
+      console.error('Failed to delete progress:', error);
+      toast.error('Failed to remove item');
+    }
+  };
+
   const getProgress = (item: WatchProgress) => {
     return Math.floor((item.current_position / item.duration) * 100);
   };
@@ -251,6 +272,15 @@ export default function ContinueWatchingPage() {
                 className="group relative bg-gray-800/50 rounded-lg overflow-hidden hover:ring-2 hover:ring-yellow-500 transition-all cursor-pointer"
                 onClick={() => resumeContent(item)}
               >
+                {/* Delete button */}
+                <button
+                  onClick={(e) => deleteProgress(e, item.id)}
+                  className="absolute top-2 left-2 z-10 p-1.5 bg-red-600/90 hover:bg-red-700 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Remove"
+                >
+                  <X className="w-3 h-3 text-white" />
+                </button>
+                
                 <div className="aspect-[2/3] relative">
                   {item.poster ? (
                     <Image

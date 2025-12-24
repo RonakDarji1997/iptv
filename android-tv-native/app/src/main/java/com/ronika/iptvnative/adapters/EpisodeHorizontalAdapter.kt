@@ -139,9 +139,22 @@ class EpisodeHorizontalAdapter(
             try {
                 val repository = WatchProgressRepository(holder.itemView.context)
                 val progress = withContext(Dispatchers.IO) {
-                    // Check for progress using composite key: seasonId_episodeId
-                    val compositeKey = "${episode.seasonId}_${episode.id}"
-                    repository.getEpisodeProgress(seriesId, compositeKey, providerId)
+                    // Try to find progress in two ways:
+                    // 1. First try with just episode ID (for cloud-synced data)
+                    var prog = repository.getEpisodeProgress(seriesId, episode.id, providerId)
+                    android.util.Log.d("EpisodeAdapter", "🔍 Query 1: seriesId=$seriesId, episodeId=${episode.id}, providerId=$providerId, found=${prog != null}")
+                    if (prog != null) {
+                        android.util.Log.d("EpisodeAdapter", "   ✅ Found: contentId=${prog.contentId}, episodeId=${prog.episodeId}, progress=${prog.progressPercentage}%")
+                    }
+                    
+                    // 2. If not found, try with composite key: seasonId_episodeId (for local playback data)
+                    if (prog == null) {
+                        val compositeKey = "${episode.seasonId}_${episode.id}"
+                        prog = repository.getEpisodeProgress(seriesId, compositeKey, providerId)
+                        android.util.Log.d("EpisodeAdapter", "🔍 Query 2: seriesId=$seriesId, compositeKey=$compositeKey, providerId=$providerId, found=${prog != null}")
+                    }
+                    
+                    prog
                 }
                 
                 if (progress != null && progress.currentPosition > 0) {

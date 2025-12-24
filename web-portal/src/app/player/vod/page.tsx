@@ -317,7 +317,10 @@ function VODPlayerContent() {
     if (video && contentId && durationRef.current > 0) {
       const currentPosition = video.currentTime;
       console.log('[Progress] 📍 Position at back:', currentPosition, '/', durationRef.current);
+      // Wait for progress to save before navigating
       await saveWatchProgress(currentPosition, durationRef.current);
+      // Small delay to ensure the request completes
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
     
     router.back();
@@ -1044,14 +1047,6 @@ function VODPlayerContent() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // CRITICAL: Prevent VOD player page from loading on mobile
-  // Mobile apps should never navigate to /player/vod - they use native player directly
-  if (isMobileApp()) {
-    console.log('[VOD] Mobile app detected - not rendering player page');
-    // Don't render anything on mobile - native player handles playback
-    return null;
-  }
-
   if (error) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
@@ -1085,17 +1080,25 @@ function VODPlayerContent() {
         overflow: 'hidden'
       }}
       onMouseMove={handleMouseMove}
-      onClick={togglePlayPause}
+      onClick={(e) => {
+        // Show controls on click, but don't toggle play/pause
+        const target = e.target as HTMLElement;
+        // Ignore clicks on control elements
+        if (!target.closest('[data-controls]')) {
+          handleMouseMove();
+        }
+      }}
       onTouchStart={(e) => {
         handleMouseMove();
         setIsDraggingProgress(false);
       }}
       onTouchEnd={(e) => {
-        // Only toggle play/pause if not dragging and tapping on video area
+        // Just show controls on touch, don't toggle play/pause
         if (!isDraggingProgress) {
           const target = e.target as HTMLElement;
-          if (target === containerRef.current || target === videoRef.current) {
-            togglePlayPause();
+          // Only show controls if not tapping on a control element
+          if (!target.closest('[data-controls]')) {
+            handleMouseMove();
           }
         }
         setIsDraggingProgress(false);

@@ -92,6 +92,45 @@ export const createSyncRouter = (pool: Pool) => {
     }
   });
   
+  // GET /api/sync/providers - Get all providers for user
+  router.get('/providers', authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const userId = (req as any).userId; // From auth middleware
+      
+      const result = await pool.query(
+        `SELECT 
+          p.id as provider_db_id,
+          p.provider_id,
+          p.name,
+          p.type,
+          p.server_url,
+          p.mac_address,
+          p.serial_number,
+          p.username,
+          p.password,
+          p.is_active,
+          p.is_configured,
+          p.created_at,
+          p.updated_at
+        FROM providers p
+        WHERE p.user_id = $1
+        ORDER BY p.created_at DESC`,
+        [userId]
+      );
+      
+      console.log(`📦 Fetched ${result.rows.length} providers for user ${userId}`);
+      
+      res.json({ 
+        success: true,
+        providers: result.rows 
+      });
+      
+    } catch (error) {
+      console.error('❌ Get providers error:', error);
+      res.status(500).json({ error: 'Failed to get providers', details: (error as Error).message });
+    }
+  });
+  
   // POST /api/sync/categories - Sync categories for a provider
   router.post('/categories', authMiddleware, async (req: Request, res: Response) => {
     try {

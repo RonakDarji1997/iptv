@@ -16,6 +16,7 @@ import com.ronika.iptvnative.R
 import com.ronika.iptvnative.adapters.EpisodeHorizontalAdapter
 import com.ronika.iptvnative.database.AppDatabase
 import com.ronika.iptvnative.database.dao.ProviderDao
+import com.ronika.iptvnative.managers.CloudSyncManager
 import com.ronika.iptvnative.models.Episode
 import com.ronika.iptvnative.models.Season
 import com.ronika.iptvnative.repository.FavoriteRepository
@@ -506,6 +507,16 @@ class SeriesDetailComponent @JvmOverloads constructor(
         android.util.Log.e("SeriesDetail", "Episodes adapter set, not requesting focus to prevent scroll")
     }
     
+    fun refreshEpisodeAdapter() {
+        // Notify the adapter that data may have changed (progress bars)
+        if (episodeAdapter != null) {
+            episodeAdapter?.notifyDataSetChanged()
+            android.util.Log.d(TAG, "📊 Episode adapter refreshed to show updated progress (${episodeAdapter?.itemCount} episodes)")
+        } else {
+            android.util.Log.w(TAG, "⚠️ Episode adapter is null, cannot refresh")
+        }
+    }
+    
     private fun updateEpisodeDescription(episode: Episode, seasonNumber: String) {
         currentFocusedEpisode = episode
         
@@ -593,6 +604,9 @@ class SeriesDetailComponent @JvmOverloads constructor(
         // Load TMDB data FIRST to get TV ID, then load seasons
         scope.launch {
             try {
+                // Sync progress from cloud BEFORE loading series data
+                syncProgressFromCloud()
+                
                 // CRITICAL: Load TMDB first to populate tmdbTvId before loading episodes
                 loadTmdbData()
                 
@@ -617,6 +631,11 @@ class SeriesDetailComponent @JvmOverloads constructor(
                 
                 // Check for saved progress after loading episodes
                 checkSeriesProgress()
+                
+                // Refresh episode adapter to show progress bars
+                withContext(Dispatchers.Main) {
+                    refreshEpisodeAdapter()
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading series data", e)
                 withContext(Dispatchers.Main) {
@@ -625,6 +644,49 @@ class SeriesDetailComponent @JvmOverloads constructor(
             } finally {
                 loadingIndicator.visibility = View.GONE
             }
+        }
+    }
+    
+    private suspend fun syncProgressFromCloud() {
+        try {
+            val cloudSyncManager = CloudSyncManager.getInstance(context)
+            if (cloudSyncManager.isCloudEnabled()) {
+                Log.d(TAG, "🔄 Syncing progress from cloud before showing series...")
+                cloudSyncManager.syncFromCloud()
+                
+                // Fetch individual episode progress after episodes are loaded
+                // This will be called after loadSeasonsAndEpisodes completes
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error syncing progress from cloud", e)
+        }
+    }
+    
+    private suspend fun syncEpisodeProgressFromCloud(episodeIds: List<String>) {
+        try {
+            val cloudSyncManager = CloudSyncManager.getInstance(context)
+            if (!cloudSyncManager.isCloudEnabled()) {
+                return
+            }
+            
+            Log.d(TAG, "🔄 Fetching progress for ${episodeIds.size} episodes...")
+            
+            // Fetch progress for each episode individually and wait for ALL to complete
+            coroutineScope {
+                episodeIds.map { episodeId ->
+                    async(Dispatchers.IO) {
+                        try {
+                            cloudSyncManager.fetchEpisodeProgress(seriesId, episodeId)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error fetching progress for episode $episodeId", e)
+                        }
+                    }
+                }.awaitAll() // Wait for all fetches to complete
+            }
+            
+            Log.d(TAG, "✅ Finished fetching episode progress")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error syncing episode progress from cloud", e)
         }
     }
     
@@ -854,6 +916,12 @@ class SeriesDetailComponent @JvmOverloads constructor(
                 // Load episodes for each season
                 for (season in seasons) {
                     loadEpisodesForSeasonData(season)
+                }
+                
+                // Fetch progress for all episodes after loading them
+                val allEpisodeIds = allEpisodesBySeason.values.flatten().map { it.id }
+                if (allEpisodeIds.isNotEmpty()) {
+                    syncEpisodeProgressFromCloud(allEpisodeIds)
                 }
                 
                 // Setup season spinner after loading all seasons
@@ -1167,6 +1235,15 @@ class SeriesDetailComponent @JvmOverloads constructor(
                 setMargins(0, 0, dpToPx(8), 0)
             }
         }
+    }
+    
+    /**
+     * Refresh episode progress bars from local database
+     * Data is already saved locally during playback, no cloud sync needed
+     */
+    fun refreshEpisodeProgress() {
+        android.util.Log.d(TAG, "🔄 Refreshing episode adapter from local DB")
+        refreshEpisodeAdapter()
     }
     
     fun cleanup() {

@@ -117,102 +117,77 @@ class CloudAuthActivity : AppCompatActivity() {
         
         lifecycleScope.launch {
             try {
-                val syncService = IPTVSyncService(this@CloudAuthActivity)
+                // Save cloud sync preference
+                val prefs = getSharedPreferences("iptv_sync_prefs", MODE_PRIVATE)
+                prefs.edit().putBoolean("cloud_sync_enabled", true).putBoolean("cloud_sync_configured", true).apply()
                 
-                // Authenticate with user credentials
-                val authenticated = syncService.ensureAuthenticated(email, password)
+                // Login and fetch providers from cloud
+                tvStatus.text = "☁️ Logging in and fetching providers..."
+                val cloudSyncManager = com.ronika.iptvnative.managers.CloudSyncManager(this@CloudAuthActivity)
+                val deviceId = android.provider.Settings.Secure.getString(
+                    contentResolver,
+                    android.provider.Settings.Secure.ANDROID_ID
+                )
                 
-                if (authenticated) {
-                    tvStatus.text = "✅ Authentication successful!"
-                    
-                    // Save cloud sync preference and mark as configured so Launcher routes correctly
-                    val prefs = getSharedPreferences("iptv_sync_prefs", MODE_PRIVATE)
-                    prefs.edit().putBoolean("cloud_sync_enabled", true).putBoolean("cloud_sync_configured", true).apply()
-                    
-                    // Save user to database
-                    tvStatus.text = "💾 Saving user data..."
-                    val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(this@CloudAuthActivity)
-                    val syncPrefs = getSharedPreferences("iptv_sync", MODE_PRIVATE)
-                    val token = syncPrefs.getString("access_token", "") ?: ""
-                    
-                    // Link to cloud and get subscription status
-                    tvStatus.text = "☁️ Linking to cloud..."
-                    val cloudSyncManager = com.ronika.iptvnative.managers.CloudSyncManager(this@CloudAuthActivity)
-                    val deviceId = android.provider.Settings.Secure.getString(
-                        contentResolver,
-                        android.provider.Settings.Secure.ANDROID_ID
-                    )
-                    
-                    val linkResult = cloudSyncManager.linkToCloud(
-                        email = email,
-                        password = password,
-                        deviceId = deviceId,
-                        deviceName = android.os.Build.MODEL
-                    )
-                    
-                    val subscriptionEnabled = linkResult.getOrNull()?.subscriptionEnabled ?: false
-                    
-                    val user = com.ronika.iptvnative.database.entities.UserEntity(
-                        username = email.substringBefore('@'),
-                        email = email,
-                        password = password, // Store for token refresh
-                        bearerToken = token,
-                        tokenExpiry = System.currentTimeMillis() + (24 * 60 * 60 * 1000), // 24 hours
-                        lastSync = System.currentTimeMillis(),
-                        cloudUserId = linkResult.getOrNull()?.cloudUserId,
-                        cloudEnabled = true,
-                        subscriptionEnabled = subscriptionEnabled
-                    )
-                    
-                    database.userDao().insertUser(user)
-                    Log.d(TAG, "✅ User saved to database: ${user.email}, Subscription: $subscriptionEnabled")
-                    
-                    // Small delay to ensure SharedPreferences is committed across processes
-                    delay(100)
-                    
-                    // Always pull data from backend after login (like mobile app)
-                    tvStatus.text = "📥 Fetching provider data from cloud..."
-                    val hasData = syncService.pullAllData(this@CloudAuthActivity)
-                    
-                    if (hasData) {
-                        tvStatus.text = "✅ Provider data restored from cloud!"
-                    } else {
-                        tvStatus.text = "✅ No existing data found!"
-                    }
-                    
+                // Use loginAndFetchProviders for new users signing in with cloud
+                val linkResult = cloudSyncManager.loginAndFetchProviders(
+                    email = email,
+                    password = password,
+                    deviceId = deviceId,
+                    deviceName = android.os.Build.MODEL
+                )
+                
+                if (linkResult.isFailure) {
+                    val errorMsg = linkResult.exceptionOrNull()?.message ?: "Unknown error"
+                    Log.e(TAG, "❌ Cloud login failed: $errorMsg")
                     withContext(Dispatchers.Main) {
+                        tvStatus.text = "❌ Failed to login"
                         Toast.makeText(
                             this@CloudAuthActivity,
-                            "Cloud sync enabled successfully!",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                        
-                        // After login, go directly to category selection (step 2)
-                        // Skip handshake/profile calls - use existing provider data
-                        val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(this@CloudAuthActivity)
-                        val providers = withContext(Dispatchers.IO) { database.providerDao().getAllProvidersList() }
-                        
-                        // Route to PortalSetupActivity to continue setup from step 2 (category selection)
-                        // Skip handshake/profile - provider already has token and credentials from cloud
-                        val intent = android.content.Intent(this@CloudAuthActivity, PortalSetupActivity::class.java)
-                        intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
-                        // Tell PortalSetupActivity we're coming from cloud sync, and pass a provider id if available
-                        intent.putExtra("from_cloud_sync", true)
-                        providers.firstOrNull()?.let { intent.putExtra("provider_id", it.id) }
-                        // Log successful preparation of intent extras for debugging
-                        Log.d(TAG, "Starting PortalSetupActivity with extras from_cloud_sync=${intent.getBooleanExtra("from_cloud_sync", false)}, provider_id=${intent.getStringExtra("provider_id")}")
-                        startActivity(intent)
-                        finish()
-                    }
-                } else {
-                    withContext(Dispatchers.Main) {
-                        tvStatus.text = "❌ Authentication failed"
-                        Toast.makeText(
-                            this@CloudAuthActivity,
-                            "Authentication failed. Please try again.",
-                            Toast.LENGTH_SHORT
+                            "Login failed: $errorMsg",
+                            Toast.LENGTH_LONG
                         ).show()
                         showLoading(false)
+                    }
+                    return@launch
+                }
+                
+                Log.d(TAG, "✅ Login successful - user and providers synced")
+                
+                // Small delay to ensure database writes are complete
+                delay(100)
+                
+                tvStatus.text = "✅ Login successful!"
+                
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        this@CloudAuthActivity,
+                        "Cloud sync enabled successfully!",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    
+                    // After login, check if we have providers
+                    val database = com.ronika.iptvnative.database.AppDatabase.getDatabase(this@CloudAuthActivity)
+                    val providers = withContext(Dispatchers.IO) { database.providerDao().getAllProvidersList() }
+                    
+                    Log.d(TAG, "📊 Found ${providers.size} providers in database")
+                    
+                    if (providers.isNotEmpty()) {
+                        // Route to PortalSetupActivity for category selection (step 2)
+                        val intent = android.content.Intent(this@CloudAuthActivity, PortalSetupActivity::class.java)
+                        intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
+                        intent.putExtra("from_cloud_sync", true)
+                        intent.putExtra("provider_id", providers.first().id)
+                        Log.d(TAG, "🚀 Starting PortalSetupActivity with provider_id=${providers.first().id}")
+                        startActivity(intent)
+                        finish()
+                    } else {
+                        // No providers in cloud - go to portal setup to add one
+                        Log.d(TAG, "⚠️ No providers found - going to portal setup")
+                        val intent = android.content.Intent(this@CloudAuthActivity, PortalSetupActivity::class.java)
+                        intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
+                        startActivity(intent)
+                        finish()
                     }
                 }
             } catch (e: Exception) {

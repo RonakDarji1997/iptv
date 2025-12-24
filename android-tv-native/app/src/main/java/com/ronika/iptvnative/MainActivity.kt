@@ -107,6 +107,9 @@ class MainActivity : ComponentActivity() {
     private val database by lazy { AppDatabase.getDatabase(this) }
     private val providerDao by lazy { database.providerDao() }
     
+    // CloudSyncManager - for cloud sync operations
+    private lateinit var cloudSyncManager: com.ronika.iptvnative.managers.CloudSyncManager
+    
     private suspend fun initializeStalkerClient(): StalkerClient? {
         if (stalkerClient == null) {
             val provider = withContext(Dispatchers.IO) {
@@ -294,12 +297,15 @@ class MainActivity : ComponentActivity() {
         initSearchComponent()
         initSettingsComponent()
         
+        // Initialize CloudSyncManager
+        cloudSyncManager = com.ronika.iptvnative.managers.CloudSyncManager.getInstance(applicationContext)
+        
         // Don't auto-sync on app start - categories are saved during setup
         // User can manually sync via "Update Playlist" button in settings
         // syncVODCategories() // DISABLED - causes category count changes due to API variability
         
-        // Sync with cloud on app load (bidirectional)
-        // performInitialSync()
+        // Sync with cloud on app load (favorites & watch progress)
+        performCloudSync()
         
         // Check if user wants to enable cloud sync (for existing users)
         checkAndPromptCloudSync()
@@ -333,6 +339,37 @@ class MainActivity : ComponentActivity() {
         // This ensures any changes to enabled/disabled categories are reflected
         if (::categorySidebar.isInitialized) {
             categorySidebar.refreshCategories()
+        }
+    }
+    
+    /**
+     * Perform cloud sync on MainActivity load
+     * Syncs favorites and watch progress from cloud to local Room database
+     */
+    private fun performCloudSync() {
+        lifecycleScope.launch {
+            try {
+                Log.d(TAG, "🚀 MainActivity: Starting cloud sync check...")
+                
+                // Check if cloud sync is enabled
+                val isCloudEnabled = cloudSyncManager.isCloudEnabled()
+                Log.d(TAG, "☁️ Cloud sync enabled: $isCloudEnabled")
+                
+                if (!isCloudEnabled) {
+                    Log.d(TAG, "⏭️ Cloud sync disabled - skipping")
+                    return@launch
+                }
+                
+                Log.d(TAG, "⬇️ Syncing favorites and watch progress from cloud...")
+                
+                // Sync from cloud (downloads favorites & progress, saves to Room DB)
+                cloudSyncManager.syncFromCloud()
+                
+                Log.d(TAG, "✅ Cloud sync completed successfully")
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Cloud sync error (non-critical): ${e.message}", e)
+            }
         }
     }
     
@@ -1260,9 +1297,16 @@ class MainActivity : ComponentActivity() {
                         
                         // Check for saved progress for this specific episode
                         val repository = com.ronika.iptvnative.repository.WatchProgressRepository(applicationContext)
-                        val compositeKey = "${seasonId}_${episodeId}"  // Match the composite key format
-                        val progress = repository.getEpisodeProgress(seriesId, compositeKey, vodComponent.getCurrentProviderId() ?: "")
+                        // Query with actual episodeId (cloud sync format)
+                        Log.d(TAG, "🔍 Looking for progress: contentId=$seriesId, episodeId=$episodeId, providerId=''")
+                        val progress = repository.getEpisodeProgress(seriesId, episodeId, "")
                         val startPosition = progress?.currentPosition ?: 0L
+                        
+                        if (progress != null) {
+                            Log.d(TAG, "✅ Found progress: position=$startPosition ms (${progress.progressPercentage}%), duration=${progress.duration} ms")
+                        } else {
+                            Log.d(TAG, "❌ No progress found for this episode")
+                        }
                         
                         // Play series FIRST
                         vodPlayer.playSeries(response.url, title, hasNext = true, startPosition = startPosition)
@@ -1371,10 +1415,12 @@ class MainActivity : ComponentActivity() {
                     } else {
                         // Show movie detail/info screen inline in VODComponent
                         Log.d(TAG, "Navigating to movie detail/info screen in VODComponent")
+                        
+                        // Just refresh from local database - data already saved during playback
                         vodContainer.visibility = android.view.View.VISIBLE
                         vodComponent.post {
                             vodComponent.ensureDetailScreenVisible()
-                            vodComponent.refreshProgress()
+                            vodComponent.refreshProgress() // Reads from local DB
                             vodComponent.focusPlayButton()
                         }
                     }
@@ -1386,9 +1432,12 @@ class MainActivity : ComponentActivity() {
                     // Show series detail container
                     seriesContainer.visibility = android.view.View.VISIBLE
                     
+                    // Just refresh the UI from local database - no need for cloud sync
+                    // Data was already saved locally during playback
                     // Request focus on series detail to restore proper navigation
                     seriesDetail.post {
                         seriesDetail.visibility = android.view.View.VISIBLE
+                        seriesDetail.refreshEpisodeAdapter() // Refresh progress bars from local DB
                         
                         // Try to focus on the last played episode, otherwise just focus the container
                         if (lastPlayedEpisodeId != null) {
@@ -1819,6 +1868,25 @@ class MainActivity : ComponentActivity() {
     private fun showContinueWatchingMovies() {
         Log.d(TAG, "📺📺📺 ========== LOADING CONTINUE WATCHING MOVIES ==========")
         
+        // Fetch latest progress from cloud first
+        lifecycleScope.launch {
+            try {
+                if (cloudSyncManager.isCloudEnabled()) {
+                    Log.d(TAG, "🔄 Syncing progress from cloud before showing Continue Watching...")
+                    cloudSyncManager.syncFromCloud()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error syncing progress", e)
+            }
+            
+            // After sync, show Continue Watching
+            showContinueWatchingMoviesInternal()
+        }
+    }
+    
+    private fun showContinueWatchingMoviesInternal() {
+        Log.d(TAG, "📺 Displaying Continue Watching movies")
+        
         // Mark that we came from category
         currentNavigationSource = NavigationSource.CATEGORY
         pushNavigation(NavigationState.VOD_GRID)
@@ -1885,6 +1953,25 @@ class MainActivity : ComponentActivity() {
     
     private fun showContinueWatchingSeries() {
         Log.d(TAG, "Loading Continue Watching series")
+        
+        // Fetch latest progress from cloud first
+        lifecycleScope.launch {
+            try {
+                if (cloudSyncManager.isCloudEnabled()) {
+                    Log.d(TAG, "🔄 Syncing progress from cloud before showing Continue Watching series...")
+                    cloudSyncManager.syncFromCloud()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error syncing progress", e)
+            }
+            
+            // After sync, show Continue Watching series
+            showContinueWatchingSeriesInternal()
+        }
+    }
+    
+    private fun showContinueWatchingSeriesInternal() {
+        Log.d(TAG, "📺 Displaying Continue Watching series")
         
         // Mark that we came from category
         currentNavigationSource = NavigationSource.CATEGORY
@@ -1954,6 +2041,25 @@ class MainActivity : ComponentActivity() {
     private fun showFavouriteMovies() {
         Log.d(TAG, "Loading Favourite movies")
         
+        // Fetch latest favorites from cloud first
+        lifecycleScope.launch {
+            try {
+                if (cloudSyncManager.isCloudEnabled()) {
+                    Log.d(TAG, "🔄 Syncing favorites from cloud...")
+                    cloudSyncManager.syncFromCloud()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error syncing favorites", e)
+            }
+            
+            // After sync, show favorites
+            showFavouriteMoviesInternal()
+        }
+    }
+    
+    private fun showFavouriteMoviesInternal() {
+        Log.d(TAG, "📺 Displaying Favourite movies")
+        
         // Mark that we came from category
         currentNavigationSource = NavigationSource.CATEGORY
         pushNavigation(NavigationState.VOD_GRID)
@@ -2017,6 +2123,25 @@ class MainActivity : ComponentActivity() {
     
     private fun showFavouriteSeries() {
         Log.d(TAG, "Loading Favourite series")
+        
+        // Fetch latest favorites from cloud first
+        lifecycleScope.launch {
+            try {
+                if (cloudSyncManager.isCloudEnabled()) {
+                    Log.d(TAG, "🔄 Syncing favorites from cloud...")
+                    cloudSyncManager.syncFromCloud()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error syncing favorites", e)
+            }
+            
+            // After sync, show favorites
+            showFavouriteSeriesInternal()
+        }
+    }
+    
+    private fun showFavouriteSeriesInternal() {
+        Log.d(TAG, "📺 Displaying Favourite series")
         
         // Mark that we came from category
         currentNavigationSource = NavigationSource.CATEGORY

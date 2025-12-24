@@ -15,7 +15,10 @@ import coil.request.CachePolicy
 import com.ronika.iptvnative.adapters.EpisodeHorizontalAdapter
 import com.ronika.iptvnative.models.Episode
 import com.ronika.iptvnative.models.Season
+import com.ronika.iptvnative.managers.CloudSyncManager
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class SeriesDetailActivity : ComponentActivity() {
     
@@ -73,6 +76,7 @@ class SeriesDetailActivity : ComponentActivity() {
     private var genres: String? = null
     private var totalSeasons: String? = null
     private var providerId: String = ""
+    private lateinit var cloudSyncManager: CloudSyncManager
     
     private var seasons = mutableListOf<Season>()
     private var allEpisodesBySeason = mutableMapOf<String, List<Episode>>()
@@ -83,6 +87,8 @@ class SeriesDetailActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_series_detail_new)
+        
+        cloudSyncManager = CloudSyncManager.getInstance(applicationContext)
         
         // Get data from intent
         seriesId = intent.getStringExtra("SERIES_ID") ?: ""
@@ -116,9 +122,48 @@ class SeriesDetailActivity : ComponentActivity() {
         android.util.Log.d("SeriesDetail", "Total Seasons: $totalSeasons")
         android.util.Log.d("SeriesDetail", "=================================")
         
+        // Fetch latest progress from cloud before loading
+        refreshProgress()
+        
         initViews()
         displaySeriesInfo()
         loadAllSeasonsAndEpisodes()
+    }
+    
+    private fun refreshProgress() {
+        lifecycleScope.launch {
+            try {
+                // Sync from cloud first
+                if (cloudSyncManager.isCloudEnabled()) {
+                    android.util.Log.d("SeriesDetail", "🔄 Syncing progress from cloud...")
+                    cloudSyncManager.syncFromCloud()
+                    
+                    // Also fetch series-specific episode progress
+                    if (seriesId.isNotEmpty()) {
+                        android.util.Log.d("SeriesDetail", "🔄 Fetching episode progress for series: $seriesId")
+                        cloudSyncManager.syncSeriesProgressFromCloud(seriesId)
+                    }
+                    
+                    // Refresh episode UI to show updated progress bars
+                    android.util.Log.d("SeriesDetail", "🔄 Refreshing episode UI after cloud sync")
+                    refreshEpisodeViews()
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("SeriesDetail", "Error refreshing progress", e)
+            }
+        }
+    }
+    
+    private fun refreshEpisodeViews() {
+        // Refresh all episode views to show updated progress bars
+        runOnUiThread {
+            episodeViewHolders.forEach { (episodeId, view) ->
+                // Trigger view update by invalidating it
+                view.invalidate()
+                view.requestLayout()
+            }
+            android.util.Log.d("SeriesDetail", "📊 Refreshed ${episodeViewHolders.size} episode views")
+        }
     }
     
     private fun initViews() {
@@ -518,6 +563,10 @@ class SeriesDetailActivity : ComponentActivity() {
     
     override fun onResume() {
         super.onResume()
+        
+        // Refresh progress from cloud when returning from player
+        refreshProgress()
+        
         // Restore focus to last played episode if returning from playback
         lastPlayedEpisodeId?.let { episodeId ->
             episodeViewHolders[episodeId]?.postDelayed({

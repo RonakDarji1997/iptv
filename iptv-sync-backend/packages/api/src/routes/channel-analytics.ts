@@ -181,4 +181,55 @@ router.get('/channel/:channelId', async (req: Request, res: Response) => {
   }
 });
 
+// DELETE /api/channel-analytics/:id - Delete specific channel analytics by ID
+router.delete('/:id', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { id } = req.params;
+    const pool: Pool = req.app.locals.db;
+
+    const result = await pool.query(
+      'DELETE FROM channel_analytics WHERE id = $1 AND user_id = $2 RETURNING *',
+      [id, userId]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Channel analytics not found' });
+    }
+
+    console.log('✅ [Channel Analytics DELETE] Deleted:', id);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting channel analytics:', error);
+    res.status(500).json({ error: 'Failed to delete channel analytics' });
+  }
+});
+
+// DELETE /api/channel-analytics - Delete all channel analytics for user
+router.delete('/', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const pool: Pool = req.app.locals.db;
+
+    const result = await pool.query(
+      'DELETE FROM channel_analytics WHERE user_id = $1',
+      [userId]
+    );
+
+    console.log('✅ [Channel Analytics DELETE ALL] Deleted', result.rowCount, 'records for user:', userId);
+    res.json({ success: true, deletedCount: result.rowCount });
+  } catch (error) {
+    console.error('Error deleting all channel analytics:', error);
+    res.status(500).json({ error: 'Failed to delete channel analytics' });
+  }
+});
+
 export default router;

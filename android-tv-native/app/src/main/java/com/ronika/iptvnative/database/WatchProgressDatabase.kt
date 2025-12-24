@@ -61,24 +61,24 @@ interface WatchProgressDao {
     @Query("SELECT * FROM watch_progress ORDER BY last_watched DESC")
     suspend fun getAllProgress(): List<WatchProgress>
     
-    @Query("SELECT * FROM watch_progress WHERE content_type = :type AND provider_id = :providerId ORDER BY last_watched DESC LIMIT :limit")
+    @Query("SELECT * FROM watch_progress WHERE content_type = :type AND (provider_id = :providerId OR provider_id = '') ORDER BY last_watched DESC LIMIT :limit")
     suspend fun getProgressByType(type: String, providerId: String, limit: Int = 20): List<WatchProgress>
     
     @Query("SELECT * FROM watch_progress WHERE content_id = :contentId AND content_type = :type AND provider_id = :providerId")
     suspend fun getProgress(contentId: String, type: String, providerId: String): WatchProgress?
     
-    @Query("SELECT * FROM watch_progress WHERE content_id = :contentId AND episode_id = :episodeId AND provider_id = :providerId")
+    @Query("SELECT * FROM watch_progress WHERE content_id = :contentId AND episode_id = :episodeId AND provider_id = :providerId ORDER BY id DESC LIMIT 1")
     suspend fun getEpisodeProgress(contentId: String, episodeId: String, providerId: String): WatchProgress?
     
     @Query("""
         SELECT * FROM watch_progress 
-        WHERE content_type = 'SERIES' 
-        AND provider_id = :providerId
+        WHERE (content_type = 'SERIES' OR content_type = 'EPISODE')
+        AND (provider_id = :providerId OR provider_id = '')
         AND id IN (
             SELECT MAX(id) 
             FROM watch_progress 
-            WHERE content_type = 'SERIES' 
-            AND provider_id = :providerId
+            WHERE (content_type = 'SERIES' OR content_type = 'EPISODE')
+            AND (provider_id = :providerId OR provider_id = '')
             GROUP BY content_id
         )
         ORDER BY last_watched DESC 
@@ -95,6 +95,9 @@ interface WatchProgressDao {
     @Query("DELETE FROM watch_progress WHERE content_id = :contentId")
     suspend fun deleteProgress(contentId: String)
     
+    @Query("DELETE FROM watch_progress WHERE content_id = :contentId AND content_type = :contentType")
+    suspend fun deleteByContentIdAndType(contentId: String, contentType: String)
+    
     @Query("DELETE FROM watch_progress WHERE id = :id")
     suspend fun deleteProgressById(id: Long)
     
@@ -102,7 +105,7 @@ interface WatchProgressDao {
     suspend fun deleteOldProgress(timestamp: Long)
 }
 
-@Database(entities = [WatchProgress::class], version = 5, exportSchema = false)
+@Database(entities = [WatchProgress::class], version = 6, exportSchema = false)
 abstract class WatchProgressDatabase : RoomDatabase() {
     abstract fun watchProgressDao(): WatchProgressDao
     
@@ -184,6 +187,15 @@ abstract class WatchProgressDatabase : RoomDatabase() {
             }
         }
         
+        // Migration from version 5 to 6: Clean slate - delete all data to fix seconds/milliseconds mismatch
+        private val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+            override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+                // Delete ALL watch progress data - will be re-synced from cloud with correct units
+                database.execSQL("DELETE FROM watch_progress")
+                // Note: Cloud sync will repopulate with currentPosition and duration in milliseconds
+            }
+        }
+        
         fun getDatabase(context: Context): WatchProgressDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -191,7 +203,7 @@ abstract class WatchProgressDatabase : RoomDatabase() {
                     WatchProgressDatabase::class.java,
                     "watch_progress_database"
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .fallbackToDestructiveMigration() // Only as last resort
                     .build()
                 INSTANCE = instance

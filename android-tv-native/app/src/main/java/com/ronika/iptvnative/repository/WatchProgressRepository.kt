@@ -4,11 +4,15 @@ import android.content.Context
 import android.util.Log
 import com.ronika.iptvnative.database.WatchProgress
 import com.ronika.iptvnative.database.WatchProgressDatabase
+import com.ronika.iptvnative.managers.CloudSyncManager
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-class WatchProgressRepository(context: Context) {
+class WatchProgressRepository(private val context: Context) {
     private val watchProgressDao = WatchProgressDatabase.getDatabase(context).watchProgressDao()
+    private val cloudSyncManager = CloudSyncManager.getInstance(context)
     
     companion object {
         private const val TAG = "WatchProgressRepository"
@@ -35,9 +39,11 @@ class WatchProgressRepository(context: Context) {
                 0
             }
             
+            Log.d(TAG, "📊 Checking save condition: $percentage% (position=$currentPosition, duration=$duration)")
+            
             when {
                 percentage in 1..95 -> {
-                    Log.d(TAG, "Saving progress: $title ($contentType, provider=$providerId) - $percentage% watched")
+                    Log.d(TAG, "✅ Percentage OK ($percentage%), saving progress: $title")
                     // Check if entry exists
                     val existing = if (episodeId != null) {
                         watchProgressDao.getEpisodeProgress(contentId, episodeId, providerId)
@@ -76,9 +82,22 @@ class WatchProgressRepository(context: Context) {
                     }
                     val insertedId = watchProgressDao.insertProgress(progress)
                     Log.d(TAG, "Progress saved with ID: $insertedId")
+                    
+                    // Trigger cloud sync in background
+                    Log.d(TAG, "🔄 Triggering cloud sync for $title")
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            Log.d(TAG, "🌐 Calling syncToCloud() for $title")
+                            cloudSyncManager.syncToCloud()
+                            Log.d(TAG, "☁️ Watch progress synced to cloud")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "❌ Failed to sync watch progress to cloud: ${e.message}", e)
+                        }
+                    }
                 }
                 percentage >= 95 -> {
                     // If watched more than 95%, remove from continue watching
+                    Log.d(TAG, "🎬 Content finished ($percentage%), removing from continue watching")
                     if (episodeId != null) {
                         val existing = watchProgressDao.getEpisodeProgress(contentId, episodeId, providerId)
                         existing?.let { watchProgressDao.deleteProgressById(it.id) }
@@ -87,7 +106,8 @@ class WatchProgressRepository(context: Context) {
                     }
                 }
                 else -> {
-                    // Less than 5%, don't save
+                    // Less than 1%, don't save
+                    Log.d(TAG, "⏭️ Skipping save: $percentage% too low (< 1%)")
                 }
             }
         }
@@ -116,7 +136,12 @@ class WatchProgressRepository(context: Context) {
     suspend fun getContinueWatchingSeries(providerId: String, limit: Int = 20): List<WatchProgress> =
         withContext(Dispatchers.IO) {
             // Get only one entry per series (latest watched episode)
-            watchProgressDao.getLatestSeriesProgress(providerId, limit)
+            val series = watchProgressDao.getLatestSeriesProgress(providerId, limit)
+            Log.d(TAG, "Retrieved ${series.size} Continue Watching series from DB for provider $providerId")
+            series.forEach { 
+                Log.d(TAG, "  - ${it.title}: ${it.progressPercentage}% (ContentID: ${it.contentId}, EpisodeID: ${it.episodeId}, Type: ${it.contentType})") 
+            }
+            series
         }
     
     suspend fun getAllContinueWatching(): List<WatchProgress> =

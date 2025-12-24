@@ -107,7 +107,7 @@ class SettingsComponent @JvmOverloads constructor(
     private var currentProvider: ProviderEntity? = null
     
     enum class Section {
-        PLAYLIST, PARENTAL, PLAYER, CLOUD, ABOUT
+        PLAYLIST, PARENTAL, PLAYER, ABOUT
     }
     
     private val database by lazy { AppDatabase.getDatabase(context) }
