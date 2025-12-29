@@ -322,6 +322,11 @@ export default function MovieDetailPage() {
       }
 
       // Use the first file (highest quality usually)
+      if (!files || files.length === 0) {
+        toast.error('No playable files available');
+        return;
+      }
+      
       const fileId = files[0].id;
       console.log('[Movie Play] Using file ID:', fileId, 'from', files.length, 'available files');
       

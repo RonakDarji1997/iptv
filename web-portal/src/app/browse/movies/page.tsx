@@ -121,8 +121,8 @@ export default function MoviesPage() {
             id: movie.id,
             name: movie.name,
             description: tmdbMovie.overview || movie.description || '',
-            poster: movie.poster,
-            backdrop: backdrop ? `https://image.tmdb.org/t/p/original${backdrop}` : movie.poster,
+            poster: movie.screenshot_uri || movie.imageUrl || '',
+            backdrop: backdrop ? `https://image.tmdb.org/t/p/original${backdrop}` : (movie.screenshot_uri || movie.imageUrl || ''),
             year: tmdbMovie.release_date ? new Date(tmdbMovie.release_date).getFullYear() : undefined,
             rating: tmdbMovie.vote_average ? Math.round(tmdbMovie.vote_average * 10) / 10 : undefined,
             logo: logo ? `https://image.tmdb.org/t/p/w500${logo}` : undefined
@@ -137,8 +137,8 @@ export default function MoviesPage() {
             id: movie.id,
             name: movie.name,
             description: movie.description || '',
-            poster: movie.poster,
-            backdrop: movie.poster
+            poster: movie.screenshot_uri || movie.imageUrl || '',
+            backdrop: movie.screenshot_uri || movie.imageUrl || ''
           })
         }
       }
