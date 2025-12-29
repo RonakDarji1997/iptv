@@ -75,6 +75,7 @@ export default function SeriesDetailPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc'); // desc = newest first
   const [showSeasonDropdown, setShowSeasonDropdown] = useState(false);
   const [seriesImdbId, setSeriesImdbId] = useState<string | null>(null);
+  const [seriesLogo, setSeriesLogo] = useState<string | null>(null);
 
   // Listen for NEXT_EPISODE message from mobile app
   useEffect(() => {
@@ -174,12 +175,14 @@ export default function SeriesDetailPage() {
     const fetchSeriesData = async () => {
       try {
         const token = authService.getToken();
+        let foundSeriesInfo = null;
         
         // Try to get series data from sessionStorage or localStorage cache
         const sessionData = sessionStorage.getItem(`series_${seriesId}`);
         if (sessionData) {
           const series = JSON.parse(sessionData);
           setSeriesInfo(series);
+          foundSeriesInfo = series;
         } else {
           // Fallback: check localStorage cache
           const CONTENT_CACHE_KEY = 'iptv_content_cache';
@@ -190,18 +193,41 @@ export default function SeriesDetailPage() {
             const series = allItems.find((item: any) => item.id === seriesId);
             if (series) {
               setSeriesInfo(series);
+              foundSeriesInfo = series;
             }
           }
           
-          // If still no series info, fetch from API
-          if (!seriesInfo) {
+          // API Fallback: If still no series info, fetch from API
+          if (!foundSeriesInfo) {
+            console.log('[SeriesDetail] Cache miss, fetching from API:', seriesId);
             try {
               const response = await fetch(`${API_URL}/stalker-proxy/vod-info/${seriesId}`, {
                 headers: { Authorization: `Bearer ${token}` },
               });
               const data = await response.json();
+              console.log('[SeriesDetail] API response:', data);
               if (data.success && data.info) {
-                setSeriesInfo(data.info);
+                const seriesData = data.info;
+                const series = {
+                  id: seriesId,
+                  name: seriesData.name || seriesData.o_name || 'Unknown',
+                  o_name: seriesData.o_name,
+                  description: seriesData.description,
+                  year: seriesData.year,
+                  director: seriesData.director,
+                  actors: seriesData.actors,
+                  rating_imdb: seriesData.rating_imdb,
+                  rating_kinopoisk: seriesData.rating_kinopoisk,
+                  genre_name: seriesData.genre_name,
+                  screenshot_uri: seriesData.screenshot_uri,
+                  cover_big: seriesData.cover_big,
+                };
+                console.log('[SeriesDetail] Parsed series data:', series);
+                setSeriesInfo(series);
+                // Cache it for next time
+                sessionStorage.setItem(`series_${seriesId}`, JSON.stringify(series));
+              } else {
+                console.error('[SeriesDetail] API response missing info:', data);
               }
             } catch (error) {
               console.error('Failed to fetch series info from API:', error);
@@ -256,6 +282,24 @@ export default function SeriesDetailPage() {
         const data = await response.json();
         if (data.success && data.details) {
           setTmdbData(data.details);
+          
+          // Fetch logos
+          if (data.details.id) {
+            try {
+              const logosResponse = await fetch(
+                `/api/tmdb?action=logos&type=tv&id=${data.details.id}`
+              );
+              const logosData = await logosResponse.json();
+              if (logosData.success && logosData.logos && logosData.logos.length > 0) {
+                const logoPath = logosData.logos[0].file_path;
+                const logoUrl = `https://image.tmdb.org/t/p/w500${logoPath}`;
+                console.log('[Series Detail] Logo URL:', logoUrl);
+                setSeriesLogo(logoUrl);
+              }
+            } catch (error) {
+              console.error('[Series Detail] Failed to fetch logo:', error);
+            }
+          }
           
           // Fetch IMDb ID for subtitle support
           if (data.details.id) {
@@ -735,9 +779,18 @@ export default function SeriesDetailPage() {
         <div className="absolute bottom-0 left-0 right-0">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6 sm:pb-8">
             {/* Series Logo/Title */}
-            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold mb-3 drop-shadow-2xl">
-              {seriesInfo.name}
-            </h1>
+            {seriesLogo ? (
+              <img 
+                src={seriesLogo} 
+                alt={seriesInfo.name}
+                className="h-8 sm:h-10 lg:h-12 w-auto mb-3 drop-shadow-2xl"
+                style={{ filter: 'drop-shadow(0 20px 40px rgba(0,0,0,0.9))' }}
+              />
+            ) : (
+              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold mb-3 drop-shadow-2xl">
+                {seriesInfo.name}
+              </h1>
+            )}
             
             {/* Meta Row */}
             <div className="flex flex-wrap items-center gap-3 text-sm sm:text-base mb-4">

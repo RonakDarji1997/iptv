@@ -211,8 +211,27 @@ export default function HomePage() {
     console.log('[ContinueWatching] Clicked item:', item);
     
     if (item.content_type === 'MOVIE') {
-      router.push(`/browse/movies/category/${item.content_id}`)
+      // Store movie metadata in sessionStorage for the detail page
+      const movieData = {
+        id: item.content_id,
+        name: item.content_name,
+        content_poster: item.content_poster,
+      };
+      sessionStorage.setItem(`movie_${item.content_id}`, JSON.stringify(movieData));
+      console.log('[ContinueWatching] Stored movie data in sessionStorage:', movieData);
+      
+      // Use 0 as fallback category ID when not available (same as search results)
+      router.push(`/browse/movies/0/${item.content_id}`)
     } else if (item.content_type === 'SERIES' || item.content_type === 'EPISODE') {
+      // Store series metadata in sessionStorage for the detail page
+      const seriesData = {
+        id: item.series_id || item.content_id,
+        name: item.content_name,
+        content_poster: item.content_poster,
+      };
+      sessionStorage.setItem(`series_${item.series_id || item.content_id}`, JSON.stringify(seriesData));
+      console.log('[ContinueWatching] Stored series data in sessionStorage:', seriesData);
+      
       // For series/episodes, use series_id if available, otherwise use content_id
       const seriesIdToUse = item.series_id || item.content_id;
       console.log('[ContinueWatching] Navigating to series:', seriesIdToUse);

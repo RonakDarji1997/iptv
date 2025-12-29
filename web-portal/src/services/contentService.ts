@@ -551,6 +551,75 @@ class ContentService {
     }
   }
 
+  // Get EPG (Electronic Program Guide) for a channel
+  async getChannelEpg(channelId: string, period: number = 4): Promise<any> {
+    try {
+      const url = `${API_URL}/stalker-proxy/epg/${channelId}?period=${period}`;
+      console.log('🔍 Fetching EPG from:', url);
+      
+      const response = await axios.get(url, {
+        headers: this.getHeaders(),
+      });
+
+      console.log('📡 EPG API response:', {
+        success: response.data.success,
+        hasCurrent: !!response.data.epg?.current_program,
+        hasNext: !!response.data.epg?.next_program,
+        programCount: response.data.epg?.programs?.length || 0
+      });
+
+      if (response.data.success) {
+        return response.data.epg;
+      }
+
+      return {
+        current_program: null,
+        next_program: null,
+        programs: []
+      };
+    } catch (error) {
+      console.error('❌ Failed to fetch channel EPG:', error);
+      if (axios.isAxiosError(error)) {
+        console.error('API Error:', {
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          data: error.response?.data,
+          message: error.message
+        });
+      }
+      return {
+        current_program: null,
+        next_program: null,
+        programs: []
+      };
+    }
+  }
+
+  // Get short EPG (current and next program) for a channel
+  async getShortEpg(channelId: string): Promise<any> {
+    try {
+      const url = `${API_URL}/stalker-proxy/epg-short/${channelId}`;
+      const response = await axios.get(url, {
+        headers: this.getHeaders(),
+      });
+
+      if (response.data.success) {
+        return response.data.epg;
+      }
+
+      return {
+        current_program: null,
+        next_program: null
+      };
+    } catch (error) {
+      console.error('Failed to fetch short EPG:', error);
+      return {
+        current_program: null,
+        next_program: null
+      };
+    }
+  }
+
   // Get top/favorite channels from analytics
   async getTopChannels(limit: number = 10): Promise<any[]> {
     try {

@@ -7,7 +7,7 @@ import { ContentRow } from '@/components/ContentCard'
 import { authService } from '@/services/authService'
 import { contentService, Category, ContentItem } from '@/services/contentService'
 import toast from 'react-hot-toast'
-import { Loader, Heart, Clock, Play, Info, Volume2, VolumeX } from 'lucide-react'
+import { Loader } from 'lucide-react'
 
 interface CategoryWithContent extends Category {
   items: ContentItem[]
@@ -16,29 +16,12 @@ interface CategoryWithContent extends Category {
   loaded: boolean
 }
 
-interface FeaturedMovie {
-  id: string
-  name: string
-  description: string
-  poster: string
-  backdrop: string
-  year?: number
-  rating?: number
-  logo?: string
-}
-
 export default function MoviesPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
   const [categories, setCategories] = useState<CategoryWithContent[]>([])
   const [searchQuery, setSearchQuery] = useState('')
-  const [featuredMovie, setFeaturedMovie] = useState<FeaturedMovie | null>(null)
-  const [trailerKey, setTrailerKey] = useState<string | null>(null)
-  const [showTrailer, setShowTrailer] = useState(true)
-  const [isMuted, setIsMuted] = useState(true)
-  const [isFullscreen, setIsFullscreen] = useState(false)
   const observerRefs = useRef<Map<string, HTMLDivElement>>(new Map())
-  const heroContainerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!authService.isAuthenticated()) {
@@ -48,15 +31,6 @@ export default function MoviesPage() {
 
     loadMovies()
   }, [router])
-
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement)
-    }
-
-    document.addEventListener('fullscreenchange', handleFullscreenChange)
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange)
-  }, [])
 
   const loadMovies = async () => {
     try {
@@ -73,77 +47,11 @@ export default function MoviesPage() {
       }))
       
       setCategories(categoriesInit)
-      
-      // Load featured movie from first category
-      if (cats.length > 0) {
-        loadFeaturedMovie(cats[0].category_id)
-      }
     } catch (error: any) {
       toast.error('Failed to load categories')
       console.error(error)
     } finally {
       setLoading(false)
-    }
-  }
-
-  const loadFeaturedMovie = async (categoryId: string) => {
-    try {
-      const result = await contentService.getVODContent(categoryId, 1)
-      if (result.items.length > 0) {
-        const movie = result.items[0]
-        
-        // Fetch TMDB data
-        const tmdbRes = await fetch(`/api/tmdb?action=search&query=${encodeURIComponent(movie.name)}&type=movie`)
-        const tmdbData = await tmdbRes.json()
-        
-        if (tmdbData.success && tmdbData.results?.[0]) {
-          const tmdbMovie = tmdbData.results[0]
-          
-          // Fetch backdrop
-          const backdropRes = await fetch(`/api/tmdb?action=images&id=${tmdbMovie.id}&type=movie`)
-          const backdropData = await backdropRes.json()
-          
-          // Fetch logo
-          const logoRes = await fetch(`/api/tmdb?action=logos&id=${tmdbMovie.id}&type=movie`)
-          const logoData = await logoRes.json()
-          
-          // Fetch trailer
-          const videoRes = await fetch(`/api/tmdb?action=videos&id=${tmdbMovie.id}&type=movie`)
-          const videoData = await videoRes.json()
-          
-          const backdrop = backdropData.backdrops?.[0]?.file_path
-          const logo = logoData.logos?.[0]?.file_path
-          const trailer = videoData.videos?.find((v: any) => 
-            v.site === 'YouTube' && (v.type === 'Trailer' || v.type === 'Teaser')
-          )
-          
-          setFeaturedMovie({
-            id: movie.id,
-            name: movie.name,
-            description: tmdbMovie.overview || movie.description || '',
-            poster: movie.poster,
-            backdrop: backdrop ? `https://image.tmdb.org/t/p/original${backdrop}` : movie.poster,
-            year: tmdbMovie.release_date ? new Date(tmdbMovie.release_date).getFullYear() : undefined,
-            rating: tmdbMovie.vote_average ? Math.round(tmdbMovie.vote_average * 10) / 10 : undefined,
-            logo: logo ? `https://image.tmdb.org/t/p/w500${logo}` : undefined
-          })
-          
-          if (trailer) {
-            setTrailerKey(trailer.key)
-          }
-        } else {
-          // Fallback to basic info
-          setFeaturedMovie({
-            id: movie.id,
-            name: movie.name,
-            description: movie.description || '',
-            poster: movie.poster,
-            backdrop: movie.poster
-          })
-        }
-      }
-    } catch (error) {
-      console.error('Failed to load featured movie:', error)
     }
   }
 
@@ -245,7 +153,11 @@ export default function MoviesPage() {
       <div>
         {/* Featured Movie Hero */}
         {featuredMovie && (
-          <div ref={heroContainerRef} className="relative h-[85vh] sm:h-[90vh] w-full overflow-hidden">
+          <div 
+            ref={heroContainerRef} 
+            className="relative h-[85vh] sm:h-[90vh] w-full overflow-hidden"
+            style={{ cursor: showControls ? 'default' : 'none' }}
+          >
             {/* Background Image/Video */}
             <div className="absolute inset-0">
               {showTrailer && trailerKey ? (
@@ -274,7 +186,7 @@ export default function MoviesPage() {
             </div>
 
             {/* Content */}
-            <div className={`relative z-10 h-full flex items-end ${isFullscreen ? 'pb-8 pl-8' : 'pb-20 sm:pb-24'}`}>
+            <div className={`relative z-10 h-full flex items-end transition-opacity duration-500 ${isFullscreen ? 'pb-8 pl-8' : 'pb-20 sm:pb-24'} ${!showControls ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
               <div className={isFullscreen ? 'w-full' : 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full'}>
                 <div className={isFullscreen ? 'max-w-md' : 'max-w-2xl'}>
                   {/* Logo or Title */}
@@ -342,20 +254,33 @@ export default function MoviesPage() {
                         >
                           {isMuted ? <VolumeX className={isFullscreen ? 'w-4 h-4' : 'w-5 h-5'} /> : <Volume2 className={isFullscreen ? 'w-4 h-4' : 'w-5 h-5'} />}
                         </button>
-                        {!isFullscreen && (
-                          <button
-                            onClick={() => {
-                              if (heroContainerRef.current) {
-                                heroContainerRef.current.requestFullscreen()
-                              }
-                            }}
-                            className="flex items-center gap-2 px-4 py-3 bg-gray-500/50 text-white rounded-lg hover:bg-gray-500/70 transition-colors backdrop-blur-sm"
-                          >
+                        <button
+                          onClick={() => {
+                            alert('FULLSCREEN BUTTON CLICKED! isFullscreen: ' + isFullscreen)
+                            console.log('🎯 Fullscreen button clicked')
+                            console.log('Current isFullscreen:', isFullscreen)
+                            if (isFullscreen) {
+                              console.log('Exiting fullscreen')
+                              document.exitFullscreen()
+                            } else if (heroContainerRef.current) {
+                              console.log('Entering fullscreen')
+                              heroContainerRef.current.requestFullscreen()
+                            } else {
+                              console.log('❌ Hero container ref is null!')
+                            }
+                          }}
+                          className={`flex items-center gap-2 bg-gray-500/50 text-white rounded-lg hover:bg-gray-500/70 transition-colors backdrop-blur-sm ${isFullscreen ? 'px-3 py-2' : 'px-4 py-3'}`}
+                        >
+                          {isFullscreen ? (
+                            <svg className={isFullscreen ? 'w-4 h-4' : 'w-5 h-5'} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          ) : (
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
                             </svg>
-                          </button>
-                        )}
+                          )}
+                        </button>
                       </>
                     )}
                   </div>

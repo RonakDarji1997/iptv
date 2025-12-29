@@ -120,6 +120,7 @@ function VODPlayerContent() {
   const [isDraggingProgress, setIsDraggingProgress] = useState(false);
   const [savedPosition, setSavedPosition] = useState<number>(0);
   const [progressLoaded, setProgressLoaded] = useState(false);
+  const [videoAspectRatio, setVideoAspectRatio] = useState<number>(16/9); // Default to 16:9
 
   // Subtitle functions (defined before useEffect that uses them)
   const selectSubtitle = async (subtitle: Subtitle) => {
@@ -559,7 +560,17 @@ function VODPlayerContent() {
       video.src = videoUrl;
     }
 
+    // Detect video aspect ratio when metadata loads
+    const handleLoadedMetadata = () => {
+      const aspectRatio = video.videoWidth / video.videoHeight;
+      console.log('[Video] Detected aspect ratio:', aspectRatio, `(${video.videoWidth}x${video.videoHeight})`);
+      setVideoAspectRatio(aspectRatio);
+    };
+
+    video.addEventListener('loadedmetadata', handleLoadedMetadata);
+
     return () => {
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
       if (hlsRef.current) {
         console.log('[HLS] Cleanup - destroying instance');
         hlsRef.current.destroy();
@@ -1115,11 +1126,41 @@ function VODPlayerContent() {
       {/* Subtitle styling */}
       <style jsx global>{`
         video::cue {
-          font-size: 1.1rem;
-          line-height: 1.3;
-          background-color: rgba(0, 0, 0, 0.8);
+          font-size: 1.3rem;
+          font-weight: 700;
+          line-height: 1.4;
+          background-color: rgba(0, 0, 0, 0.85);
           color: white;
-          padding: 0.2em 0.5em;
+          padding: 0.3em 0.6em;
+          text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9);
+        }
+        
+        /* Position subtitles based on aspect ratio */
+        video {
+          ${videoAspectRatio > 2 ? `
+            /* Ultra-wide video (e.g., 21:9, 2.39:1) - position higher */
+            --subtitle-bottom: 20%;
+          ` : videoAspectRatio > 1.85 ? `
+            /* Wide video (e.g., 2.35:1, 2.4:1) - position higher */
+            --subtitle-bottom: 18%;
+          ` : videoAspectRatio < 1.5 ? `
+            /* Narrow video (e.g., 4:3, 1.33:1) - position lower */
+            --subtitle-bottom: 12%;
+          ` : `
+            /* Standard widescreen (e.g., 16:9, 1.78:1) - default position */
+            --subtitle-bottom: 15%;
+          `}
+        }
+        
+        video::cue {
+          position: relative;
+          bottom: var(--subtitle-bottom, 8%);
+        }
+        
+        @media (max-width: 768px) {
+          video::cue {
+            font-size: 1.1rem;
+          }
         }
       `}</style>
 
@@ -1245,11 +1286,12 @@ function VODPlayerContent() {
       {/* Bottom Controls */}
       <div
         data-controls="true"
-        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-4 sm:px-6 pt-6 pb-16 sm:pb-10 transition-opacity duration-300 ${
+        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-4 sm:px-6 pt-6 transition-opacity duration-300 ${
           showControls ? 'opacity-100' : 'opacity-0'
         }`}
         style={{
-          pointerEvents: showControls ? 'auto' : 'none'
+          pointerEvents: showControls ? 'auto' : 'none',
+          paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))'
         }}
         onClick={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}

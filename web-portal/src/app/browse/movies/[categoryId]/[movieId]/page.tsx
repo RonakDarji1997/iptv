@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Play, Star, Calendar, Clock, Users } from 'lucide-react';
+import { ArrowLeft, Play, Star, Calendar, Clock, Users, Volume2, VolumeX, Maximize } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authService } from '@/services/authService';
 import { UpscaledImage } from '@/components/UpscaledImage';
@@ -44,6 +44,11 @@ export default function MovieDetailPage() {
   const [loadingTmdb, setLoadingTmdb] = useState(false);
   const [watchProgress, setWatchProgress] = useState<number>(0);
   const [movieImdbId, setMovieImdbId] = useState<string | null>(null);
+  const [movieLogo, setMovieLogo] = useState<string | null>(null);
+  const [trailerKey, setTrailerKey] = useState<string | null>(null);
+  const [showTrailer, setShowTrailer] = useState(true);
+  const [isMuted, setIsMuted] = useState(true);
+  const trailerContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const fetchProviderUrl = async () => {
@@ -114,8 +119,8 @@ export default function MovieDetailPage() {
   }, [movieId]);
 
   useEffect(() => {
-    // Try to get movie data from sessionStorage or localStorage cache
-    const getMovieInfo = () => {
+    // Try to get movie data from sessionStorage or localStorage cache, with API fallback
+    const getMovieInfo = async () => {
       try {
         // Check sessionStorage first (from click)
         const sessionData = sessionStorage.getItem(`movie_${movieId}`);
@@ -140,7 +145,46 @@ export default function MovieDetailPage() {
           }
         }
 
-        // If no data found, show error
+        // API Fallback: Fetch movie files from vod-info endpoint
+        console.log('[MovieDetail] ========== STARTING API FETCH ==========');
+        console.log('[MovieDetail] Cache miss, fetching files from API:', movieId);
+        const token = authService.getToken();
+        
+        const response = await fetch(`${API_URL}/stalker-proxy/vod-info/${movieId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        console.log('[MovieDetail] Response status:', response.status, response.statusText);
+        
+        if (response.ok) {
+          const data = await response.json();
+          console.log('[MovieDetail] API response:', data);
+          
+          if (data.success && data.files && data.files.length > 0) {
+            // API returns files array, we need to construct movie object
+            // Use generic name since API doesn't have movie metadata
+            const movie = {
+              id: movieId,
+              name: 'Movie', // Generic name, TMDB will override this
+              files: data.files,
+            };
+            console.log('[MovieDetail] Constructed movie with files:', movie);
+            
+            setMovieInfo(movie);
+            // Cache it for next time
+            sessionStorage.setItem(`movie_${movieId}`, JSON.stringify(movie));
+            setLoading(false);
+            return;
+          } else {
+            console.error('[MovieDetail] No files in API response:', data);
+          }
+        } else {
+          console.error('[MovieDetail] HTTP error:', response.status);
+        }
+
+        console.log('[MovieDetail] ========== ALL FETCH ATTEMPTS FAILED ==========');
+
+        // If all attempts failed, show error
         toast.error('Movie information not found');
         setLoading(false);
       } catch (error) {
@@ -178,6 +222,44 @@ export default function MovieDetailPage() {
           });
           setTmdbData(data.details);
           
+          // Fetch trailer video
+          if (data.details.id) {
+            try {
+              const videosResponse = await fetch(
+                `/api/tmdb?action=videos&type=movie&id=${data.details.id}`
+              );
+              const videosData = await videosResponse.json();
+              if (videosData.success && videosData.videos && videosData.videos.length > 0) {
+                // Get first YouTube trailer
+                const youtubeTrailer = videosData.videos.find((v: any) => v.site === 'YouTube' && v.type === 'Trailer');
+                if (youtubeTrailer) {
+                  console.log('[MovieDetail] Trailer key:', youtubeTrailer.key);
+                  setTrailerKey(youtubeTrailer.key);
+                }
+              }
+            } catch (error) {
+              console.error('[MovieDetail] Failed to fetch trailer:', error);
+            }
+          }
+          
+          // Fetch logos
+          if (data.details.id) {
+            try {
+              const logosResponse = await fetch(
+                `/api/tmdb?action=logos&type=movie&id=${data.details.id}`
+              );
+              const logosData = await logosResponse.json();
+              if (logosData.success && logosData.logos && logosData.logos.length > 0) {
+                const logoPath = logosData.logos[0].file_path;
+                const logoUrl = `https://image.tmdb.org/t/p/w500${logoPath}`;
+                console.log('[MovieDetail] Logo URL:', logoUrl);
+                setMovieLogo(logoUrl);
+              }
+            } catch (error) {
+              console.error('[MovieDetail] Failed to fetch logo:', error);
+            }
+          }
+          
           // Fetch IMDb ID for subtitle support
           if (data.details.id) {
             try {
@@ -214,25 +296,35 @@ export default function MovieDetailPage() {
     try {
       const token = authService.getToken();
       
-      // Step 1: Get vod-info to get the file id (with cache)
-      const vodInfoCacheKey = `vod-info:${movieId}`;
-      const vodInfoData = await cache.getOrFetch(
-        vodInfoCacheKey,
-        async () => {
-          const response = await fetch(`${API_URL}/stalker-proxy/vod-info/${movieId}`, {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          return response.json();
-        },
-        10 * 60 * 1000 // 10 minutes TTL
-      );
+      // Step 1: Get files list (use from movieInfo if available, otherwise fetch)
+      let files = movieInfo.files;
       
-      if (!vodInfoData.success || !vodInfoData.info) {
-        toast.error('Failed to get file information');
-        return;
+      if (!files || files.length === 0) {
+        console.log('[Movie Play] No files in movieInfo, fetching from API');
+        const vodInfoCacheKey = `vod-info:${movieId}`;
+        const vodInfoData = await cache.getOrFetch(
+          vodInfoCacheKey,
+          async () => {
+            const response = await fetch(`${API_URL}/stalker-proxy/vod-info/${movieId}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            return response.json();
+          },
+          10 * 60 * 1000 // 10 minutes TTL
+        );
+        
+        if (!vodInfoData.success || !vodInfoData.files || vodInfoData.files.length === 0) {
+          toast.error('No playable file found');
+          return;
+        }
+        
+        files = vodInfoData.files;
       }
 
-      const fileId = vodInfoData.info.id;
+      // Use the first file (highest quality usually)
+      const fileId = files[0].id;
+      console.log('[Movie Play] Using file ID:', fileId, 'from', files.length, 'available files');
+      
       if (!fileId) {
         toast.error('No playable file found');
         return;
@@ -240,6 +332,8 @@ export default function MovieDetailPage() {
 
       // Step 2: Create streaming link using the file id in proper format
       const cmd = `/media/file_${fileId}.mpg`;
+      
+      console.log('[Movie Play] Creating stream link with:', { cmd, movieId, fileId });
       
       const response = await fetch(`${API_URL}/stalker-proxy/create-link`, {
         method: 'POST',
@@ -257,7 +351,12 @@ export default function MovieDetailPage() {
       });
 
       const data = await response.json();
+      console.log('[Movie Play] Create-link response:', data);
+      
       if (data.success && data.link && data.link.cmd) {
+        const streamUrl = data.link.cmd;
+        console.log('[Movie Play] ✅ Stream URL:', streamUrl);
+        
         // Store IMDb ID in session storage for subtitle search
         if (movieImdbId) {
           sessionStorage.setItem('current_imdb_id', movieImdbId);
@@ -269,12 +368,13 @@ export default function MovieDetailPage() {
         }
         
         // Navigate to player with stream URL and poster
-        const streamUrl = data.link.cmd;
         const poster = tmdbData?.poster_path 
           ? `https://image.tmdb.org/t/p/w500${tmdbData.poster_path}`
           : (providerUrl && movieInfo.cover_big 
             ? `${providerUrl}${movieInfo.cover_big}`
             : '');
+        
+        console.log('[Movie Play] Navigating to player with URL:', `/player/vod?url=${encodeURIComponent(streamUrl)}&title=${encodeURIComponent(movieInfo.name)}`);
         
         // On mobile, open native player directly without navigating
         if (isMobileApp()) {
@@ -404,9 +504,45 @@ export default function MovieDetailPage() {
         <ArrowLeft size={24} />
       </button>
 
-      {/* Hero Section with Backdrop */}
-      <div className="relative w-full h-[40vh] sm:h-[50vh]">
-        {backdropUrl ? (
+      {/* Hero Section with Trailer or Backdrop */}
+      <div ref={trailerContainerRef} className="relative w-full h-[70vh] sm:h-[80vh] overflow-hidden">
+        {trailerKey && showTrailer ? (
+          <>
+            {/* YouTube Trailer Embed */}
+            <iframe
+              src={`https://www.youtube.com/embed/${trailerKey}?autoplay=1&mute=${isMuted ? 1 : 0}&controls=0&showinfo=0&rel=0&loop=1&playlist=${trailerKey}&modestbranding=1&playsinline=1`}
+              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[200%] h-[200%] pointer-events-none"
+              allow="autoplay; encrypted-media"
+              style={{ border: 'none' }}
+            />
+            {/* Fade overlay to hide YouTube branding */}
+            <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/30 pointer-events-none" />
+            
+            {/* Trailer Controls */}
+            <div className="absolute top-6 right-6 z-40 flex gap-2">
+              <button
+                onClick={() => setIsMuted(!isMuted)}
+                className="p-3 bg-black/70 hover:bg-black/90 backdrop-blur-sm rounded-full transition-colors"
+              >
+                {isMuted ? <VolumeX size={20} className="text-white" /> : <Volume2 size={20} className="text-white" />}
+              </button>
+              <button
+                onClick={() => {
+                  if (trailerContainerRef.current) {
+                    if (!document.fullscreenElement) {
+                      trailerContainerRef.current.requestFullscreen();
+                    } else {
+                      document.exitFullscreen();
+                    }
+                  }
+                }}
+                className="p-3 bg-black/70 hover:bg-black/90 backdrop-blur-sm rounded-full transition-colors"
+              >
+                <Maximize size={20} className="text-white" />
+              </button>
+            </div>
+          </>
+        ) : backdropUrl ? (
           tmdbData?.backdrop_path ? (
             <img
               src={backdropUrl}
@@ -429,11 +565,20 @@ export default function MovieDetailPage() {
         {/* Title and Meta Info Overlay */}
         <div className="absolute bottom-0 left-0 right-0">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6 sm:pb-8">
-            {/* Movie Title */}
-            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold mb-3 drop-shadow-2xl">
-              {movieInfo.name}
-            </h1>
-            {movieInfo.o_name && movieInfo.o_name !== movieInfo.name && (
+            {/* Movie Title or Logo */}
+            {movieLogo ? (
+              <img 
+                src={movieLogo} 
+                alt={movieInfo.name}
+                className="h-16 sm:h-20 lg:h-28 w-auto mb-3 drop-shadow-2xl"
+                style={{ filter: 'drop-shadow(0 20px 40px rgba(0,0,0,0.9))' }}
+              />
+            ) : (
+              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold mb-3 drop-shadow-2xl">
+                {movieInfo.name}
+              </h1>
+            )}
+            {movieInfo.o_name && movieInfo.o_name !== movieInfo.name && !movieLogo && (
               <p className="text-xl sm:text-2xl text-gray-300 mb-3">{movieInfo.o_name}</p>
             )}
             

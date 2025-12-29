@@ -81,6 +81,15 @@ export function ContentCard({ id, title, imageUrl, logo, screenshot, type, subti
   const [imageError, setImageError] = useState(false)
   const [isHovered, setIsHovered] = useState(false)
   const [finalImageUrl, setFinalImageUrl] = useState<string | undefined>()
+  const [supportsHover, setSupportsHover] = useState(false)
+
+  // Detect if device supports hover (not touch-only)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const hasHover = window.matchMedia('(hover: hover)').matches
+      setSupportsHover(hasHover)
+    }
+  }, [])
 
   useEffect(() => {
     const buildImageUrl = async () => {
@@ -151,13 +160,34 @@ export function ContentCard({ id, title, imageUrl, logo, screenshot, type, subti
           </div>
         )}
 
-        {/* Hover Overlay */}
-        {isHovered && (
-          <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center space-y-3 transition-opacity duration-300">
-            <button className="flex items-center space-x-2 px-6 py-3 bg-gray-800/80 text-white rounded-full hover:bg-gray-700 transition-colors">
-              <Info className="w-5 h-5" />
-              <span className="font-semibold">Info</span>
-            </button>
+        {/* Hover Overlay - Only on cursor-based systems */}
+        {isHovered && supportsHover && (
+          <div className="absolute inset-0 bg-gradient-to-t from-black via-black/60 to-transparent flex flex-col justify-end p-4 transition-opacity duration-300">
+            <h3 className="text-white font-bold text-sm mb-2 line-clamp-2">{title}</h3>
+            
+            <div className="flex gap-2">
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClick?.();
+                }}
+                className="flex items-center gap-1 bg-white text-black px-3 py-1.5 rounded text-xs font-semibold hover:bg-gray-200 transition-colors"
+              >
+                <Play size={14} fill="currentColor" />
+                Play
+              </button>
+              
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClick?.();
+                }}
+                className="flex items-center justify-center bg-gray-800/80 hover:bg-gray-700/80 text-white p-1.5 rounded-full transition-colors"
+                title="More Info"
+              >
+                <Info size={14} />
+              </button>
+            </div>
           </div>
         )}
       </div>

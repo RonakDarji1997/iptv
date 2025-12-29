@@ -96,6 +96,38 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ success: true, data: externalIds });
       }
 
+      case 'logos': {
+        const id = searchParams.get('id');
+        const type = searchParams.get('type') as 'movie' | 'tv';
+        
+        if (!id || !type) {
+          return NextResponse.json(
+            { error: 'Missing id or type parameter' },
+            { status: 400 }
+          );
+        }
+
+        const logos = await TMDBService.getLogos(parseInt(id), type);
+
+        return NextResponse.json({ success: true, logos });
+      }
+
+      case 'videos': {
+        const id = searchParams.get('id');
+        const type = searchParams.get('type') as 'movie' | 'tv';
+        
+        if (!id || !type) {
+          return NextResponse.json(
+            { error: 'Missing id or type parameter' },
+            { status: 400 }
+          );
+        }
+
+        const videos = await TMDBService.getVideos(parseInt(id), type);
+
+        return NextResponse.json({ success: true, videos });
+      }
+
       default:
         return NextResponse.json(
           { error: 'Invalid action parameter' },

@@ -445,7 +445,7 @@ export const createStalkerProxyRouter = (pool: Pool) => {
     }
   });
 
-  // GET /api/stalker-proxy/vod-info/:vodId - Get VOD/Movie file info
+  // GET /api/stalker-proxy/vod-info/:vodId - Get VOD/Movie files for playback
   router.get('/vod-info/:vodId', async (req: Request, res: Response) => {
     try {
       const userId = (req as any).userId;
@@ -469,26 +469,30 @@ export const createStalkerProxyRouter = (pool: Pool) => {
         'Authorization': `Bearer ${provider.token}`,
       };
       
+      // get_ordered_list returns file list for playback
       const url = `${provider.server_url}/stalker_portal/server/load.php?action=get_ordered_list&type=vod&movie_id=${vodId}&JsHttpRequest=1-xml`;
       
-      console.log(`📡 Fetching VOD info for movie ${vodId} from: ${url}`);
+      console.log(`📡 Fetching VOD files for movie ${vodId} from: ${url}`);
       const response = await axios.get(url, { headers });
       
-      console.log(`📦 Raw response structure:`, {
-        hasJs: !!response.data.js,
-        hasData: !!response.data.js?.data,
-        dataType: Array.isArray(response.data.js?.data) ? 'array' : typeof response.data.js?.data,
-        dataLength: Array.isArray(response.data.js?.data) ? response.data.js.data.length : 'N/A'
-      });
+      const files = response.data.js?.data || [];
+      console.log(`📦 VOD files response:`, JSON.stringify({
+        filesCount: files.length,
+        hasFiles: files.length > 0,
+        firstFile: files.length > 0 ? {
+          id: files[0].id,
+          video_id: files[0].video_id,
+          name: files[0].name,
+          quality: files[0].quality,
+          hasCmd: !!files[0].cmd
+        } : null
+      }, null, 2));
       
-      const data = response.data.js?.data;
-      const movieInfo = Array.isArray(data) && data.length > 0 ? data[0] : {};
-      
-      console.log(`📦 VOD Info:`, movieInfo.id ? `Found movie ${movieInfo.id} with ${movieInfo.files?.length || 0} files` : 'No data found');
-      
+      // Return as files array - frontend will use this for playback
       res.json({
         success: true,
-        info: movieInfo,
+        files: files,
+        video_id: files.length > 0 ? files[0].video_id : vodId,
       });
     } catch (error: any) {
       console.error('Stalker proxy error:', error.message);
@@ -542,10 +546,12 @@ export const createStalkerProxyRouter = (pool: Pool) => {
       console.log(`📦 Full response:`, JSON.stringify(response.data).substring(0, 500));
       console.log(`✅ Link created:`, response.data.js?.cmd ? `Success: ${response.data.js.cmd}` : 'No cmd in response');
       
-      res.json({
+      const result = {
         success: true,
         link: response.data.js || {},
-      });
+      };
+      
+      res.json(result);
     } catch (error: any) {
       console.error('Stalker proxy error:', error.message);
       res.status(500).json({ error: 'Failed to create link', details: error.message });
@@ -640,10 +646,12 @@ export const createStalkerProxyRouter = (pool: Pool) => {
       
       const response = await axios.get(url, { headers });
       
-      res.json({
+      const result = {
         success: true,
         stream: response.data.js || {},
-      });
+      };
+      
+      res.json(result);
     } catch (error: any) {
       console.error('Stalker proxy error:', error.message);
       res.status(500).json({ error: 'Failed to get stream', details: error.message });
@@ -1050,6 +1058,226 @@ export const createStalkerProxyRouter = (pool: Pool) => {
       res.status(500).json({ 
         error: 'Failed to fetch categories', 
         details: error.message 
+      });
+    }
+  });
+
+  // GET /api/stalker-proxy/epg/:channelId - Get EPG for a channel
+  router.get('/epg/:channelId', async (req: Request, res: Response) => {
+    try {
+      const userId = (req as any).userId;
+      const { channelId } = req.params;
+      const period = req.query.period ? parseInt(req.query.period as string) : 4; // Default 4 days
+
+      console.log('🔍 [EPG] Request received:', { userId, channelId, period });
+
+      // Get user's active provider
+      const providerResult = await pool.query(
+        'SELECT * FROM providers WHERE user_id = $1 AND is_active = true LIMIT 1',
+        [userId]
+      );
+
+      if (providerResult.rows.length === 0) {
+        console.log('❌ [EPG] No active provider found for user:', userId);
+        return res.status(404).json({ error: 'No active provider found' });
+      }
+
+      const provider = providerResult.rows[0];
+      console.log('✅ [EPG] Found provider:', { id: provider.id, url: provider.server_url.substring(0, 50) + '...' });
+
+      // Make request to Stalker portal for EPG data
+      const headers = {
+        'Cookie': `mac=${provider.mac_address}; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722`,
+        'User-Agent': 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
+        'X-User-Agent': 'Model: MAG270; Link: WiFi',
+        'Authorization': `Bearer ${provider.token}`,
+      };
+
+      const baseUrl = `${provider.server_url}/stalker_portal/server/load.php`;
+      const url = `${baseUrl}?type=itv&action=get_epg_info&ch_id=${channelId}&period=${period}&JsHttpRequest=1-xml`;
+
+      console.log('🔗 [EPG] Fetching from Stalker:', url.substring(0, 120) + '...');
+
+      const response = await axios.get(url, { headers, timeout: 15000 });
+      
+      // Debug: Log the full response structure
+      console.log('📡 [EPG] Full response.data:', JSON.stringify(response.data).substring(0, 500));
+      console.log('📡 [EPG] Response type:', typeof response.data);
+      
+      // Handle empty or invalid responses
+      if (!response.data || response.data === '' || (typeof response.data === 'string' && response.data.trim() === '')) {
+        console.log('⚠️ [EPG] Empty response from get_epg_info, trying get_short_epg...');
+        
+        // Try short EPG as fallback
+        const shortEpgUrl = `${baseUrl}?type=itv&action=get_short_epg&ch_id=${channelId}&JsHttpRequest=1-xml`;
+        console.log('🔗 [EPG] Trying short EPG:', shortEpgUrl.substring(0, 120) + '...');
+        
+        try {
+          const shortResponse = await axios.get(shortEpgUrl, { headers, timeout: 10000 });
+          console.log('📡 [EPG] Short EPG response:', JSON.stringify(shortResponse.data).substring(0, 500));
+          
+          if (shortResponse.data && shortResponse.data.js) {
+            const shortEpgData = Array.isArray(shortResponse.data.js) ? shortResponse.data.js : [];
+            console.log('✅ [EPG] Got short EPG data:', shortEpgData.length, 'programs');
+            
+            return res.json({
+              success: true,
+              epg: {
+                current_program: shortEpgData[0] || null,
+                next_program: shortEpgData[1] || null,
+                programs: shortEpgData
+              }
+            });
+          }
+        } catch (shortEpgError: any) {
+          console.log('⚠️ [EPG] Short EPG also failed:', shortEpgError.message);
+        }
+        
+        // No EPG data available
+        console.log('ℹ️ [EPG] No EPG data available for this channel/provider');
+        return res.json({
+          success: true,
+          epg: {
+            current_program: null,
+            next_program: null,
+            programs: [],
+            message: 'EPG not available for this channel'
+          }
+        });
+      }
+      
+      const epgData = response.data.js || response.data || {};
+
+      console.log('📡 [EPG] Stalker response structure:', {
+        hasJs: !!response.data.js,
+        hasData: !!response.data,
+        keys: Object.keys(epgData).slice(0, 5),
+        totalKeys: Object.keys(epgData).length,
+        isArray: Array.isArray(epgData)
+      });
+
+      // EPG data structure: { [channelId]: [programs...] }
+      const programs = epgData[channelId] || [];
+      
+      console.log(`📺 [EPG] Found ${programs.length} programs for channel ${channelId}`);
+      if (programs.length > 0) {
+        console.log('📺 [EPG] First program sample:', {
+          name: programs[0].name,
+          start_timestamp: programs[0].start_timestamp,
+          stop_timestamp: programs[0].stop_timestamp,
+          time: programs[0].time
+        });
+      }
+
+      // Extract current and next program
+      const now = Math.floor(Date.now() / 1000);
+      let currentProgram = null;
+      let nextProgram = null;
+
+      for (let i = 0; i < programs.length; i++) {
+        const program = programs[i];
+        const startTime = parseInt(program.start_timestamp || program.time || '0');
+        const stopTime = parseInt(program.stop_timestamp || '0');
+
+        // Current program: start <= now < stop
+        if (startTime <= now && stopTime > now) {
+          currentProgram = program;
+          console.log('✅ [EPG] Found current program:', program.name);
+        }
+        // Next program: first program after current
+        if (startTime > now && !nextProgram) {
+          nextProgram = program;
+          console.log('✅ [EPG] Found next program:', program.name);
+          break;
+        }
+      }
+
+      console.log('📊 [EPG] Returning:', {
+        hasCurrent: !!currentProgram,
+        hasNext: !!nextProgram,
+        totalPrograms: programs.length
+      });
+
+      res.json({
+        success: true,
+        epg: {
+          current_program: currentProgram,
+          next_program: nextProgram,
+          programs: programs
+        }
+      });
+    } catch (error: any) {
+      console.error('❌ [EPG] Error:', error.message);
+      if (error.response) {
+        console.error('❌ [EPG] Response error:', {
+          status: error.response.status,
+          statusText: error.response.statusText,
+          data: error.response.data
+        });
+      }
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch EPG',
+        details: error.message
+      });
+    }
+  });
+
+  // GET /api/stalker-proxy/epg-short/:channelId - Get short EPG (current and next)
+  router.get('/epg-short/:channelId', async (req: Request, res: Response) => {
+    try {
+      const userId = (req as any).userId;
+      const { channelId } = req.params;
+
+      console.log('🔍 Proxy /epg-short/:channelId - User ID:', userId, 'Channel ID:', channelId);
+
+      // Get user's active provider
+      const providerResult = await pool.query(
+        'SELECT * FROM providers WHERE user_id = $1 AND is_active = true LIMIT 1',
+        [userId]
+      );
+
+      if (providerResult.rows.length === 0) {
+        return res.status(404).json({ error: 'No active provider found' });
+      }
+
+      const provider = providerResult.rows[0];
+
+      // Make request to Stalker portal for short EPG
+      const headers = {
+        'Cookie': `mac=${provider.mac_address}; timezone=America/Toronto; adid=06c140f97c839eaaa4faef4cc08a5722`,
+        'User-Agent': 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
+        'X-User-Agent': 'Model: MAG270; Link: WiFi',
+        'Authorization': `Bearer ${provider.token}`,
+      };
+
+      const baseUrl = `${provider.server_url}/stalker_portal/server/load.php`;
+      const url = `${baseUrl}?type=itv&action=get_short_epg&ch_id=${channelId}&JsHttpRequest=1-xml`;
+
+      console.log('🔗 Fetching short EPG from:', url);
+
+      const response = await axios.get(url, { headers, timeout: 10000 });
+      const epgData = response.data.js || [];
+
+      console.log(`✅ Fetched short EPG for channel ${channelId}:`, epgData.length, 'programs');
+
+      // Short EPG returns array with current and potentially next program
+      const currentProgram = epgData.length > 0 ? epgData[0] : null;
+      const nextProgram = epgData.length > 1 ? epgData[1] : null;
+
+      res.json({
+        success: true,
+        epg: {
+          current_program: currentProgram,
+          next_program: nextProgram
+        }
+      });
+    } catch (error: any) {
+      console.error('❌ Get short EPG error:', error.message);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch short EPG',
+        details: error.message
       });
     }
   });

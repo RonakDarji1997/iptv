@@ -80,12 +80,34 @@ function LivePlayerContent() {
   }, [cmd]);
 
   const createStreamLink = async () => {
+    // Prevent multiple simultaneous calls
+    if (isBuffering) {
+      console.log('[Stream] Already loading, skipping duplicate call');
+      return;
+    }
+
     try {
       setIsBuffering(true);
       setLoadingTimeout(false);
       hasStartedPlayingRef.current = false;
       
       const token = authService.getToken();
+      
+      // Cache key for this stream
+      const cacheKey = `stream:${cmd}`;
+      const cached = sessionStorage.getItem(cacheKey);
+      
+      // Use cached stream if less than 5 minutes old
+      if (cached) {
+        const { url, timestamp } = JSON.parse(cached);
+        const age = Date.now() - timestamp;
+        if (age < 5 * 60 * 1000) { // 5 minutes
+          console.log('[Stream] Using cached stream URL');
+          setOriginalStreamUrl(url);
+          await applyQuality(url, selectedQuality);
+          return;
+        }
+      }
       
       const response = await fetch(`${API_URL}/stalker-proxy/channel-stream?cmd=${encodeURIComponent(cmd || '')}`, {
         headers: {
@@ -95,6 +117,12 @@ function LivePlayerContent() {
 
       const data = await response.json();
       if (data.success && data.stream && data.stream.cmd) {
+        // Cache the stream URL
+        sessionStorage.setItem(cacheKey, JSON.stringify({
+          url: data.stream.cmd,
+          timestamp: Date.now()
+        }));
+        
         // Store original URL
         setOriginalStreamUrl(data.stream.cmd);
         
@@ -113,10 +141,12 @@ function LivePlayerContent() {
         }, 10000);
       } else {
         setError('Failed to create stream link');
+        setIsBuffering(false);
       }
     } catch (error) {
       console.error('Failed to create stream link:', error);
       setError('Failed to start playback');
+      setIsBuffering(false);
     }
   };
 
@@ -515,9 +545,12 @@ function LivePlayerContent() {
 
       {/* Bottom Controls */}
       <div
-        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-6 transition-opacity duration-300 ${
+        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-6 pt-6 transition-opacity duration-300 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
+        style={{
+          paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))'
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">

@@ -26,8 +26,8 @@ export default function Navbar() {
     { name: 'SETTINGS', href: '/settings', icon: Settings },
   ]
 
-  const handleLogout = () => {
-    authService.logout()
+  const handleLogout = async () => {
+    await authService.logout()
     router.push('/')
   }
 

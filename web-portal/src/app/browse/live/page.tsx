@@ -169,6 +169,23 @@ interface CategoryWithChannels extends Category {
   loaded: boolean
 }
 
+interface EPGProgram {
+  id?: string
+  name: string
+  start_timestamp?: string
+  stop_timestamp?: string
+  time?: string
+  time_to?: string
+  duration?: string
+  description?: string
+}
+
+interface EPGData {
+  current_program: EPGProgram | null
+  next_program: EPGProgram | null
+  programs?: EPGProgram[]
+}
+
 export default function LiveTVPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
@@ -184,6 +201,8 @@ export default function LiveTVPage() {
   const [favoriteCategories, setFavoriteCategories] = useState<Set<string>>(new Set())
   const [homePageFavoriteChannelId, setHomePageFavoriteChannelId] = useState<string | null>(null)
   const [showMobileOverlay, setShowMobileOverlay] = useState(true)
+  const [epgData, setEpgData] = useState<EPGData | null>(null)
+  const [isLoadingEpg, setIsLoadingEpg] = useState(false)
   const observerTarget = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
 
@@ -290,8 +309,10 @@ export default function LiveTVPage() {
   useEffect(() => {
     if (selectedChannel) {
       loadStream(selectedChannel)
+      loadEpg(selectedChannel)
     } else {
       setStreamUrl(null)
+      setEpgData(null)
     }
   }, [selectedChannel])
 
@@ -320,6 +341,39 @@ export default function LiveTVPage() {
       toast.error('Failed to start playback')
     } finally {
       setIsLoadingStream(false)
+    }
+  }
+
+  const loadEpg = async (channel: ContentItem) => {
+    try {
+      setIsLoadingEpg(true)
+      setEpgData(null)
+      
+      const channelId = channel.id
+      console.log('🔍 Loading EPG for channel:', {
+        id: channelId,
+        name: channel.name,
+        cmd: channel.cmd
+      })
+      
+      // Fetch EPG data for 4 days
+      const epg = await contentService.getChannelEpg(channelId, 4)
+      console.log('✅ EPG loaded for channel:', channel.name, {
+        hasCurrent: !!epg.current_program,
+        hasNext: !!epg.next_program,
+        programCount: epg.programs?.length || 0,
+        currentProgram: epg.current_program?.name,
+        nextProgram: epg.next_program?.name
+      })
+      setEpgData(epg)
+    } catch (error) {
+      console.error('❌ Failed to load EPG:', error)
+      if (error instanceof Error) {
+        console.error('Error details:', error.message, error.stack)
+      }
+      setEpgData(null)
+    } finally {
+      setIsLoadingEpg(false)
     }
   }
 
@@ -906,14 +960,89 @@ export default function LiveTVPage() {
                   {/* EPG Section - Hidden on mobile */}
                   <div className="hidden md:block bg-gray-800 rounded-lg p-4 flex-shrink-0">
                     <h3 className="text-white font-semibold mb-3">Program Guide</h3>
-                    <div className="space-y-2">
+                    {isLoadingEpg ? (
+                      <div className="flex items-center justify-center py-4">
+                        <Loader className="w-6 h-6 text-blue-500 animate-spin" />
+                      </div>
+                    ) : epgData ? (
+                      <div className="space-y-3">
+                        {/* Current Program */}
+                        {epgData.current_program ? (
+                          <div className="bg-gray-700 rounded-lg p-3">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-blue-400 text-xs font-semibold uppercase">Now Playing</span>
+                              <span className="text-gray-400 text-xs">
+                                {new Date(parseInt(epgData.current_program.start_timestamp || epgData.current_program.time || '0') * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                {' - '}
+                                {new Date(parseInt(epgData.current_program.stop_timestamp || epgData.current_program.time_to || '0') * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                            <p className="text-white font-medium text-sm">{epgData.current_program.name}</p>
+                            {epgData.current_program.description && (
+                              <p className="text-gray-400 text-xs mt-1 line-clamp-2">{epgData.current_program.description}</p>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="bg-gray-700 rounded-lg p-3">
+                            <div className="text-sm text-gray-400">
+                              <span className="text-blue-400">Now:</span> No program information available
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Next Program */}
+                        {epgData.next_program ? (
+                          <div className="bg-gray-750 rounded-lg p-3 border border-gray-600">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-green-400 text-xs font-semibold uppercase">Up Next</span>
+                              <span className="text-gray-400 text-xs">
+                                {new Date(parseInt(epgData.next_program.start_timestamp || epgData.next_program.time || '0') * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                            <p className="text-white font-medium text-sm">{epgData.next_program.name}</p>
+                            {epgData.next_program.description && (
+                              <p className="text-gray-400 text-xs mt-1 line-clamp-2">{epgData.next_program.description}</p>
+                            )}
+                          </div>
+                        ) : epgData.current_program ? (
+                          <div className="text-sm text-gray-400">
+                            <span className="text-green-400">Next:</span> No upcoming program
+                          </div>
+                        ) : null}
+
+                        {/* Show message if EPG is not available */}
+                        {!epgData.current_program && !epgData.next_program && (epgData as any).message && (
+                          <div className="text-sm text-gray-400 italic">
+                            {(epgData as any).message}
+                          </div>
+                        )}
+
+                        {/* Show full schedule if available */}
+                        {epgData.programs && epgData.programs.length > 2 && (
+                          <details className="mt-3">
+                            <summary className="text-sm text-gray-400 cursor-pointer hover:text-gray-300">
+                              View full schedule ({epgData.programs.length} programs)
+                            </summary>
+                            <div className="mt-2 space-y-2 max-h-60 overflow-y-auto">
+                              {epgData.programs.slice(0, 10).map((program, idx) => (
+                                <div key={idx} className="text-xs text-gray-400 py-1 border-b border-gray-700">
+                                  <div className="flex justify-between">
+                                    <span className="text-white">{program.name}</span>
+                                    <span>
+                                      {new Date(parseInt(program.start_timestamp || program.time || '0') * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        )}
+                      </div>
+                    ) : (
                       <div className="text-sm text-gray-400">
-                        <span className="text-blue-400">Now:</span> Currently Playing
+                        No EPG data available for this channel
                       </div>
-                      <div className="text-sm text-gray-500">
-                        EPG data coming soon...
-                      </div>
-                    </div>
+                    )}
                   </div>
                 </div>
               ) : (

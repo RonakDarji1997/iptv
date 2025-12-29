@@ -1,5 +1,8 @@
 import axios from 'axios'
 import { jwtDecode } from 'jwt-decode'
+import { storage } from '@/utils/storage'
+import { cache } from '@/utils/cache'
+import { apiCache } from '@/utils/api-cache'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'
 
@@ -31,9 +34,9 @@ class AuthService {
     const response = await axios.post<LoginResponse>(`${API_URL}/auth/register`, data)
     
     if (response.data.accessToken) {
-      this.setToken(response.data.accessToken)
+      await this.setToken(response.data.accessToken)
       if (response.data.refreshToken) {
-        this.setRefreshToken(response.data.refreshToken)
+        await this.setRefreshToken(response.data.refreshToken)
       }
     }
     
@@ -48,34 +51,37 @@ class AuthService {
     })
     
     if (response.data.accessToken) {
-      this.setToken(response.data.accessToken)
+      await this.setToken(response.data.accessToken)
       if (response.data.refreshToken) {
-        this.setRefreshToken(response.data.refreshToken)
+        await this.setRefreshToken(response.data.refreshToken)
       }
     }
     
     return response.data
   }
 
-  logout() {
-    if (typeof window !== 'undefined') {
-      // Clear all localStorage data
-      localStorage.clear()
-    }
+  async logout() {
+    // Clear storage (works for both web localStorage and mobile AsyncStorage)
+    await storage.clear()
+    
+    // Clear in-memory cache
+    cache.clear()
+    
+    // Clear API cache (includes localStorage persistence)
+    apiCache.clear()
+    
+    console.log('[Auth] Logout complete - cleared storage, in-memory cache, and API cache')
   }
 
-  setToken(token: string) {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(this.tokenKey, token)
-    }
+  async setToken(token: string) {
+    await storage.setItem(this.tokenKey, token)
   }
 
-  setRefreshToken(token: string) {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(this.refreshTokenKey, token)
-    }
+  async setRefreshToken(token: string) {
+    await storage.setItem(this.refreshTokenKey, token)
   }
 
+  // Synchronous methods for backward compatibility (use localStorage directly)
   getToken(): string | null {
     if (typeof window !== 'undefined') {
       return localStorage.getItem(this.tokenKey)

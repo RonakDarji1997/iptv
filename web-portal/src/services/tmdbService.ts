@@ -194,6 +194,43 @@ export class TMDBService {
   }
 
   /**
+   * Get logos for movie or TV show
+   * Returns logos in different languages (prioritizes English)
+   */
+  static async getLogos(id: number, type: 'movie' | 'tv'): Promise<any[]> {
+    try {
+      const params = new URLSearchParams({
+        api_key: TMDB_API_KEY,
+        include_image_language: 'en,null',
+      });
+
+      const response = await fetch(`${TMDB_BASE_URL}/${type}/${id}/images?${params}`);
+      const data = await response.json();
+      
+      // Return logos, prioritizing English ones
+      const logos = data.logos || [];
+      return logos.sort((a: any, b: any) => {
+        // Prioritize English logos
+        if (a.iso_639_1 === 'en' && b.iso_639_1 !== 'en') return -1;
+        if (a.iso_639_1 !== 'en' && b.iso_639_1 === 'en') return 1;
+        // Then sort by vote_average
+        return (b.vote_average || 0) - (a.vote_average || 0);
+      });
+    } catch (error) {
+      console.error('TMDB logos error:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get logo URL
+   * Sizes: w45, w92, w154, w185, w300, w500, original
+   */
+  static getLogoUrl(path: string | null, size: string = 'w300'): string | null {
+    return path ? `https://image.tmdb.org/t/p/${size}${path}` : null;
+  }
+
+  /**
    * Get episode still (thumbnail) URL
    * Sizes: w92, w185, w300, original
    */
@@ -218,6 +255,33 @@ export class TMDBService {
   static getBackdropUrl(path: string | null, size: string = 'w1280'): string | null {
     if (!path) return null;
     return `${TMDB_IMAGE_BASE_URL}/${size}${path}`;
+  }
+
+  /**
+   * Get videos (trailers, teasers, clips) for movie or TV show
+   */
+  static async getVideos(id: number, type: 'movie' | 'tv'): Promise<any[]> {
+    try {
+      const params = new URLSearchParams({
+        api_key: TMDB_API_KEY,
+        language: 'en-US',
+      });
+
+      const response = await fetch(`${TMDB_BASE_URL}/${type}/${id}/videos?${params}`);
+      const data = await response.json();
+      
+      // Return videos, prioritizing trailers over teasers over clips
+      const videos = data.results || [];
+      return videos.sort((a: any, b: any) => {
+        const typeOrder = { 'Trailer': 0, 'Teaser': 1, 'Clip': 2, 'Behind the Scenes': 3, 'Featurette': 4 };
+        const aOrder = typeOrder[a.type as keyof typeof typeOrder] ?? 999;
+        const bOrder = typeOrder[b.type as keyof typeof typeOrder] ?? 999;
+        return aOrder - bOrder;
+      });
+    } catch (error) {
+      console.error('TMDB videos error:', error);
+      return [];
+    }
   }
 
   /**

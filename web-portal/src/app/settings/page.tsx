@@ -111,8 +111,8 @@ function SettingsContent() {
     toast.success('Setting saved')
   }
 
-  const handleLogout = () => {
-    authService.logout()
+  const handleLogout = async () => {
+    await authService.logout()
     router.push('/auth/login')
   }
 
