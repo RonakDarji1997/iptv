@@ -48,7 +48,11 @@ export default function MovieDetailPage() {
   const [trailerKey, setTrailerKey] = useState<string | null>(null);
   const [showTrailer, setShowTrailer] = useState(true);
   const [isMuted, setIsMuted] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showControls, setShowControls] = useState(true);
   const trailerContainerRef = useRef<HTMLDivElement>(null);
+  const hideControlsTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
     const fetchProviderUrl = async () => {
@@ -90,6 +94,60 @@ export default function MovieDetailPage() {
     };
 
     fetchProviderUrl();
+  }, []);
+
+  // Handle fullscreen changes and auto-hide controls
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isNowFullscreen = !!document.fullscreenElement;
+      setIsFullscreen(isNowFullscreen);
+      
+      if (isNowFullscreen) {
+        // Show controls initially
+        setShowControls(true);
+        
+        // Hide controls after 3 seconds
+        if (hideControlsTimerRef.current) {
+          clearTimeout(hideControlsTimerRef.current);
+        }
+        
+        hideControlsTimerRef.current = setTimeout(() => {
+          setShowControls(false);
+        }, 3000);
+      } else {
+        // Always show controls when not fullscreen
+        setShowControls(true);
+        if (hideControlsTimerRef.current) {
+          clearTimeout(hideControlsTimerRef.current);
+        }
+      }
+    };
+
+    // Mouse movement to show controls temporarily in fullscreen
+    const handleMouseMove = () => {
+      if (document.fullscreenElement) {
+        setShowControls(true);
+        
+        if (hideControlsTimerRef.current) {
+          clearTimeout(hideControlsTimerRef.current);
+        }
+        
+        hideControlsTimerRef.current = setTimeout(() => {
+          setShowControls(false);
+        }, 3000);
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('mousemove', handleMouseMove);
+    
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mousemove', handleMouseMove);
+      if (hideControlsTimerRef.current) {
+        clearTimeout(hideControlsTimerRef.current);
+      }
+    };
   }, []);
 
   // Fetch watch progress
@@ -503,8 +561,18 @@ export default function MovieDetailPage() {
     <div className="min-h-screen bg-black text-white pb-24">
       {/* Back Button */}
       <button
-        onClick={() => router.back()}
-        className="fixed top-6 left-6 z-50 bg-black/70 hover:bg-black/90 backdrop-blur-sm rounded-full p-3 transition-colors"
+        onClick={() => {
+          // Check if we came from within the app
+          if (window.history.state && window.history.state.idx > 0) {
+            router.back();
+          } else {
+            // If no history, go to movies browse page
+            router.push('/browse/movies');
+          }
+        }}
+        className={`fixed top-6 left-6 z-50 bg-black/70 hover:bg-black/90 backdrop-blur-sm rounded-full p-3 transition-all duration-500 ${
+          isFullscreen && !showControls ? 'opacity-0 pointer-events-none' : 'opacity-100'
+        }`}
       >
         <ArrowLeft size={24} />
       </button>
@@ -515,18 +583,32 @@ export default function MovieDetailPage() {
           <>
             {/* YouTube Trailer Embed */}
             <iframe
-              src={`https://www.youtube.com/embed/${trailerKey}?autoplay=1&mute=${isMuted ? 1 : 0}&controls=0&showinfo=0&rel=0&loop=1&playlist=${trailerKey}&modestbranding=1&playsinline=1`}
-              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[200%] h-[200%] pointer-events-none"
+              ref={iframeRef}
+              src={`https://www.youtube.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&showinfo=0&rel=0&loop=1&playlist=${trailerKey}&modestbranding=1&playsinline=1&enablejsapi=1&disablekb=1&fs=0&iv_load_policy=3&autohide=1&cc_load_policy=0&color=white&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
+              className="absolute top-0 left-0 w-full h-full pointer-events-none"
               allow="autoplay; encrypted-media"
-              style={{ border: 'none' }}
+              style={{ border: 'none', objectFit: 'cover' }}
+              title="Movie Trailer"
             />
             {/* Fade overlay to hide YouTube branding */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/30 pointer-events-none" />
+            <div className={`absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/30 pointer-events-none transition-opacity duration-500 ${
+              isFullscreen && !showControls ? 'opacity-0' : 'opacity-100'
+            }`} />
             
             {/* Trailer Controls */}
-            <div className="absolute top-6 right-6 z-40 flex gap-2">
+            <div className={`absolute top-6 right-6 z-40 flex gap-2 transition-opacity duration-500 ${
+              isFullscreen && !showControls ? 'opacity-0 pointer-events-none' : 'opacity-100'
+            }`}>
               <button
-                onClick={() => setIsMuted(!isMuted)}
+                onClick={() => {
+                  const newMutedState = !isMuted;
+                  setIsMuted(newMutedState);
+                  // Use YouTube iframe API to toggle mute without restarting
+                  if (iframeRef.current && iframeRef.current.contentWindow) {
+                    const command = newMutedState ? '{"event":"command","func":"mute","args":""}' : '{"event":"command","func":"unMute","args":""}';
+                    iframeRef.current.contentWindow.postMessage(command, '*');
+                  }
+                }}
                 className="p-3 bg-black/70 hover:bg-black/90 backdrop-blur-sm rounded-full transition-colors"
               >
                 {isMuted ? <VolumeX size={20} className="text-white" /> : <Volume2 size={20} className="text-white" />}
@@ -565,10 +647,14 @@ export default function MovieDetailPage() {
         ) : (
           <div className="w-full h-full bg-gradient-to-br from-gray-800 to-gray-900" />
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/70 to-transparent" />
+        <div className={`absolute inset-0 bg-gradient-to-t from-black via-black/70 to-transparent transition-opacity duration-500 ${ 
+          isFullscreen && !showControls ? 'opacity-0' : 'opacity-100'
+        }`} />
         
         {/* Title and Meta Info Overlay */}
-        <div className="absolute bottom-0 left-0 right-0">
+        <div className={`absolute bottom-0 left-0 right-0 transition-opacity duration-500 ${
+          isFullscreen && !showControls ? 'opacity-0 pointer-events-none' : 'opacity-100'
+        }`}>
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6 sm:pb-8">
             {/* Movie Title or Logo */}
             {movieLogo ? (
