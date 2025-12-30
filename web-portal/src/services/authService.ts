@@ -29,6 +29,61 @@ interface DecodedToken {
 class AuthService {
   private tokenKey = 'iptv_auth_token'
   private refreshTokenKey = 'iptv_refresh_token'
+  private isRefreshing = false
+  private refreshSubscribers: ((token: string) => void)[] = []
+
+  constructor() {
+    this.setupAxiosInterceptor()
+  }
+
+  private setupAxiosInterceptor() {
+    axios.interceptors.response.use(
+      (response) => response,
+      async (error) => {
+        const originalRequest = error.config
+
+        // If error is 401 and we haven't retried yet
+        if (error.response?.status === 401 && !originalRequest._retry) {
+          if (this.isRefreshing) {
+            // Wait for the token to be refreshed
+            return new Promise((resolve) => {
+              this.refreshSubscribers.push((token: string) => {
+                originalRequest.headers.Authorization = `Bearer ${token}`
+                resolve(axios(originalRequest))
+              })
+            })
+          }
+
+          originalRequest._retry = true
+          this.isRefreshing = true
+
+          try {
+            const newToken = await this.refreshAccessToken()
+            
+            if (newToken) {
+              // Update all waiting requests with new token
+              this.refreshSubscribers.forEach((callback) => callback(newToken))
+              this.refreshSubscribers = []
+              
+              originalRequest.headers.Authorization = `Bearer ${newToken}`
+              return axios(originalRequest)
+            }
+          } catch (refreshError) {
+            console.error('[Auth] Token refresh failed:', refreshError)
+            await this.logout()
+            if (typeof window !== 'undefined') {
+              window.location.href = '/auth/login'
+            }
+            return Promise.reject(refreshError)
+          } finally {
+            this.isRefreshing = false
+          }
+        }
+
+        return Promise.reject(error)
+      }
+    )
+  }
 
   async register(data: RegisterData): Promise<LoginResponse> {
     const response = await axios.post<LoginResponse>(`${API_URL}/auth/register`, data)
@@ -102,9 +157,48 @@ class AuthService {
 
     try {
       const decoded = jwtDecode<DecodedToken>(token)
-      return decoded.exp * 1000 > Date.now()
+      const isExpired = decoded.exp * 1000 <= Date.now()
+      
+      // If token is expired, try to refresh it
+      if (isExpired) {
+        this.refreshAccessToken().catch(() => {
+          // If refresh fails, token is invalid
+          console.log('[Auth] Token expired and refresh failed')
+        })
+        return false
+      }
+      
+      return true
     } catch {
       return false
+    }
+  }
+
+  async refreshAccessToken(): Promise<string | null> {
+    const refreshToken = this.getRefreshToken()
+    if (!refreshToken) {
+      console.log('[Auth] No refresh token available')
+      return null
+    }
+
+    try {
+      const response = await axios.post<{ success: boolean; accessToken: string }>(
+        `${API_URL}/auth/refresh`,
+        { refreshToken }
+      )
+
+      if (response.data.success && response.data.accessToken) {
+        await this.setToken(response.data.accessToken)
+        console.log('[Auth] Access token refreshed successfully')
+        return response.data.accessToken
+      }
+      
+      return null
+    } catch (error) {
+      console.error('[Auth] Failed to refresh token:', error)
+      // Clear invalid tokens
+      await this.logout()
+      return null
     }
   }
 

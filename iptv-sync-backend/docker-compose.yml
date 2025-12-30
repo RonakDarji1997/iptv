@@ -72,6 +72,8 @@ services:
       REDIS_PASSWORD: test123
       JWT_SECRET: change-this-to-a-random-secret-in-production
       JWT_REFRESH_SECRET: change-this-to-another-random-secret-in-production
+      JWT_EXPIRES_IN: 7d
+      JWT_REFRESH_EXPIRES_IN: 30d
       CORS_ORIGIN: http://web.iptv.ronika.co,https://web.iptv.ronika.co,http://iptv.ronika.co,http://api.iptv.ronika.co
     depends_on:
       postgres:
