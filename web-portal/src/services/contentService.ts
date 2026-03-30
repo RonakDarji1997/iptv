@@ -107,9 +107,9 @@ class ContentService {
     }
   }
 
-  private getHeaders() {
-    return authService.getAuthHeader()
-  }
+  // private getHeaders() {
+  //   return authService.getAuthHeader()
+  // }
 
   // Fetch provider URL from backend or localStorage
   private async getProviderUrl(): Promise<string | null> {
