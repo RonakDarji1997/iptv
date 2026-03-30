@@ -16,6 +16,10 @@ class MovieGridAdapter(
 
     private val movies = mutableListOf<Movie>()
 
+    init {
+        setHasStableIds(true)
+    }
+
     fun setMovies(newMovies: List<Movie>) {
         movies.clear()
         movies.addAll(newMovies)
@@ -39,6 +43,16 @@ class MovieGridAdapter(
     }
 
     override fun getItemCount() = movies.size
+
+    override fun getItemId(position: Int): Long {
+        return movies[position].id.hashCode().toLong()
+    }
+
+    override fun onViewRecycled(holder: MovieViewHolder) {
+        super.onViewRecycled(holder)
+        holder.itemView.findViewById<ImageView>(R.id.movie_poster)
+            ?.setImageResource(R.drawable.ic_movie_placeholder)
+    }
 
     inner class MovieViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         private val poster: ImageView = itemView.findViewById(R.id.movie_poster)
@@ -65,6 +79,11 @@ class MovieGridAdapter(
         }
 
         fun bind(movie: Movie) {
+            android.util.Log.d("MovieGridAdapter", "Binding: ${movie.name} (ID: ${movie.id})")
+            
+            // Clear old image immediately
+            poster.setImageResource(R.drawable.ic_movie_placeholder)
+            
             title.text = movie.name
             year.text = movie.year ?: ""
 
@@ -85,8 +104,8 @@ class MovieGridAdapter(
                 error(R.drawable.ic_movie_placeholder)
                 crossfade(false) // Disable for performance
                 size(300, 450) // Resize to reasonable dimensions
-                memoryCacheKey(fullUrl)
-                diskCacheKey(fullUrl)
+                memoryCacheKey("movie_${movie.id}_${fullUrl}")
+                diskCacheKey("movie_${movie.id}_${fullUrl}")
                 allowHardware(true) // GPU acceleration
             }
         }

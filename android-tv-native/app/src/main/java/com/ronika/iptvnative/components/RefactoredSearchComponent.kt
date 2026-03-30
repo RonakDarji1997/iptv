@@ -620,6 +620,10 @@ class RefactoredSearchComponent @JvmOverloads constructor(
 
         private var items = listOf<SearchResultItem>()
 
+        init {
+            setHasStableIds(true)
+        }
+
         fun submitList(newItems: List<SearchResultItem>) {
             items = newItems
             notifyDataSetChanged()
@@ -636,6 +640,16 @@ class RefactoredSearchComponent @JvmOverloads constructor(
         }
 
         override fun getItemCount() = items.size
+
+        override fun getItemId(position: Int): Long {
+            return items[position].vodItem.id.hashCode().toLong()
+        }
+
+        override fun onViewRecycled(holder: ViewHolder) {
+            super.onViewRecycled(holder)
+            holder.itemView.findViewById<android.widget.ImageView>(R.id.poster_image)
+                ?.setImageResource(R.drawable.ic_movie_placeholder)
+        }
 
         inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
             private val posterImage: android.widget.ImageView = view.findViewById(R.id.poster_image)
@@ -674,6 +688,11 @@ class RefactoredSearchComponent @JvmOverloads constructor(
             }
 
             fun bind(item: SearchResultItem) {
+                android.util.Log.d("SearchResultAdapter", "Binding: ${item.vodItem.name} (ID: ${item.vodItem.id})")
+                
+                // Clear old image immediately
+                posterImage.setImageResource(R.drawable.ic_movie_placeholder)
+                
                 titleText.text = item.vodItem.name
                 
                 // Show series/movie badge
@@ -692,6 +711,8 @@ class RefactoredSearchComponent @JvmOverloads constructor(
                     crossfade(300)
                     placeholder(R.drawable.ic_movie_placeholder)
                     error(R.drawable.ic_movie_placeholder)
+                    memoryCacheKey("search_${item.vodItem.id}_${item.vodItem.posterUrl}")
+                    diskCacheKey("search_${item.vodItem.id}_${item.vodItem.posterUrl}")
                 }
             }
 

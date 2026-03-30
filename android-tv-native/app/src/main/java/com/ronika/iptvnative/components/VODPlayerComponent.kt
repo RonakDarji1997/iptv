@@ -163,11 +163,11 @@ class VODPlayerComponent @JvmOverloads constructor(
         playerView.subtitleView?.apply {
             setStyle(androidx.media3.ui.CaptionStyleCompat(
                 android.graphics.Color.WHITE,              // foreground
-                android.graphics.Color.parseColor("#99000000"), // background (semi-transparent black)
+                android.graphics.Color.TRANSPARENT,        // background (transparent - no black box)
                 android.graphics.Color.TRANSPARENT,        // window
                 androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW,
                 android.graphics.Color.BLACK,              // edge color
-                null                                       // typeface
+                android.graphics.Typeface.DEFAULT_BOLD     // bold typeface
             ))
             setFractionalTextSize(0.05f) // 5% of video height
             setApplyEmbeddedStyles(false) // Use our custom style
@@ -1099,10 +1099,10 @@ class VODPlayerComponent @JvmOverloads constructor(
         subtitleCues = emptyList()
         lastDisplayedCueIndex = -1
         
-        // Prefer to show "Series Title — Episode X" when series title and episode number are available
-        val displayTitle = if (!currentSeriesTitle.isNullOrBlank() && currentEpisodeNumber != null) {
+        // Show season name + SX EY pattern when available
+        val displayTitle = if (!currentSeriesTitle.isNullOrBlank() && currentSeasonNumber != null && currentEpisodeNumber != null) {
             try {
-                "${currentSeriesTitle} — Episode ${currentEpisodeNumber}"
+                "${currentSeriesTitle} — S${currentSeasonNumber} E${currentEpisodeNumber}"
             } catch (e: Exception) {
                 title
             }

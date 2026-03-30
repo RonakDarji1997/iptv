@@ -187,11 +187,16 @@ class SubtitleSideNavComponent @JvmOverloads constructor(
         season: Int? = null,
         episode: Int? = null
     ) {
+        Log.d(TAG, "🎬 show() called - clearing all states and flags")
+        
         this.movieTitle = movieTitle
         this.imdbId = imdbId
         this.year = year
         this.season = season
         this.episode = episode
+        
+        // CRITICAL: Clear all focus states and selection flags before showing
+        clearAllFocusStates()
         
         visibility = View.VISIBLE
         isVisible = true
@@ -225,8 +230,12 @@ class SubtitleSideNavComponent @JvmOverloads constructor(
         // Request focus on currently selected option or first option
         post {
             // Force this component to be focusable and request focus
+            isFocusable = true
+            isFocusableInTouchMode = true
             requestFocus()
             requestFocusFromTouch()
+            
+            Log.d(TAG, "🎯 Requesting focus on option after clearing states")
             
             // Then request focus on currently selected option
             postDelayed({
@@ -244,15 +253,59 @@ class SubtitleSideNavComponent @JvmOverloads constructor(
                         }
                     }
                 }
+                
+                // Clear focus on target first, then request again (ensures clean state)
+                focusTarget.clearFocus()
+                focusTarget.isFocusable = true
+                focusTarget.isFocusableInTouchMode = true
                 focusTarget.requestFocus()
                 focusTarget.requestFocusFromTouch()
-            }, 100)
+                
+                Log.d(TAG, "✅ Focus requested on: ${focusTarget.javaClass.simpleName}, hasFocus: ${focusTarget.hasFocus()}")
+            }, 150)
         }
         
         // Load OpenSubtitles if we have metadata
         if (imdbId != null || movieTitle != null) {
             loadOpenSubtitles()
         }
+    }
+    
+    /**
+     * Clear all focus states, selection flags, and reset focusability
+     */
+    private fun clearAllFocusStates() {
+        Log.d(TAG, "🧹 Clearing all focus states and flags")
+        
+        // Clear focus from all option containers
+        optionOff.clearFocus()
+        optionUpload.clearFocus()
+        closeButton.clearFocus()
+        
+        // Reset selection states
+        optionOff.isSelected = false
+        optionUpload.isSelected = false
+        closeButton.isSelected = false
+        
+        // Clear focus from all OpenSubtitle items
+        for (i in 0 until opensubtitlesListContainer.childCount) {
+            val child = opensubtitlesListContainer.getChildAt(i)
+            child.clearFocus()
+            child.isSelected = false
+        }
+        
+        // Reset focusability flags on all options
+        optionOff.isFocusable = true
+        optionOff.isFocusableInTouchMode = true
+        optionUpload.isFocusable = true
+        optionUpload.isFocusableInTouchMode = true
+        closeButton.isFocusable = true
+        closeButton.isFocusableInTouchMode = true
+        
+        // Clear any pending focus runnables
+        handler?.removeCallbacksAndMessages(null)
+        
+        Log.d(TAG, "✅ All focus states cleared")
     }
     
     /**

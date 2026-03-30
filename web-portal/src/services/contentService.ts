@@ -54,10 +54,58 @@ export interface PaginatedContent {
 
 const PROVIDER_URL_KEY = 'provider_url'
 const PROVIDER_URL_TIMESTAMP_KEY = 'provider_url_timestamp'
+const PROVIDER_TYPE_KEY = 'provider_type'
 const CACHE_DURATION = 24 * 60 * 60 * 1000 // 24 hours
 
 class ContentService {
   private providerUrlPromise: Promise<string | null> | null = null
+  private providerType: string | null = null
+
+  private getHeaders() {
+    return authService.getAuthHeader()
+  }
+
+  // Get provider type (stalker, m3u, xtream)
+  async getProviderType(): Promise<string> {
+    if (this.providerType) {
+      return this.providerType
+    }
+
+    // Check localStorage first
+    if (typeof window !== 'undefined') {
+      const cached = localStorage.getItem(PROVIDER_TYPE_KEY)
+      if (cached) {
+        this.providerType = cached
+        return cached
+      }
+    }
+
+    try {
+      const response = await axios.get(`${API_URL}/sync/pull`, {
+        headers: this.getHeaders(),
+      })
+
+      const providers = response.data.data?.providers || []
+      const activeProvider = providers.find((p: any) => p.is_active)
+      
+      if (activeProvider?.type) {
+        const type = activeProvider.type.toLowerCase()
+        this.providerType = type
+        
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(PROVIDER_TYPE_KEY, type)
+        }
+        
+        return type
+      }
+
+      // Default to stalker if no provider found
+      return 'stalker'
+    } catch (error) {
+      console.error('Failed to fetch provider type:', error)
+      return 'stalker'
+    }
+  }
 
   private getHeaders() {
     return authService.getAuthHeader()
@@ -164,14 +212,25 @@ class ContentService {
   // Get live TV channels for a category
   async getLiveChannels(categoryId: string, page: number = 1): Promise<PaginatedContent> {
     try {
-      const url = `${API_URL}/stalker-proxy/channels/${categoryId}?page=${page}`;
+      const providerType = await this.getProviderType()
+      
+      // Route to correct backend based on provider type
+      let url: string
+      if (providerType === 'xtream') {
+        // Xtreme Codes doesn't have pagination - return all channels
+        url = `${API_URL}/xtream-proxy/channels/${categoryId}`
+      } else {
+        // Stalker/M3U use pagination
+        url = `${API_URL}/stalker-proxy/channels/${categoryId}?page=${page}`
+      }
+      
       const response = await apiCache.fetch(url, {
         headers: this.getHeaders(),
       });
 
       return {
-        items: response.channels || [],
-        totalItems: response.totalItems || 0,
+        items: response.channels || response.streams || [],
+        totalItems: response.totalItems || (response.channels?.length || 0),
         maxPage: response.maxPage || 1,
         currentPage: page
       };

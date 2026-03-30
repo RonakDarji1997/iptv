@@ -88,6 +88,7 @@ import watchHistoryRouter from './routes/watch-history';
 import parentalControlRouter from './routes/parental-control';
 import channelAnalyticsRouter from './routes/channel-analytics';
 import userSettingsRouter from './routes/user-settings';
+import xtreamProxyRouter from './routes/xtream-proxy';
 import { authMiddleware } from './middleware/auth';
 
 // Conditional auth middleware that skips certain endpoints
@@ -112,6 +113,7 @@ apiRouter.use('/devices', authMiddleware, createDevicesRouter(pool));
 apiRouter.use('/stream', authMiddleware, createStreamRouter(pool));
 apiRouter.use('/progress', authMiddleware, createProgressRouter(pool));
 apiRouter.use('/stalker-proxy', conditionalAuth, createStalkerProxyRouter(pool));
+apiRouter.use('/xtream-proxy', authMiddleware, xtreamProxyRouter);
 apiRouter.use('/tv', createTvLinkRouter(pool)); // TV linking endpoints (no auth for initial link)
 
 // New routes

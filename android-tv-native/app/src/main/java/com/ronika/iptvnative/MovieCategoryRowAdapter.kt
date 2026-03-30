@@ -20,6 +20,10 @@ class MovieCategoryRowAdapter(
 
     private val categoryRows = mutableListOf<CategoryRow>()
 
+    init {
+        setHasStableIds(true)
+    }
+
     data class CategoryRow(
         val categoryId: String,
         val categoryTitle: String,
@@ -65,6 +69,15 @@ class MovieCategoryRowAdapter(
     }
 
     override fun getItemCount() = categoryRows.size
+
+    override fun getItemId(position: Int): Long {
+        return categoryRows[position].categoryId.hashCode().toLong()
+    }
+
+    override fun onViewRecycled(holder: CategoryRowViewHolder) {
+        super.onViewRecycled(holder)
+        holder.recycle()
+    }
 
     inner class CategoryRowViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         private val categoryTitle: TextView = itemView.findViewById(R.id.category_title)
@@ -142,6 +155,10 @@ class MovieCategoryRowAdapter(
             categoryIndicator.visibility = View.GONE
             movieAdapter.setMovies(categoryRow.categoryId, categoryRow.categoryTitle, categoryRow.movies)
         }
+
+        fun recycle() {
+            movieAdapter.clearMovies()
+        }
     }
 }
 
@@ -161,11 +178,24 @@ class MovieThumbnailAdapter(
         const val MAX_MOVIES = 25
     }
 
+    init {
+        setHasStableIds(true)
+    }
+
     fun setMovies(catId: String, catTitle: String, movieList: List<Movie>) {
+        android.util.Log.d("MovieThumbnailAdapter", "setMovies for $catTitle with ${movieList.size} movies")
         categoryId = catId
         categoryTitle = catTitle
         movies.clear()
         movies.addAll(movieList.take(MAX_MOVIES))
+        notifyDataSetChanged()
+    }
+
+    fun clearMovies() {
+        android.util.Log.d("MovieThumbnailAdapter", "clearMovies for category $categoryTitle")
+        movies.clear()
+        categoryId = ""
+        categoryTitle = ""
         notifyDataSetChanged()
     }
 
@@ -193,6 +223,21 @@ class MovieThumbnailAdapter(
     }
 
     override fun getItemCount() = movies.size + 1 // +1 for "View All" button
+
+    override fun getItemId(position: Int): Long {
+        return if (position < movies.size) {
+            movies[position].id.hashCode().toLong()
+        } else {
+            "viewall_$categoryId".hashCode().toLong()
+        }
+    }
+
+    override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
+        super.onViewRecycled(holder)
+        if (holder is MovieViewHolder) {
+            holder.cancelImageLoad()
+        }
+    }
 
     inner class MovieViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         private val poster: ImageView = itemView.findViewById(R.id.movie_poster)
@@ -254,6 +299,11 @@ class MovieThumbnailAdapter(
         }
 
         fun bind(movie: Movie) {
+            android.util.Log.d("MovieThumbnailAdapter", "Binding movie: ${movie.name} (ID: ${movie.id})")
+            
+            // Clear old image immediately to prevent showing wrong content
+            poster.setImageResource(R.drawable.ic_movie_placeholder)
+            
             title.text = movie.name
             year.text = movie.year
             
@@ -274,8 +324,8 @@ class MovieThumbnailAdapter(
                 error(R.drawable.ic_movie_placeholder)
                 crossfade(false) // Disable crossfade for performance
                 size(140, 210) // Smaller size for better performance
-                memoryCacheKey(fullUrl) // Cache by URL
-                diskCacheKey(fullUrl)
+                memoryCacheKey("movie_${movie.id}_${fullUrl}") // Unique cache key per movie
+                diskCacheKey("movie_${movie.id}_${fullUrl}")
                 allowHardware(true) // Use hardware bitmaps for GPU acceleration
                 memoryCachePolicy(coil.request.CachePolicy.ENABLED)
                 diskCachePolicy(coil.request.CachePolicy.ENABLED)
@@ -291,6 +341,10 @@ class MovieThumbnailAdapter(
                     }
                 )
             }
+        }
+
+        fun cancelImageLoad() {
+            poster.setImageResource(R.drawable.ic_movie_placeholder)
         }
     }
 

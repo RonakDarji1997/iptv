@@ -738,6 +738,117 @@ export const createSyncRouter = (pool: Pool) => {
       client.release();
     }
   });
+
+  // POST /api/sync/pull-xtream - Pull data from Xtreme Codes provider
+  router.post('/pull-xtream', authMiddleware, async (req: Request, res: Response) => {
+    const client = await pool.connect();
+    
+    try {
+      const userId = (req as any).userId;
+      console.log('\n🔄 [XTREAM SYNC] Starting Xtreme Codes sync for user:', userId);
+
+      // Get Xtreme Codes provider for this user
+      const providerResult = await client.query(
+        'SELECT * FROM providers WHERE user_id = $1 AND type = $2 AND is_active = true LIMIT 1',
+        [userId, 'xtream']
+      );
+
+      if (providerResult.rows.length === 0) {
+        return res.status(404).json({ error: 'No active Xtreme Codes provider found' });
+      }
+
+      const provider = providerResult.rows[0];
+
+      if (!provider.server_url || !provider.username || !provider.password) {
+        return res.status(400).json({ error: 'Provider configuration incomplete' });
+      }
+
+      const baseUrl = provider.server_url.replace(/\/player_api\.php.*$/, '');
+      const apiUrl = `${baseUrl}/player_api.php`;
+
+      console.log('📡 [XTREAM SYNC] Fetching categories from:', apiUrl);
+
+      // Fetch all data from Xtreme Codes API
+      const [liveResponse, vodResponse, seriesResponse] = await Promise.all([
+        axios.get(`${apiUrl}?username=${provider.username}&password=${provider.password}&action=get_live_categories`).catch(() => ({ data: [] })),
+        axios.get(`${apiUrl}?username=${provider.username}&password=${provider.password}&action=get_vod_categories`).catch(() => ({ data: [] })),
+        axios.get(`${apiUrl}?username=${provider.username}&password=${provider.password}&action=get_series_categories`).catch(() => ({ data: [] }))
+      ]);
+
+      await client.query('BEGIN');
+
+      let totalCategories = 0;
+
+      // Process live TV categories
+      const liveCategories = Array.isArray(liveResponse.data) ? liveResponse.data : [];
+      for (const category of liveCategories) {
+        await client.query(
+          `INSERT INTO categories (user_id, provider_id, category_id, external_id, name, type, content_type, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (user_id, provider_id, category_id) 
+           DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()`,
+          [userId, provider.id, `live_${category.category_id}`, category.category_id, category.category_name, 'LIVE', 'LIVE', category.category_id]
+        );
+        totalCategories++;
+      }
+
+      // Process VOD categories
+      const vodCategories = Array.isArray(vodResponse.data) ? vodResponse.data : [];
+      for (const category of vodCategories) {
+        await client.query(
+          `INSERT INTO categories (user_id, provider_id, category_id, external_id, name, type, content_type, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (user_id, provider_id, category_id) 
+           DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()`,
+          [userId, provider.id, `vod_${category.category_id}`, category.category_id, category.category_name, 'MOVIE', 'MOVIE', category.category_id]
+        );
+        totalCategories++;
+      }
+
+      // Process series categories
+      const seriesCategories = Array.isArray(seriesResponse.data) ? seriesResponse.data : [];
+      for (const category of seriesCategories) {
+        await client.query(
+          `INSERT INTO categories (user_id, provider_id, category_id, external_id, name, type, content_type, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (user_id, provider_id, category_id) 
+           DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()`,
+          [userId, provider.id, `series_${category.category_id}`, category.category_id, category.category_name, 'SERIES', 'SERIES', category.category_id]
+        );
+        totalCategories++;
+      }
+
+      await client.query('COMMIT');
+
+      // Update provider sync timestamp
+      await client.query(
+        'UPDATE providers SET synced_at = NOW(), updated_at = NOW() WHERE id = $1',
+        [provider.id]
+      );
+
+      console.log(`✅ [XTREAM SYNC] Synced ${totalCategories} categories`);
+      console.log(`   - Live TV: ${liveCategories.length}`);
+      console.log(`   - Movies: ${vodCategories.length}`);
+      console.log(`   - Series: ${seriesCategories.length}`);
+
+      res.json({
+        success: true,
+        stats: {
+          categories: totalCategories,
+          live: liveCategories.length,
+          movies: vodCategories.length,
+          series: seriesCategories.length
+        }
+      });
+
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      console.error('❌ [XTREAM SYNC] Error:', error.message);
+      res.status(500).json({ error: 'Xtreme Codes sync failed', details: error.message });
+    } finally {
+      client.release();
+    }
+  });
   
   return router;
 };

@@ -1,0 +1,41 @@
+diff --git a/app/src/main/java/com/ronika/iptvnative/adapters/MovieGridAdapter.kt b/app/src/main/java/com/ronika/iptvnative/adapters/MovieGridAdapter.kt
+index 1234567..abcdefg 100644
+--- a/app/src/main/java/com/ronika/iptvnative/adapters/MovieGridAdapter.kt
++++ b/app/src/main/java/com/ronika/iptvnative/adapters/MovieGridAdapter.kt
+@@ -15,6 +15,10 @@ class MovieGridAdapter(
+ 
+     private val movies = mutableListOf<Movie>()
+ 
++    init {
++        setHasStableIds(true)
++    }
++
+     fun setMovies(newMovies: List<Movie>) {
+         movies.clear()
+         movies.addAll(newMovies)
+@@ -38,6 +42,18 @@ class MovieGridAdapter(
+ 
+     override fun getItemCount() = movies.size
+ 
++    override fun getItemId(position: Int): Long {
++        return movies[position].id.hashCode().toLong()
++    }
++
++    override fun onViewRecycled(holder: MovieViewHolder) {
++        super.onViewRecycled(holder)
++        // Clear image to prevent showing wrong content when recycled
++        holder.itemView.findViewById<ImageView>(R.id.movie_poster)
++            ?.setImageResource(R.drawable.ic_movie_placeholder)
++    }
++
+     inner class MovieViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+         private val poster: ImageView = itemView.findViewById(R.id.movie_poster)
+         private val title: TextView = itemView.findViewById(R.id.movie_title)
+@@ -62,6 +78,7 @@ class MovieGridAdapter(
+         }
+ 
+         fun bind(movie: Movie) {
++            android.util.Log.d("MovieGridAdapter", "Binding movie: ${movie.name} (ID: ${movie.id})")
+             title.text = movie.name
+             year.text = movie.year ?: ""
+ 

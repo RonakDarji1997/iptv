@@ -19,12 +19,15 @@ import com.ronika.iptvnative.R
 import com.ronika.iptvnative.api.StalkerClient
 import com.ronika.iptvnative.database.AppDatabase
 import com.ronika.iptvnative.repository.FavoriteRepository
+import com.ronika.iptvnative.services.TmdbService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Job
+import java.util.concurrent.ConcurrentHashMap
 
 // Custom RecyclerView that intercepts navigation keys before default handling
 class CustomGridRecyclerView @JvmOverloads constructor(
@@ -83,6 +86,23 @@ class VODComponent @JvmOverloads constructor(
 ) : FrameLayout(context, attrs, defStyleAttr) {
 
     private val TAG = "VODComponent"
+    
+    // TMDB caching - ultra-fast in-memory LRU cache
+    private val tmdbCache = object : LinkedHashMap<String, TmdbCachedData>(100, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TmdbCachedData>?): Boolean {
+            return size > 100 // Keep max 100 items in memory
+        }
+    }
+    private val tmdbLoadingJobs = ConcurrentHashMap<String, Job>()
+    
+    data class TmdbCachedData(
+        val posterUrl: String?,
+        val backdropUrl: String?,
+        val description: String?,
+        val rating: Double,
+        val year: String?,
+        val timestamp: Long = System.currentTimeMillis()
+    )
     
     // Views
     private lateinit var backdropImage: ImageView
@@ -247,17 +267,8 @@ class VODComponent @JvmOverloads constructor(
     private lateinit var loadingIndicator: android.widget.ProgressBar
     private var pendingFocusRunnable: Runnable? = null
     
-    // Detail screen views
+    // Grid container
     private lateinit var vodGridContainer: ViewGroup
-    private lateinit var vodDetailContainer: ViewGroup
-    private lateinit var detailCategoryName: TextView
-    private lateinit var detailTitle: TextView
-    private lateinit var detailYear: TextView
-    private lateinit var detailDescription: TextView
-    private lateinit var detailCast: TextView
-    private lateinit var detailPosterImage: ImageView
-    private lateinit var detailPlayButton: android.widget.Button
-    private lateinit var detailFavoriteButton: android.widget.Button
     private var currentDetailItem: VODItem? = null
     private var currentItemFavorited = false
     private val favoriteRepository = FavoriteRepository(context)
@@ -271,23 +282,12 @@ class VODComponent @JvmOverloads constructor(
         categoryNameLabel = findViewById(R.id.category_name_label)
         loadingIndicator = findViewById(R.id.loading_indicator)
         
-        // Detail screen views
+        // Grid container
         vodGridContainer = findViewById(R.id.vod_grid_container)
-        vodDetailContainer = findViewById(R.id.vod_detail_container)
-        detailCategoryName = findViewById(R.id.detail_category_name)
-        detailTitle = findViewById(R.id.detail_title)
-        detailYear = findViewById(R.id.detail_year)
-        detailDescription = findViewById(R.id.detail_description)
-        detailCast = findViewById(R.id.detail_cast)
-        detailPosterImage = findViewById(R.id.detail_poster_image)
-        detailPlayButton = findViewById(R.id.detail_play_button)
-        detailFavoriteButton = findViewById(R.id.detail_favorite_button)
-        
-        setupDetailScreenListeners()
         
         // Setup grid with calculated columns based on item size
-        thumbnailAdapter = ThumbnailAdapter(emptyList()) { position ->
-            onItemSelected(position)
+        thumbnailAdapter = ThumbnailAdapter(emptyList()) { item ->
+            onItemSelected(item)
         }
         
         // Calculate column count based on fixed item width + spacing
@@ -491,9 +491,8 @@ class VODComponent @JvmOverloads constructor(
         // Force RecyclerView to detach and recycle all views
         thumbnailsRecycler.recycledViewPool.clear()
         
-        // Make sure detail screen is hidden and grid is ready to show
+        // Make sure grid is ready to show
         isDetailScreenVisible = false
-        vodDetailContainer.visibility = GONE
         vodGridContainer.visibility = VISIBLE
         vodGridContainer.alpha = 1f
         
@@ -532,9 +531,8 @@ class VODComponent @JvmOverloads constructor(
         // Force RecyclerView to detach and recycle all views
         thumbnailsRecycler.recycledViewPool.clear()
         
-        // Make sure detail screen is hidden and grid is ready to show
+        // Make sure grid is ready to show
         isDetailScreenVisible = false
-        vodDetailContainer.visibility = GONE
         vodGridContainer.visibility = VISIBLE
         vodGridContainer.alpha = 1f
         
@@ -613,7 +611,7 @@ class VODComponent @JvmOverloads constructor(
                             loadingIndicator.visibility = GONE
                             thumbnailsRecycler.visibility = VISIBLE
                             if (vodItems.isNotEmpty()) {
-                                showDetailScreen(vodItems[0])
+                                // Focus first item
                                 thumbnailsRecycler.post {
                                     thumbnailsRecycler.getChildAt(0)?.requestFocus()
                                 }
@@ -758,13 +756,28 @@ class VODComponent @JvmOverloads constructor(
                     }
                 }
                 
+                // Remove duplicates based on item ID before adding
+                val existingIds = allItems.map { it.id }.toSet()
+                val uniqueNewItems = newItemsList.filter { it.id !in existingIds }
+                
+                if (uniqueNewItems.isEmpty() && newItemsList.isNotEmpty()) {
+                    Log.w(TAG, "⚠️ All ${newItemsList.size} new items were duplicates, skipping")
+                    isLoadingMore = false
+                    return@launch
+                }
+                
                 // Add to master list
-                allItems.addAll(newItemsList)
+                allItems.addAll(uniqueNewItems)
+                
+                Log.d(TAG, "📦 New items: ${newItemsList.size}, Unique: ${uniqueNewItems.size}, Total: ${allItems.size}")
                 
                 // Update adapter - use different methods for initial vs pagination
                 if (oldItemCount == 0) {
                     // Initial load - use updateItems and focus first item
                     thumbnailAdapter.updateItems(allItems)
+                    
+                    // Preload TMDB data for visible items in background
+                    preloadTmdbData(allItems)
                     
                     // Show first item details
                     if (allItems.isNotEmpty() && selectedPosition == 0) {
@@ -782,8 +795,8 @@ class VODComponent @JvmOverloads constructor(
                     }
                 } else {
                     // Pagination - append items without losing focus
-                    thumbnailAdapter.appendItems(newItemsList)
-                    Log.d(TAG, "✅ Appended ${newItemsList.size} new items, focus preserved")
+                    thumbnailAdapter.appendItems(uniqueNewItems)
+                    Log.d(TAG, "✅ Appended ${uniqueNewItems.size} new items, focus preserved")
                 }
                 
                 isLoadingMore = false
@@ -811,23 +824,26 @@ class VODComponent @JvmOverloads constructor(
         }
     }
     
-    private fun onItemSelected(position: Int) {
+    private fun onItemSelected(item: VODItem) {
         android.util.Log.e(TAG, "==========================================")
         android.util.Log.e(TAG, "MOVIE THUMBNAIL CLICKED!")
-        android.util.Log.e(TAG, "Position: $position")
+        android.util.Log.e(TAG, "Item: ${item.name} (ID: ${item.id})")
         android.util.Log.e(TAG, "==========================================")
         
-        selectedPosition = position
-        if (position < allItems.size) {
-            val item = allItems[position]
-            android.util.Log.e(TAG, "Item name: ${item.name}")
-            android.util.Log.e(TAG, "VOD Type: $vodType")
-            
-            // For series, go to series detail
-            if (vodType == VODType.SERIES) {
-                android.util.Log.e(TAG, "Opening series detail...")
-                onSeriesSelectedCallback?.invoke(item)
-            } else {
+        // Find position for selectedPosition tracking
+        val position = allItems.indexOfFirst { it.id == item.id }
+        if (position >= 0) {
+            selectedPosition = position
+        }
+        
+        android.util.Log.e(TAG, "Item name: ${item.name}")
+        android.util.Log.e(TAG, "VOD Type: $vodType")
+        
+        // For series, go to series detail
+        if (vodType == VODType.SERIES) {
+            android.util.Log.e(TAG, "Opening series detail...")
+            onSeriesSelectedCallback?.invoke(item)
+        } else {
                 // For movies, open MovieDetailActivity with TMDB support
                 android.util.Log.e(TAG, "==========================================")
                 android.util.Log.e(TAG, "Opening MovieDetailActivity for: ${item.name}")
@@ -852,158 +868,54 @@ class VODComponent @JvmOverloads constructor(
                     context.startActivity(intent)
                 }
             }
-        }
     }
     
     private fun updateBackdrop(item: VODItem) {
-        titleText.text = item.name
-        yearText.text = item.year ?: ""
-        descriptionText.text = item.description ?: ""
+        // Clean up title - remove parentheses and their contents
+        titleText.text = item.name.replace("\\s*\\([^)]*\\)".toRegex(), "")
         
-        // Load backdrop image
-        val imageUrl = item.backdropUrl?.takeIf { it.isNotEmpty() }
-        backdropImage.load(imageUrl) {
-            crossfade(200)
-            placeholder(R.drawable.ic_movie_placeholder)
-            error(R.drawable.ic_movie_placeholder)
-        }
-    }
-    
-    private fun showDetailScreen(item: VODItem) {
-        currentDetailItem = item
-        isDetailScreenVisible = true
+        // Check cache first - INSTANT if cached
+        val cacheKey = "${item.id}_${vodType}"
+        val cached = tmdbCache[cacheKey]
         
-        // Check if there's saved progress for this item
-        scope.launch {
-            val repository = com.ronika.iptvnative.repository.WatchProgressRepository(context)
-            val contentType = if (vodType == VODType.SERIES) "SERIES" else "MOVIE"
-            val progress = repository.getProgress(item.id, contentType, currentProviderId ?: "")
-            
-            Log.d(TAG, "Checking progress for ${item.name} ($contentType): ${progress?.progressPercentage}%")
-            
-            withContext(Dispatchers.Main) {
-                if (progress != null && progress.currentPosition > 0) {
-                    val percentage = progress.progressPercentage
-                    detailPlayButton.text = "▶ Resume ($percentage%)"
-                } else {
-                    detailPlayButton.text = "▶ Play"
-                }
+        if (cached != null) {
+            // CACHED - instant display
+            yearText.text = cached.year ?: item.year ?: ""
+            descriptionText.text = cached.description ?: item.description ?: ""
+            val imageUrl = cached.backdropUrl ?: item.backdropUrl?.takeIf { it.isNotEmpty() }
+            backdropImage.load(imageUrl) {
+                crossfade(false) // No crossfade for cached = instant
+                placeholder(R.drawable.ic_movie_placeholder)
+                error(R.drawable.ic_movie_placeholder)
             }
-        }
-        
-        // Check favorite status
-        scope.launch {
-            try {
-                val type = if (item.isSeries) FavoriteRepository.TYPE_SERIES else FavoriteRepository.TYPE_MOVIE
-                currentItemFavorited = favoriteRepository.isFavorite(item.id, type, currentProviderId ?: "")
-                withContext(Dispatchers.Main) {
-                    updateFavoriteButtonUI()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error checking favorite status", e)
-            }
-        }
-        
-        // Populate detail screen with data
-        detailCategoryName.text = categoryNameLabel.text
-        detailTitle.text = item.name
-        detailYear.text = item.year ?: ""
-        detailDescription.text = item.description ?: "No description available"
-        
-        // Format cast/director info
-        val castInfo = buildString {
-            item.director?.takeIf { it.isNotBlank() }?.let { 
-                append("Director: $it") 
-            }
-            if (isNotEmpty() && item.actors?.isNotBlank() == true) {
-                append("  •  ")
-            }
-            item.actors?.takeIf { it.isNotBlank() }?.let { 
-                append("Cast: $it") 
-            }
-        }
-        detailCast.text = castInfo.ifEmpty { "" }
-        detailCast.visibility = if (castInfo.isEmpty()) GONE else VISIBLE
-        
-        // Load backdrop image (use backdropUrl for fullscreen background)
-        val backdropUrl = item.backdropUrl?.takeIf { it.isNotEmpty() } ?: item.posterUrl
-        detailPosterImage.load(backdropUrl) {
-            crossfade(300)
-            placeholder(R.drawable.ic_movie_placeholder)
-            error(R.drawable.ic_movie_placeholder)
-        }
-        
-        // Animate transition
-                vodGridContainer.animate()
-            .alpha(0f)
-            .setDuration(300)
-            .withEndAction {
-                vodGridContainer.visibility = GONE
-                vodDetailContainer.visibility = VISIBLE
-                        // Notify parent that detail screen is now visible so it can update navigation
-                        try {
-                            onDetailShownListener?.invoke(item)
-                            Log.d(TAG, "Detail shown callback invoked for: ${item.name}")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error invoking onDetailShownListener", e)
-                        }
-                vodDetailContainer.alpha = 0f
-                vodDetailContainer.requestFocus()  // Request focus on container for back button handling
-                vodDetailContainer.animate()
-                    .alpha(1f)
-                    .setDuration(300)
-                    .withEndAction {
-                        detailPlayButton.requestFocus()
-                    }
-                    .start()
-            }
-            .start()
-    }
-    
-    private fun updateFavoriteButtonUI() {
-        if (currentItemFavorited) {
-            detailFavoriteButton.text = "Favorited"
-            // Use filled heart icon and let background/text colors be handled by selector
-            detailFavoriteButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_favorite_filled, 0, 0, 0)
-            detailFavoriteButton.compoundDrawableTintList = androidx.core.content.ContextCompat.getColorStateList(context, R.color.button_text_color)
         } else {
-            detailFavoriteButton.text = "Favorite"
-            // Use outline heart icon
-            detailFavoriteButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_favorite_outline, 0, 0, 0)
-            detailFavoriteButton.compoundDrawableTintList = androidx.core.content.ContextCompat.getColorStateList(context, R.color.button_text_color)
+            // NOT CACHED - show provider data immediately, fetch TMDB in background
+            yearText.text = item.year ?: ""
+            descriptionText.text = item.description ?: ""
+            
+            val imageUrl = item.backdropUrl?.takeIf { it.isNotEmpty() }
+            backdropImage.load(imageUrl) {
+                crossfade(200)
+                placeholder(R.drawable.ic_movie_placeholder)
+                error(R.drawable.ic_movie_placeholder)
+            }
+            
+            // Fetch TMDB data in background - don't block UI
+            fetchTmdbDataAsync(item, cacheKey) { tmdbData ->
+                // Update UI with TMDB data when ready
+                yearText.text = tmdbData.year ?: item.year ?: ""
+                descriptionText.text = tmdbData.description ?: item.description ?: ""
+                val tmdbImageUrl = tmdbData.backdropUrl ?: imageUrl
+                backdropImage.load(tmdbImageUrl) {
+                    crossfade(true)
+                    placeholder(R.drawable.ic_movie_placeholder)
+                    error(R.drawable.ic_movie_placeholder)
+                }
+            }
         }
     }
     
-    private fun hideDetailScreen() {
-        isDetailScreenVisible = false
-        vodDetailContainer.animate()
-            .alpha(0f)
-            .setDuration(300)
-            .withEndAction {
-                vodDetailContainer.visibility = GONE
-                vodGridContainer.visibility = VISIBLE
-                vodGridContainer.alpha = 0f
-                vodGridContainer.animate()
-                    .alpha(1f)
-                    .setDuration(300)
-                    .withEndAction {
-                        // Restore focus to previously selected thumbnail
-                        thumbnailsRecycler.post {
-                            val layoutManager = thumbnailsRecycler.layoutManager as? GridLayoutManager
-                            layoutManager?.findViewByPosition(selectedPosition)?.requestFocus()
-                            // Notify parent that detail screen was hidden so it can update navigation stack
-                            try {
-                                onDetailHiddenListener?.invoke()
-                                Log.d(TAG, "Detail hidden callback invoked")
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error invoking onDetailHiddenListener", e)
-                            }
-                        }
-                    }
-                    .start()
-            }
-            .start()
-    }
+    // Detail screen removed - movies use MovieDetailActivity, series use SeriesDetailActivity
 
     fun setOnDetailShownListener(callback: (VODItem) -> Unit) {
         onDetailShownListener = callback
@@ -1013,78 +925,7 @@ class VODComponent @JvmOverloads constructor(
         onDetailHiddenListener = callback
     }
     
-    private fun setupDetailScreenListeners() {
-        // Play button click handler
-        detailPlayButton.setOnClickListener {
-            currentDetailItem?.let { item ->
-                if (vodType == VODType.SERIES) {
-                    // For series, show series detail with seasons/episodes
-                    Log.d(TAG, "Open series detail: ${item.name}, ID: ${item.id}")
-                    onSeriesSelectedCallback?.invoke(item)
-                } else {
-                    // For movies, open MovieDetailActivity with TMDB support
-                    Log.e(TAG, "==========================================")
-                    Log.e(TAG, "Opening MovieDetailActivity for: ${item.name}")
-                    Log.e(TAG, "==========================================")
-                    
-                    val intent = android.content.Intent(context, com.ronika.iptvnative.MovieDetailActivity::class.java).apply {
-                        putExtra("MOVIE_ID", item.id)
-                        putExtra("MOVIE_NAME", item.name)
-                        putExtra("POSTER_URL", item.posterUrl)
-                        putExtra("DESCRIPTION", item.description ?: "")
-                        putExtra("ACTORS", "") // VOD doesn't have actor info
-                        putExtra("DIRECTOR", "") // VOD doesn't have director info
-                        putExtra("YEAR", item.year ?: "")
-                        putExtra("COUNTRY", "")
-                        putExtra("GENRES", "")
-                        putExtra("CMD", item.cmd)
-                    }
-                    val activity = context as? android.app.Activity
-                    if (activity != null) {
-                        activity.startActivityForResult(intent, 2001)
-                    } else {
-                        context.startActivity(intent)
-                    }
-                }
-            }
-        }
-        
-        // Favorite button click handler
-        detailFavoriteButton.setOnClickListener {
-            currentDetailItem?.let { item ->
-                Log.d(TAG, "Toggle favorite for: ${item.name}")
-                CoroutineScope(Dispatchers.Main).launch {
-                    try {
-                        val type = if (item.isSeries) FavoriteRepository.TYPE_SERIES else FavoriteRepository.TYPE_MOVIE
-                        currentItemFavorited = favoriteRepository.toggleFavorite(
-                            itemId = item.id, 
-                            type = type,
-                            providerId = currentProviderId ?: "",
-                            name = item.name,
-                            poster = item.posterUrl,
-                            cmd = item.cmd
-                        )
-                        updateFavoriteButtonUI()
-                        Log.d(TAG, "Favorite toggled for ${item.name}: isFavorited=$currentItemFavorited")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error toggling favorite", e)
-                    }
-                }
-            }
-        }
-        
-        // Handle back button in detail screen
-        vodDetailContainer.isFocusable = true
-        vodDetailContainer.isFocusableInTouchMode = true
-        vodDetailContainer.setOnKeyListener { _, keyCode, event ->
-            if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_BACK) {
-                hideDetailScreen()
-                true
-            } else {
-                false
-            }
-        }
-    }
+    // setupDetailScreenListeners removed - no longer needed
     
     fun setFullscreen(fullscreen: Boolean) {
         isFullscreenMode = fullscreen
@@ -1171,16 +1012,126 @@ class VODComponent @JvmOverloads constructor(
     }
     
     /**
+     * Fetch TMDB data asynchronously with caching
+     * Ultra-fast: cached lookups are instant, misses fetch in background
+     */
+    private fun fetchTmdbDataAsync(item: VODItem, cacheKey: String, onComplete: (TmdbCachedData) -> Unit) {
+        // Don't cancel existing job - let it complete and share the result
+        if (tmdbLoadingJobs.containsKey(cacheKey)) {
+            Log.d(TAG, "🔄 TMDB fetch already in progress for: ${item.name}")
+            return
+        }
+        
+        val job = scope.launch(Dispatchers.IO) {
+            try {
+                Log.d(TAG, "🎬 Fetching TMDB data for: ${item.name}")
+                
+                // Extract year from item
+                val yearInt = item.year?.toIntOrNull()
+                
+                // Use smartSearch to clean title and search - same as MovieDetailActivity
+                val type = if (vodType == VODType.SERIES) "tv" else "movie"
+                val details = TmdbService.smartSearch(item.name, type, yearInt)
+                
+                Log.d(TAG, "🔍 TMDB smartSearch for '${item.name}' (type: $type): ${if (details != null) "MATCH ✅" else "NO MATCH ❌"}")
+                
+                val tmdbData = if (details != null) {
+                    val posterUrl = details.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+                    val backdropUrl = details.backdropPath?.let { "https://image.tmdb.org/t/p/w1280$it" }
+                    val year = details.releaseDate?.take(4) ?: details.firstAirDate?.take(4)
+                    
+                    Log.d(TAG, "✅ TMDB match found for '${item.name}': poster=$posterUrl, backdrop=$backdropUrl")
+                    
+                    TmdbCachedData(
+                        posterUrl = posterUrl,
+                        backdropUrl = backdropUrl,
+                        description = details.overview,
+                        rating = details.voteAverage,
+                        year = year
+                    )
+                } else {
+                    Log.d(TAG, "❌ No TMDB match for '${item.name}'")
+                    // No TMDB match - cache empty result to avoid repeated lookups
+                    TmdbCachedData(
+                        posterUrl = null,
+                        backdropUrl = null,
+                        description = null,
+                        rating = 0.0,
+                        year = null
+                    )
+                }
+                
+                // Cache the result
+                tmdbCache[cacheKey] = tmdbData
+                
+                // Notify completion on main thread
+                withContext(Dispatchers.Main) {
+                    try {
+                        onComplete(tmdbData)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error in onComplete callback: ${e.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) {
+                    Log.d(TAG, "TMDB fetch cancelled for ${item.name}")
+                } else {
+                    Log.e(TAG, "Error fetching TMDB data for ${item.name}: ${e.message}", e)
+                }
+            } finally {
+                tmdbLoadingJobs.remove(cacheKey)
+            }
+        }
+        
+        tmdbLoadingJobs[cacheKey] = job
+    }
+    
+    /**
+     * Preload TMDB data for multiple items in background
+     * Called when items are loaded to warm up the cache
+     */
+    private fun preloadTmdbData(items: List<VODItem>) {
+        scope.launch(Dispatchers.IO) {
+            items.take(10).forEach { item -> // Preload first 10 items
+                val cacheKey = "${item.id}_${vodType}"
+                if (tmdbCache[cacheKey] == null && tmdbLoadingJobs[cacheKey] == null) {
+                    launch {
+                        try {
+                            val yearInt = item.year?.toIntOrNull()
+                            val type = if (vodType == VODType.SERIES) "tv" else "movie"
+                            val details = TmdbService.smartSearch(item.name, type, yearInt)
+                            
+                            if (details != null) {
+                                val posterUrl = details.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+                                val backdropUrl = details.backdropPath?.let { "https://image.tmdb.org/t/p/w1280$it" }
+                                val year = details.releaseDate?.take(4) ?: details.firstAirDate?.take(4)
+                                
+                                tmdbCache[cacheKey] = TmdbCachedData(
+                                    posterUrl = posterUrl,
+                                    backdropUrl = backdropUrl,
+                                    description = details.overview,
+                                    rating = details.voteAverage,
+                                    year = year
+                                )
+                                Log.d(TAG, "Preloaded TMDB data for: ${item.name}")
+                            }
+                        } catch (e: Exception) {
+                            Log.d(TAG, "Preload failed for ${item.name}: ${e.message}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
      * Reset the VOD component to initial state (hide detail screen, clear grid)
      */
     fun resetToInitialState() {
         Log.d(TAG, "Resetting VOD component to initial state")
         
-        // Hide detail screen if visible
-        if (isDetailScreenVisible) {
-            isDetailScreenVisible = false
-            vodDetailContainer.visibility = GONE
-        }
+        // Reset detail screen state
+        isDetailScreenVisible = false
         
         // Hide grid container
         vodGridContainer.visibility = GONE
@@ -1214,9 +1165,32 @@ class VODComponent @JvmOverloads constructor(
         
         Log.d(TAG, "Showing single item detail: ${item.name}")
         
-        // Show detail screen directly
-        vodGridContainer.visibility = GONE
-        showDetailScreen(item)
+        // For movies, open MovieDetailActivity with TMDB support
+        if (vodType == VODType.MOVIES) {
+            Log.d(TAG, "Opening MovieDetailActivity from showItemDetail for: ${item.name}")
+            val intent = android.content.Intent(context, com.ronika.iptvnative.MovieDetailActivity::class.java).apply {
+                putExtra("MOVIE_ID", item.id)
+                putExtra("MOVIE_NAME", item.name)
+                putExtra("MOVIE_DESCRIPTION", item.description ?: "")
+                putExtra("MOVIE_IMAGE_URL", item.posterUrl ?: "")
+                putExtra("BACKDROP_URL", item.backdropUrl ?: "")
+                putExtra("ACTORS", item.actors ?: "")
+                putExtra("DIRECTOR", "")
+                putExtra("YEAR", item.year ?: "")
+                putExtra("COUNTRY", "")
+                putExtra("GENRES", "")
+                putExtra("CMD", item.cmd)
+            }
+            val activity = context as? android.app.Activity
+            if (activity != null) {
+                activity.startActivityForResult(intent, 2001)
+            } else {
+                context.startActivity(intent)
+            }
+        } else {
+            // For series, use series detail callback
+            onSeriesSelectedCallback?.invoke(item)
+        }
     }
     
     fun setOnBackPressedListener(callback: (String) -> Unit) {
@@ -1239,47 +1213,11 @@ class VODComponent @JvmOverloads constructor(
         return false
     }
     
-    fun focusPlayButton() {
-        if (isDetailScreenVisible) {
-            detailPlayButton.requestFocus()
-            Log.d(TAG, "Focused play button in detail screen")
-        }
-    }
+    // focusPlayButton removed - no longer needed
     
-    fun refreshProgress() {
-        if (isDetailScreenVisible && currentDetailItem != null) {
-            val item = currentDetailItem!!
-            scope.launch {
-                val repository = com.ronika.iptvnative.repository.WatchProgressRepository(context)
-                val contentType = if (vodType == VODType.SERIES) "SERIES" else "MOVIE"
-                val progress = repository.getProgress(item.id, contentType, currentProviderId ?: "")
-                
-                Log.d(TAG, "Refreshing progress for ${item.name} ($contentType): ${progress?.progressPercentage}%")
-                
-                withContext(Dispatchers.Main) {
-                    if (progress != null && progress.currentPosition > 0) {
-                        val percentage = progress.progressPercentage
-                        detailPlayButton.text = "▶ Resume ($percentage%)"
-                        Log.d(TAG, "Updated play button to show Resume ($percentage%)")
-                    } else {
-                        detailPlayButton.text = "▶ Play"
-                        Log.d(TAG, "Updated play button to show Play")
-                    }
-                }
-            }
-        }
-    }
+    // refreshProgress removed - no longer needed
     
-    fun ensureDetailScreenVisible() {
-        if (currentDetailItem != null && !isDetailScreenVisible) {
-            Log.d(TAG, "Ensuring detail screen is visible for: ${currentDetailItem!!.name}")
-            showDetailScreen(currentDetailItem!!)
-        } else if (isDetailScreenVisible) {
-            Log.d(TAG, "Detail screen already visible")
-        } else {
-            Log.w(TAG, "Cannot show detail screen - no current detail item")
-        }
-    }
+    // ensureDetailScreenVisible removed - no longer needed
     
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_BACK) {
@@ -1291,9 +1229,8 @@ class VODComponent @JvmOverloads constructor(
                     onBackPressedCallback?.invoke(categoryName)
                     return true
                 } else {
-                    Log.d(TAG, "Back pressed from detail screen - returning to grid")
-                    hideDetailScreen()
-                    return true
+                    Log.d(TAG, "Back pressed from detail screen - detail screen removed")
+                    return false
                 }
             } else {
                 // Back from grid -> Category sidenav (only when at position 0 or empty)
@@ -1310,8 +1247,12 @@ class VODComponent @JvmOverloads constructor(
     // Adapter for thumbnail grid
     inner class ThumbnailAdapter(
         private var items: List<VODItem>,
-        private val onItemClick: (Int) -> Unit
+        private val onItemClick: (VODItem) -> Unit
     ) : RecyclerView.Adapter<ThumbnailAdapter.ThumbnailViewHolder>() {
+        
+        init {
+            setHasStableIds(true)
+        }
         
         fun updateItems(newItems: List<VODItem>) {
             items = newItems
@@ -1321,9 +1262,18 @@ class VODComponent @JvmOverloads constructor(
         // Append new items without losing focus (for pagination)
         fun appendItems(newItems: List<VODItem>) {
             val oldSize = items.size
-            items = items + newItems
-            notifyItemRangeInserted(oldSize, newItems.size)
-            Log.d(TAG, "📝 Appended ${newItems.size} items (total now: ${items.size})")
+            // Deduplicate against existing items in the adapter
+            val existingIds = items.map { it.id }.toSet()
+            val uniqueNewItems = newItems.filter { !existingIds.contains(it.id) }
+            
+            if (uniqueNewItems.isEmpty()) {
+                Log.d(TAG, "📝 No new unique items to append")
+                return
+            }
+            
+            items = items + uniqueNewItems
+            notifyItemRangeInserted(oldSize, uniqueNewItems.size)
+            Log.d(TAG, "📝 Appended ${uniqueNewItems.size} items (${newItems.size} offered, ${items.size} total now)")
         }
         
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ThumbnailViewHolder {
@@ -1343,6 +1293,16 @@ class VODComponent @JvmOverloads constructor(
         
         override fun getItemCount() = items.size
         
+        override fun getItemId(position: Int): Long {
+            return items[position].id.hashCode().toLong()
+        }
+        
+        override fun onViewRecycled(holder: ThumbnailViewHolder) {
+            super.onViewRecycled(holder)
+            holder.itemView.findViewById<ImageView>(R.id.poster_image)
+                ?.setImageResource(R.drawable.ic_movie_placeholder)
+        }
+        
         inner class ThumbnailViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
             private val posterImage: ImageView = itemView.findViewById(R.id.poster_image)
             private val titleOverlay: TextView = itemView.findViewById(R.id.title_overlay)
@@ -1354,7 +1314,10 @@ class VODComponent @JvmOverloads constructor(
                 itemView.isFocusableInTouchMode = true
                 
                 itemView.setOnClickListener {
-                    onItemClick(adapterPosition)
+                    val position = bindingAdapterPosition
+                    if (position != RecyclerView.NO_POSITION && position < items.size) {
+                        onItemClick(items[position])
+                    }
                 }
                 
                 itemView.setOnFocusChangeListener { _, hasFocus ->
@@ -1378,17 +1341,46 @@ class VODComponent @JvmOverloads constructor(
             }
             
             fun bind(item: VODItem, position: Int) {
+                Log.d(TAG, "Binding VOD: ${item.name} (ID: ${item.id})")
                 titleOverlay.text = item.name
                 
-                // Load poster image with Coil
-                val imageUrl = item.posterUrl?.takeIf { it.isNotEmpty() }
-                Log.d(TAG, "Loading image for ${item.name}: ${imageUrl ?: "no url"}")
+                // Clear old image immediately
+                posterImage.setImageResource(R.drawable.ic_movie_placeholder)
                 
+                // Check TMDB cache first for instant poster display
+                val cacheKey = "${item.id}_${vodType}"
+                val cached = tmdbCache[cacheKey]
+                val imageUrl = cached?.posterUrl ?: item.posterUrl?.takeIf { it.isNotEmpty() }
+                
+                Log.d(TAG, "Loading image for ${item.name}: ${if (cached != null) "[CACHED]" else "[PROVIDER]"} ${imageUrl ?: "no url"}")
+                
+                // Load image - instant if cached, or show provider then swap when TMDB ready
                 posterImage.load(imageUrl) {
-                    crossfade(true)
+                    crossfade(cached == null) // No crossfade for cached = instant
                     placeholder(R.drawable.ic_movie_placeholder)
                     error(R.drawable.ic_movie_placeholder)
                     transformations(RoundedCornersTransformation(8f))
+                    memoryCacheKey("vod_${item.id}_${imageUrl}")
+                    diskCacheKey("vod_${item.id}_${imageUrl}")
+                }
+                
+                // If not cached, fetch TMDB in background and update when ready
+                if (cached == null && position < 20) { // Only fetch for first 20 visible items
+                    fetchTmdbDataAsync(item, cacheKey) { tmdbData ->
+                        if (bindingAdapterPosition == position) { // Still bound to same position
+                            val tmdbImageUrl = tmdbData.posterUrl
+                            if (tmdbImageUrl != null && tmdbImageUrl != imageUrl) {
+                                posterImage.load(tmdbImageUrl) {
+                                    crossfade(true)
+                                    placeholder(R.drawable.ic_movie_placeholder)
+                                    error(R.drawable.ic_movie_placeholder)
+                                    transformations(RoundedCornersTransformation(8f))
+                                    memoryCacheKey("vod_${item.id}_${tmdbImageUrl}")
+                                    diskCacheKey("vod_${item.id}_${tmdbImageUrl}")
+                                }
+                            }
+                        }
+                    }
                 }
                 
                 // Load and show progress bar if exists (only for movies, not series)

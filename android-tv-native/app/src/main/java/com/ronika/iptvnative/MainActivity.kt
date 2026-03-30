@@ -1413,16 +1413,8 @@ class MainActivity : ComponentActivity() {
                         startActivityForResult(intent, REQUEST_CODE_MOVIE_DETAIL)
                         lastMovieDetails = null // Clear after navigation
                     } else {
-                        // Show movie detail/info screen inline in VODComponent
-                        Log.d(TAG, "Navigating to movie detail/info screen in VODComponent")
-                        
-                        // Just refresh from local database - data already saved during playback
-                        vodContainer.visibility = android.view.View.VISIBLE
-                        vodComponent.post {
-                            vodComponent.ensureDetailScreenVisible()
-                            vodComponent.refreshProgress() // Reads from local DB
-                            vodComponent.focusPlayButton()
-                        }
+                        // Movie detail screen removed - movies now use MovieDetailActivity
+                        Log.d(TAG, "Movie detail screen removed - nothing to do")
                     }
                 }
                 "SERIES" -> {
